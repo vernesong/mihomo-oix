@@ -99,6 +99,10 @@ func (rp *ruleSetProvider) Initial() error {
 	return err
 }
 
+func (rp *ruleSetProvider) Path() string {
+	return rp.Fetcher.Vehicle().Path()
+}
+
 func (rp *ruleSetProvider) Update() error {
 	_, _, err := rp.Fetcher.Update()
 	return err
@@ -304,6 +308,10 @@ func (i *inlineProvider) Update() error {
 
 func (i *inlineProvider) VehicleType() P.VehicleType {
 	return P.Inline
+}
+
+func (i *inlineProvider) Path() string {
+	return ""
 }
 
 func (i *inlineProvider) MarshalJSON() ([]byte, error) {

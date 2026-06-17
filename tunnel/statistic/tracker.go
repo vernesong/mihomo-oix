@@ -10,6 +10,7 @@ import (
 	"github.com/metacubex/mihomo/common/buf"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	C "github.com/metacubex/mihomo/constant"
 
 	"github.com/gofrs/uuid/v5"
@@ -145,6 +146,15 @@ func (tt *tcpTracker) Upstream() any {
 
 func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *tcpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
+	if oixdns.ShouldMask(metadata.RemoteDst) {
+		metadata.RemoteDst = oixdns.Mask(metadata.RemoteDst)
+	}
+	if oixdns.ShouldMask(metadata.Host) {
+		metadata.Host = oixdns.Mask(metadata.Host)
+	}
+	if oixdns.ShouldMask(metadata.SniffHost) {
+		metadata.SniffHost = oixdns.Mask(metadata.SniffHost)
+	}
 
 	trackerUUID := utils.NewUUIDV4()
 
@@ -250,6 +260,15 @@ func (ut *udpTracker) Upstream() any {
 
 func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *udpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
+	if oixdns.ShouldMask(metadata.RemoteDst) {
+		metadata.RemoteDst = oixdns.Mask(metadata.RemoteDst)
+	}
+	if oixdns.ShouldMask(metadata.Host) {
+		metadata.Host = oixdns.Mask(metadata.Host)
+	}
+	if oixdns.ShouldMask(metadata.SniffHost) {
+		metadata.SniffHost = oixdns.Mask(metadata.SniffHost)
+	}
 
 	trackerUUID := utils.NewUUIDV4()
 
