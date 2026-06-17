@@ -9,6 +9,7 @@ import (
 	"github.com/metacubex/mihomo/common/arc"
 	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/common/singleflight"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/trie"
 	C "github.com/metacubex/mihomo/constant"
@@ -48,6 +49,7 @@ type Resolver struct {
 	cache                 dnsCache
 	policy                []dnsPolicy
 	defaultResolver       *Resolver
+	oixClient             dnsClient
 }
 
 func (r *Resolver) LookupIPPrimaryIPv4(ctx context.Context, host string) (ips []netip.Addr, err error) {
@@ -127,6 +129,27 @@ func (r *Resolver) shouldIPFallback(ip netip.Addr) bool {
 }
 
 func (r *Resolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
+	if r.oixClient != nil && oixdns.ShouldObfuscate(host) {
+		host = oixdns.Obfuscate(host)
+		query := &D.Msg{}
+		query.SetQuestion(D.Fqdn(host), D.TypeHTTPS)
+		msg, err := r.oixClient.ExchangeContext(ctx, query)
+		if err != nil {
+			return nil, err
+		}
+		for _, rr := range msg.Answer {
+			switch resource := rr.(type) {
+			case *D.HTTPS:
+				for _, value := range resource.Value {
+					if echConfig, ok := value.(*D.SVCBECHConfig); ok {
+						return echConfig.ECH, nil
+					}
+				}
+			}
+		}
+		return nil, errors.New("no ECH config found in DNS records")
+	}
+
 	query := &D.Msg{}
 	query.SetQuestion(D.Fqdn(host), D.TypeHTTPS)
 
@@ -166,9 +189,15 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 
 	q := m.Question[0]
 	domain := msgToDomain(m)
+	isCloud := oixdns.ShouldObfuscate(domain)
+
 	msg, expireTime, hit := getMsgFromCache(r.cache, q)
 	if hit {
-		log.Debugln("[DNS] cache hit %s --> %s, expire at %s", domain, msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
+		if isCloud {
+			markCloudIPsFromMsg(msg)
+		} else {
+			log.Debugln("[DNS] cache hit %s --> %s, expire at %s", domain, msgToLogString(msg), expireTime.Format("2006-01-02 15:04:05"))
+		}
 		now := time.Now()
 		if expireTime.Before(now) {
 			setMsgTTL(msg, uint32(1)) // Continue fetch
@@ -184,6 +213,16 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 
 // ExchangeWithoutCache a batch of dns request, and it do NOT GET from cache
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
+	domain := msgToDomain(m)
+	if r.oixClient != nil && oixdns.ShouldObfuscate(domain) {
+		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
+		msg, err = r.oixClient.ExchangeContext(ctx, m)
+		if err == nil && msg != nil {
+			markCloudIPsFromMsg(msg)
+		}
+		return msg, err
+	}
+
 	q := m.Question[0]
 
 	retryNum := 0
@@ -497,6 +536,11 @@ func NewResolverFromClient(client dnsClient) *Resolver {
 }
 
 func NewResolver(config Config) (rs Resolvers) {
+	var oixClient dnsClient
+	if oixdns.DNSAddr != "" {
+		oixClient = newClient(oixdns.DNSAddr, nil, "tcp", nil, nil, "")
+	}
+
 	defaultResolver := &Resolver{
 		main:        transform(config.Default, nil),
 		cache:       config.newCache(),
@@ -563,6 +607,7 @@ func NewResolver(config Config) (rs Resolvers) {
 		cache:       config.newCache(),
 		ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
 		policy:      makePolicy(config.Policy),
+		oixClient:   oixClient,
 	}
 	r.defaultResolver = defaultResolver
 	rs.Resolver = r
@@ -574,6 +619,7 @@ func NewResolver(config Config) (rs Resolvers) {
 			cache:       config.newCache(),
 			ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
 			policy:      makePolicy(config.ProxyServerPolicy),
+			oixClient:   oixClient,
 		}
 	}
 
@@ -583,6 +629,7 @@ func NewResolver(config Config) (rs Resolvers) {
 			main:        cacheTransform(config.DirectServer),
 			cache:       config.newCache(),
 			ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
+			oixClient:   oixClient,
 		}
 		if config.DirectFollowPolicy {
 			rs.DirectResolver.policy = r.policy
@@ -597,6 +644,13 @@ func NewResolver(config Config) (rs Resolvers) {
 	}
 
 	return
+}
+
+// markCloudIPsFromMsg extracts IPs from a DNS response and registers them as cloud-nodes IPs.
+func markCloudIPsFromMsg(msg *D.Msg) {
+	for _, ip := range msgToIP(msg) {
+		oixdns.MarkCloudIP(ip.String())
+	}
 }
 
 var ParseNameServer func(servers []string) ([]NameServer, error) // define in config/config.go
