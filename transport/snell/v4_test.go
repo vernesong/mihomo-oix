@@ -18,8 +18,8 @@ func TestSnellV4RoundTrip(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	client := newV4Conn(clientRaw, []byte("password"))
-	server := newV4Conn(serverRaw, []byte("password"))
+	client := newV4Conn(clientRaw, []byte("password"), nil)
+	server := newV4Conn(serverRaw, []byte("password"), nil)
 
 	writeErr := make(chan error, 1)
 	go func() {
@@ -58,8 +58,8 @@ func TestSnellV4ZeroChunk(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	client := newV4Conn(clientRaw, []byte("password"))
-	server := newV4Conn(serverRaw, []byte("password"))
+	client := newV4Conn(clientRaw, []byte("password"), nil)
+	server := newV4Conn(serverRaw, []byte("password"), nil)
 
 	writeErr := make(chan error, 1)
 	go func() {
@@ -81,7 +81,7 @@ func TestSnellV4FirstFrameIncludesInitialPadding(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	client := newV4Conn(clientRaw, []byte("password"))
+	client := newV4Conn(clientRaw, []byte("password"), nil)
 	writeErr := make(chan error, 1)
 	go func() {
 		_, err := client.Write([]byte("x"))
@@ -237,8 +237,8 @@ func TestSnellV4UDPWriteKeepsDatagramInSingleFrame(t *testing.T) {
 	defer clientRaw.Close()
 	defer serverRaw.Close()
 
-	client := &Snell{Conn: newV4Conn(clientRaw, []byte("password"))}
-	server := newV4Conn(serverRaw, []byte("password"))
+	client := &Snell{Conn: newV4Conn(clientRaw, []byte("password"), nil)}
+	server := newV4Conn(serverRaw, []byte("password"), nil)
 	pc := PacketConn(client)
 	payload := bytes.Repeat([]byte{0x42}, v4FrameSize)
 	addr := &net.UDPAddr{IP: net.IPv4(1, 2, 3, 4), Port: 53}

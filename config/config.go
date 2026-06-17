@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -23,6 +24,7 @@ import (
 	"github.com/metacubex/mihomo/component/cidr"
 	"github.com/metacubex/mihomo/component/fakeip"
 	"github.com/metacubex/mihomo/component/geodata"
+	"github.com/metacubex/mihomo/component/oix"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/component/smart/lightgbm"
@@ -199,24 +201,25 @@ type TLS struct {
 
 // Config is mihomo config manager
 type Config struct {
-	General       *General
-	Controller    *Controller
-	Experimental  *Experimental
-	IPTables      *IPTables
-	NTP           *NTP
-	DNS           *DNS
-	Hosts         *trie.DomainTrie[resolver.HostValue]
-	Profile       *Profile
-	Rules         []C.Rule
-	SubRules      map[string][]C.Rule
-	Users         []auth.AuthUser
-	Proxies       map[string]C.Proxy
-	Listeners     map[string]C.InboundListener
-	Providers     map[string]P.ProxyProvider
-	RuleProviders map[string]P.RuleProvider
-	Tunnels       []LC.Tunnel
-	Sniffer       *sniffer.Config
-	TLS           *TLS
+	General           *General
+	Controller        *Controller
+	Experimental      *Experimental
+	IPTables          *IPTables
+	NTP               *NTP
+	DNS               *DNS
+	Hosts             *trie.DomainTrie[resolver.HostValue]
+	Profile           *Profile
+	Rules             []C.Rule
+	SubRules          map[string][]C.Rule
+	Users             []auth.AuthUser
+	Proxies           map[string]C.Proxy
+	Listeners         map[string]C.InboundListener
+	Providers         map[string]P.ProxyProvider
+	ProviderRawConfig map[string]map[string]any
+	RuleProviders     map[string]P.RuleProvider
+	Tunnels           []LC.Tunnel
+	Sniffer           *sniffer.Config
+	TLS               *TLS
 }
 
 type RawCors struct {
@@ -689,6 +692,7 @@ func ParseRawConfig(rawCfg *RawConfig) (*Config, error) {
 	}
 	config.Proxies = proxies
 	config.Providers = providers
+	config.ProviderRawConfig = rawCfg.ProxyProvider
 
 	listeners, err := parseListeners(rawCfg)
 	if err != nil {
@@ -957,6 +961,31 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 
 		providersMap[name] = pd
 		AllProviders = append(AllProviders, name)
+	}
+
+	if os.Getenv("OIX_TOKEN") != "" {
+		oixName := os.Getenv("OIX_PROVIDER_NAME")
+		if oixName == "" {
+			oixName = "oixCloud"
+		}
+		if _, exists := providersMap[oixName]; !exists {
+			dir := "proxy_providers"
+			for _, pv := range providersMap {
+				if p := pv.Path(); p != "" {
+					if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
+						dir = rel
+						break
+					}
+				}
+			}
+			providerPath := filepath.Join(C.Path.HomeDir(), dir, oixName)
+			relPath, _ := filepath.Rel(C.Path.HomeDir(), providerPath)
+			oixPlaceholder, err := provider.ParseProxyProvider(oixName, oix.ProviderConfig(relPath), T.Tunnel)
+			if err == nil {
+				providersMap[oixName] = oixPlaceholder
+				AllProviders = append(AllProviders, oixName)
+			}
+		}
 	}
 
 	slices.Sort(AllProxies)
