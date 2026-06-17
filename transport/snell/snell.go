@@ -9,6 +9,7 @@ import (
 	"net/netip"
 	"sync"
 
+	"github.com/metacubex/blake3"
 	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 	"github.com/metacubex/mihomo/transport/socks5"
@@ -38,6 +39,11 @@ const (
 	CommandError  byte = 2
 
 	Version byte = 1
+)
+
+const (
+	IdentityHeaderLength = 16
+	identityWireMagic    = "DLSNID01"
 )
 
 var endSignal = []byte{}
@@ -153,9 +159,22 @@ func HalfClose(conn net.Conn) error {
 	return nil
 }
 
+func IdentityHeaderFromPSK(psk []byte) []byte {
+	hash := blake3.Sum512(psk)
+	return append([]byte(nil), hash[:IdentityHeaderLength]...)
+}
+
+func StreamConnWithIdentity(conn net.Conn, psk []byte, version int) *Snell {
+	return streamConn(conn, psk, version, IdentityHeaderFromPSK(psk))
+}
+
 func StreamConn(conn net.Conn, psk []byte, version int) *Snell {
+	return streamConn(conn, psk, version, nil)
+}
+
+func streamConn(conn net.Conn, psk []byte, version int, identity []byte) *Snell {
 	if version >= Version4 {
-		return &Snell{Conn: newV4Conn(conn, psk)}
+		return &Snell{Conn: newV4Conn(conn, psk, identity)}
 	}
 
 	var cipher shadowaead.Cipher

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/netip"
 	"strconv"
+
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 )
 
 // SOCKS address types as defined in RFC 1928 section 5.
@@ -309,7 +311,11 @@ func (m *Metadata) UDPAddr() *net.UDPAddr {
 
 func (m *Metadata) String() string {
 	if m.Host != "" {
-		return m.Host
+		host := m.Host
+		if oixdns.ShouldMask(host) {
+			host = oixdns.Mask(host)
+		}
+		return host
 	} else if m.DstIP.IsValid() {
 		return m.DstIP.String()
 	} else {

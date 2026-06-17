@@ -68,6 +68,7 @@ type Provider interface {
 	Name() string
 	VehicleType() VehicleType
 	Type() ProviderType
+	Path() string
 	Initial() error
 	Update() error
 }

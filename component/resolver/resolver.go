@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/trie"
 
 	"github.com/metacubex/randv2"
@@ -220,6 +221,9 @@ func ResolveIPPrefer6(ctx context.Context, host string) (netip.Addr, error) {
 }
 
 func ResolveECHWithResolver(ctx context.Context, host string, r Resolver) ([]byte, error) {
+	if oixdns.ShouldObfuscate(host) {
+		host = oixdns.Obfuscate(host)
+	}
 	if r != nil && r.Invalid() {
 		return r.ResolveECH(ctx, host)
 	}

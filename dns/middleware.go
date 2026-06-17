@@ -7,6 +7,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/component/fakeip"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	icontext "github.com/metacubex/mihomo/context"
@@ -233,6 +234,8 @@ func compose(middlewares []middleware, endpoint handler) handler {
 func newHandler(resolver resolver.Resolver, mapper *ResolverEnhancer) handler {
 	var middlewares []middleware
 
+	middlewares = append(middlewares, withObfuscator)
+
 	if mapper.useHosts {
 		middlewares = append(middlewares, withHosts(mapper.mapping))
 	}
@@ -246,4 +249,16 @@ func newHandler(resolver resolver.Resolver, mapper *ResolverEnhancer) handler {
 	}
 
 	return compose(middlewares, withResolver(resolver, mapper.ipv6))
+}
+
+func withObfuscator(next handler) handler {
+	return func(ctx *icontext.DNSContext, r *D.Msg) (*D.Msg, error) {
+		domain := strings.TrimRight(r.Question[0].Name, ".")
+		if oixdns.ShouldObfuscate(domain) {
+			r2 := r.Copy()
+			r2.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
+			return next(ctx, r2)
+		}
+		return next(ctx, r)
+	}
 }
