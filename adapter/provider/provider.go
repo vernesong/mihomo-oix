@@ -144,6 +144,10 @@ func (pp *proxySetProvider) Name() string {
 	return pp.Fetcher.Name()
 }
 
+func (pp *proxySetProvider) Path() string {
+	return pp.Fetcher.Vehicle().Path()
+}
+
 func (pp *proxySetProvider) Update() error {
 	_, _, err := pp.Fetcher.Update()
 	return err
@@ -252,6 +256,10 @@ func (ip *inlineProvider) VehicleType() P.VehicleType {
 	return P.Inline
 }
 
+func (ip *inlineProvider) Path() string {
+	return ""
+}
+
 func (ip *inlineProvider) Update() error {
 	// make api update happy
 	ip.updateAt = time.Now()
@@ -317,6 +325,10 @@ func (cp *compatibleProvider) VehicleType() P.VehicleType {
 	return P.Compatible
 }
 
+func (cp *compatibleProvider) Path() string {
+	return ""
+}
+
 func NewCompatibleProvider(name string, proxies []C.Proxy, hc *HealthCheck) (*CompatibleProvider, error) {
 	if len(proxies) == 0 {
 		return nil, errors.New("provider need one proxy at least")
@@ -375,7 +387,6 @@ func NewProxiesParser(pdName string, tunnel C.Tunnel, filter string, excludeFilt
 	return func(buf []byte) ([]C.Proxy, error) {
 		schema := &ProxySchema{}
 
-		// decrypt config
 		buf, err := age.DecryptBytes(buf, ageSecretKey)
 		if err != nil {
 			return nil, fmt.Errorf("decrypt config error: %w", err)

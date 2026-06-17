@@ -5,6 +5,7 @@ import (
 	"net"
 	"net/netip"
 	"os"
+	"path/filepath"
 	"runtime"
 	"strconv"
 	"sync"
@@ -21,6 +22,7 @@ import (
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/iface"
 	"github.com/metacubex/mihomo/component/keepalive"
+	"github.com/metacubex/mihomo/component/oix"
 	"github.com/metacubex/mihomo/component/profile"
 	"github.com/metacubex/mihomo/component/profile/cachefile"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -106,6 +108,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateGeneral(cfg.General, true)
 	updateNTP(cfg.NTP)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
+	updateOixProvider(cfg)
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
@@ -314,6 +317,64 @@ func updateHosts(tree *trie.DomainTrie[resolver.HostValue]) {
 
 func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvider) {
 	tunnel.UpdateProxies(proxies, providers)
+}
+
+func updateOixProvider(cfg *config.Config) {
+	name := oix.ProviderFile()
+
+	dir := "proxy_providers"
+	for _, pv := range cfg.Providers {
+		if p := pv.Path(); p != "" {
+			if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
+				dir = rel
+				break
+			}
+		}
+	}
+
+	_, providerExists := cfg.Providers[name]
+	ok, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
+
+	if oix.IsConfigError(err) {
+		if providerExists {
+			delete(cfg.Providers, name)
+			tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
+		}
+		return
+	}
+
+	if oix.IsAuthError(err) {
+		if providerExists {
+			delete(cfg.Providers, name)
+			tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
+		}
+		return
+	}
+
+	if !ok {
+		oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
+		return
+	}
+
+	oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
+
+	if providerExists {
+		base := cfg.ProviderRawConfig[name]
+		pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), base)
+		if err != nil {
+			return
+		}
+		cfg.Providers[name] = pd
+		tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
+		return
+	}
+
+	pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), nil)
+	if err != nil {
+		return
+	}
+	cfg.Providers[name] = pd
+	tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
