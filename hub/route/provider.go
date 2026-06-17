@@ -5,6 +5,7 @@ import (
 
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/component/oix"
 	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/metacubex/chi"
@@ -51,6 +52,18 @@ func getProvider(w http.ResponseWriter, r *http.Request) {
 
 func updateProvider(w http.ResponseWriter, r *http.Request) {
 	provider := r.Context().Value(CtxKeyProvider).(P.ProxyProvider)
+	name := r.Context().Value(CtxKeyProviderName).(string)
+
+	if oix.IsOixProvider(name) && provider.VehicleType() == P.File {
+		if err := oix.ForceUpdate(); err != nil {
+			render.Status(r, http.StatusServiceUnavailable)
+			render.JSON(w, r, newError(err.Error()))
+			return
+		}
+		render.NoContent(w, r)
+		return
+	}
+
 	if err := provider.Update(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))

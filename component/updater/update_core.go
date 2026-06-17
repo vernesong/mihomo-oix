@@ -27,8 +27,8 @@ const (
 	baseReleaseURL    = "https://github.com/MetaCubeX/mihomo/releases/latest/download/"
 	versionReleaseURL = "https://github.com/MetaCubeX/mihomo/releases/latest/download/version.txt"
 
-	baseAlphaURL    = "https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/"
-	versionAlphaURL = "https://github.com/vernesong/mihomo/releases/download/Prerelease-Alpha/version.txt"
+	baseAlphaURL    = "https://github.com/vernesong/mihomo-oix/releases/download/Pre-Alpha/"
+	versionAlphaURL = "https://github.com/vernesong/mihomo-oix/releases/download/Pre-Alpha/version.txt"
 
 	// MaxPackageFileSize is a maximum package file length in bytes. The largest
 	// package whose size is limited by this constant currently has the size of

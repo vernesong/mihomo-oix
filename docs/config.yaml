@@ -408,8 +408,25 @@ proxies: # socks5
     # udp: true # support UDP on version 3/4/5
     # reuse: false # v4/5 only
     # obfs-opts:
-    # mode: http # or tls
-    # host: bing.com
+      # mode: http # or tls
+      # host: bing.com
+    # --- obfs-opts: ech-tls ---
+    # obfs-opts:
+      # mode: ech-tls
+      # host: server.example.com
+      # path: /
+      # sni: server.example.com
+      # ech-config: "base64-encoded-ech-config-list"
+      # # ech-config-file: ./ech_config.pem # 与 ech-config 互斥
+      # skip-cert-verify: false
+      # ca-file: ./ca.pem # 自定义 CA 证书，与 skip-cert-verify/insecure 互斥
+      # client-fingerprint: chrome
+      # fingerprint: ""
+      # certificate: ./client.crt
+      # private-key: ./client.key
+      # headers:
+        # Host: server.example.com
+        # User-Agent: "clash-verge/v2.0.0"
 
   # Shadowsocks
   # cipher支持:

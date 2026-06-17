@@ -28,13 +28,14 @@ const (
 
 type v4Conn struct {
 	net.Conn
-	psk []byte
-	r   *v4Reader
-	w   *v4Writer
+	psk      []byte
+	identity []byte
+	r        *v4Reader
+	w        *v4Writer
 }
 
-func newV4Conn(conn net.Conn, psk []byte) *v4Conn {
-	return &v4Conn{Conn: conn, psk: psk}
+func newV4Conn(conn net.Conn, psk []byte, identity []byte) *v4Conn {
+	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), identity...)}
 }
 
 func (c *v4Conn) initReader() error {
@@ -55,6 +56,9 @@ func (c *v4Conn) initWriter() error {
 	w, err := newV4Writer(c.Conn, c.psk)
 	if err != nil {
 		return err
+	}
+	if len(c.identity) == IdentityHeaderLength {
+		w.identity = c.identity
 	}
 	c.w = w
 	return nil
@@ -235,6 +239,7 @@ type v4Writer struct {
 	initialPaddingLength uint16
 	payloadLimit         uint16
 	lastWrite            time.Time
+	identity             []byte
 	mux                  sync.Mutex
 }
 
@@ -344,10 +349,17 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 	frameLength := len(headerCipher) + paddingLength + len(payloadCipher)
 	if !w.saltSent {
 		frameLength += v4SaltSize
+		if len(w.identity) == IdentityHeaderLength {
+			frameLength += len(identityWireMagic) + IdentityHeaderLength
+		}
 	}
 	frame := make([]byte, 0, frameLength)
 	if !w.saltSent {
 		frame = append(frame, w.salt[:]...)
+		if len(w.identity) == IdentityHeaderLength {
+			frame = append(frame, identityWireMagic...)
+			frame = append(frame, w.identity...)
+		}
 		w.saltSent = true
 	}
 	frame = append(frame, headerCipher...)
