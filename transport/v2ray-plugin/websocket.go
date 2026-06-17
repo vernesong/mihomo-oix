@@ -21,7 +21,9 @@ type Option struct {
 	TLS                      bool
 	ECHConfig                *ech.Config
 	SkipCertVerify           bool
+	CAFile                   string
 	Fingerprint              string
+	ClientFingerprint        string
 	Certificate              string
 	PrivateKey               string
 	Mux                      bool
@@ -44,6 +46,7 @@ func NewV2rayObfs(ctx context.Context, conn net.Conn, option *Option) (net.Conn,
 		V2rayHttpUpgradeFastOpen: option.V2rayHttpUpgradeFastOpen,
 		ECHConfig:                option.ECHConfig,
 		Headers:                  header,
+		ClientFingerprint:        option.ClientFingerprint,
 	}
 
 	var err error
@@ -65,6 +68,12 @@ func NewV2rayObfs(ctx context.Context, conn net.Conn, option *Option) (net.Conn,
 
 		if host := config.Headers.Get("Host"); host != "" {
 			config.TLSConfig.ServerName = host
+		}
+		if option.CAFile != "" {
+			config.TLSConfig.RootCAs, err = ca.LoadCertificates(option.CAFile)
+			if err != nil {
+				return nil, err
+			}
 		}
 	}
 

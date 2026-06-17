@@ -4,6 +4,7 @@ import (
 	"context"
 	"math"
 
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/resolver"
 
 	"github.com/metacubex/chi"
@@ -76,6 +77,12 @@ func queryDNS(w http.ResponseWriter, r *http.Request) {
 	}
 	if len(resp.Extra) > 0 {
 		responseData["Additional"] = lo.Map(resp.Extra, rr2Json)
+	}
+
+	if oixdns.ShouldObfuscate(name) {
+		responseData["Answer"] = []string{"***"}
+		responseData["Authority"] = []string{"***"}
+		responseData["Additional"] = []string{"***"}
 	}
 
 	render.JSON(w, r, responseData)

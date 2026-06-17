@@ -19,6 +19,7 @@ import (
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/generator"
 	"github.com/metacubex/mihomo/component/geodata"
+	"github.com/metacubex/mihomo/component/oix"
 	"github.com/metacubex/mihomo/component/updater"
 	"github.com/metacubex/mihomo/config"
 	C "github.com/metacubex/mihomo/constant"
@@ -40,6 +41,9 @@ var (
 	configString                  string
 	configBytes                   []byte
 	ageSecretKey                  string
+	oixToken                      string
+	oixQueryParams                string
+	oixProviderName               string
 	externalUI                    string
 	externalController            string
 	externalControllerTLS         string
@@ -69,6 +73,9 @@ func init() {
 	flag.StringVar(&externalControllerPipe, "ext-ctl-pipe", os.Getenv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_PIPE"), "override external controller pipe address")
 	flag.IntVar(&externalControllerRoutingMark, "ext-ctl-routing-mark", getIntEnv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_ROUTING_MARK"), "override external controller routing mark")
 	flag.StringVar(&secret, "secret", os.Getenv("CLASH_OVERRIDE_SECRET"), "override secret for RESTful API")
+	flag.StringVar(&oixToken, "oix-token", os.Getenv("OIX_TOKEN"), "specify OIX token for managed subscription")
+	flag.StringVar(&oixQueryParams, "oix-query-params", os.Getenv("OIX_QUERY_PARAMS"), "specify OIX query params (default: clash=smart)")
+	flag.StringVar(&oixProviderName, "oix-provider-name", os.Getenv("OIX_PROVIDER_NAME"), "specify OIX provider name (default: oixCloud)")
 	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
 	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
@@ -140,6 +147,13 @@ func main() {
 			log.Errorln("Parse age-secret-key error: %s", err.Error())
 		}
 		age.SetGlobalSecretKeys(ageSecretKey)
+	}
+
+	if oixQueryParams != "" {
+		oix.SetQueryParams(oixQueryParams)
+	}
+	if oixProviderName != "" {
+		oix.SetProviderName(oixProviderName)
 	}
 
 	if configString != "" {
