@@ -359,12 +359,6 @@ func updateOixProvider(cfg *config.Config) {
 	oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
 
 	if providerExists {
-		base := cfg.ProviderRawConfig[name]
-		pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), base)
-		if err != nil {
-			return
-		}
-		cfg.Providers[name] = pd
 		tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 		return
 	}
