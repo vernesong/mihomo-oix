@@ -215,14 +215,27 @@ func CreateProvider(dir, homeDir string, base map[string]any) (P.ProxyProvider, 
 
 	oixCfg := ProviderConfig(relPath)
 	if base != nil {
-		merged := make(map[string]any, len(base)+len(oixCfg))
-		for k, v := range base {
-			merged[k] = v
+		if userHC, ok := base["health-check"]; ok {
+			if userHCMap, ok := userHC.(map[string]any); ok {
+				if oixHC, ok := oixCfg["health-check"].(map[string]any); ok {
+					hcMerged := make(map[string]any, len(oixHC)+len(userHCMap))
+					for hk, hv := range oixHC {
+						hcMerged[hk] = hv
+					}
+					for hk, hv := range userHCMap {
+						hcMerged[hk] = hv
+					}
+					base["health-check"] = hcMerged
+				}
+			}
 		}
 		for k, v := range oixCfg {
-			merged[k] = v
+			if _, exists := base[k]; exists && k == "health-check" {
+				continue
+			}
+			base[k] = v
 		}
-		oixCfg = merged
+		oixCfg = base
 	}
 
 	pd, err := provider.ParseProxyProvider(name, oixCfg, C.Tunnel(tunnel.Tunnel))
