@@ -40,7 +40,6 @@ var (
 	flclashBuild     string
 	flclashBuildOnce sync.Once
 
-	oixQueryParams  string
 	oixProviderName string
 
 	periodicCancel context.CancelFunc
@@ -59,7 +58,6 @@ var (
 
 const (
 	defaultProviderFile = "oixCloud"
-	defaultQueryParams  = "smart"
 	defaultProviderDir  = "proxy_providers"
 )
 
@@ -86,10 +84,6 @@ func IsAuthError(err error) bool {
 
 func IsConfigError(err error) bool {
 	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoDomains)
-}
-
-func GetAgeSecretKey() string {
-	return AgeSecretKey
 }
 
 func ProviderConfig(relPath string) map[string]any {
@@ -130,7 +124,7 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 		log.Warnln("[OixCloud] ensure failed, no provider found for [%s]", ProviderFile())
 		return false, nil
 	}
-	ok, _ := saveResult(dir, homeDir, result)
+	ok := saveResult(dir, homeDir, result)
 	if !ok {
 		return false, errors.New("save failed")
 	}
@@ -140,10 +134,6 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 		log.Infoln("[OixCloud] provider fetched successfully: [%s]", ProviderFile())
 	}
 	return true, nil
-}
-
-func SetQueryParams(params string) {
-	oixQueryParams = params
 }
 
 func SetProviderName(name string) {
@@ -188,7 +178,7 @@ func StartPeriodicUpdate(dir, homeDir string) {
 				if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
 					continue
 				}
-				ok, _ := saveResult(dir, homeDir, result)
+				ok := saveResult(dir, homeDir, result)
 				if ok {
 					log.Infoln("[OixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 				}
@@ -241,18 +231,6 @@ func CreateProvider(dir, homeDir string, base map[string]any) (P.ProxyProvider, 
 		return nil, err
 	}
 	return pd, nil
-}
-
-func Fetch() (*Result, error) {
-	token := os.Getenv("OIX_TOKEN")
-	if token == "" {
-		return nil, nil
-	}
-	urls := apiBaseURLs()
-	if len(urls) == 0 {
-		return nil, nil
-	}
-	return fetchBest(token, urls)
 }
 
 func fetchBest(token string, urls []string) (*Result, error) {
@@ -308,30 +286,32 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 	result := &Result{}
 
 	if apiResp.Config != "" {
-		config, err := base64.StdEncoding.DecodeString(apiResp.Config)
+		result.Config, err = decodeAndDecrypt(apiResp.Config, "config")
 		if err != nil {
-			return nil, fmt.Errorf("decode config: %w", err)
+			return nil, err
 		}
-		plaintext, err := decryptFlClashIfNeeded(config)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt config: %w", err)
-		}
-		result.Config = plaintext
 	}
 
 	if apiResp.Provider != "" {
-		data, err := base64.StdEncoding.DecodeString(apiResp.Provider)
+		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider")
 		if err != nil {
-			return nil, fmt.Errorf("decode provider: %w", err)
+			return nil, err
 		}
-		plaintext, err := decryptFlClashIfNeeded(data)
-		if err != nil {
-			return nil, fmt.Errorf("decrypt provider: %w", err)
-		}
-		result.Provider = plaintext
 	}
 
 	return result, nil
+}
+
+func decodeAndDecrypt(encoded, label string) ([]byte, error) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
+	if err != nil {
+		return nil, fmt.Errorf("decode %s: %w", label, err)
+	}
+	plaintext, err := decryptFlClashIfNeeded(raw)
+	if err != nil {
+		return nil, fmt.Errorf("decrypt %s: %w", label, err)
+	}
+	return plaintext, nil
 }
 
 func sign(timestamp string) string {
@@ -471,7 +451,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("request failed after %d retries", maxRetries+1)
 }
 
-func saveResult(dir, homeDir string, result *Result) (bool, string) {
+func saveResult(dir, homeDir string, result *Result) bool {
 	p := filepath.Join(homeDir, dir, ProviderFile())
 
 	raw := result.Provider
@@ -484,7 +464,7 @@ func saveResult(dir, homeDir string, result *Result) (bool, string) {
 		encrypted, err := age.EncryptBytes(raw, AgePublicKey)
 		if err != nil {
 			log.Warnln("[OixCloud] age encrypt: %s", err)
-			return false, ""
+			return false
 		}
 		raw = encrypted
 	}
@@ -492,10 +472,10 @@ func saveResult(dir, homeDir string, result *Result) (bool, string) {
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	if err := os.WriteFile(p, raw, 0o644); err != nil {
 		log.Warnln("[OixCloud] write file %s: %s", p, err)
-		return false, ""
+		return false
 	}
 
-	return true, p
+	return true
 }
 
 func ProviderFile() string {
@@ -506,16 +486,6 @@ func ProviderFile() string {
 		return name
 	}
 	return defaultProviderFile
-}
-
-func queryParams() string {
-	if oixQueryParams != "" {
-		return oixQueryParams
-	}
-	if params := os.Getenv("OIX_QUERY_PARAMS"); params != "" {
-		return params
-	}
-	return defaultQueryParams
 }
 
 func apiBaseURLs() []string {
