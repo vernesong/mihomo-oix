@@ -42,7 +42,6 @@ var (
 	configBytes                   []byte
 	ageSecretKey                  string
 	oixToken                      string
-	oixQueryParams                string
 	oixProviderName               string
 	externalUI                    string
 	externalController            string
@@ -74,7 +73,6 @@ func init() {
 	flag.IntVar(&externalControllerRoutingMark, "ext-ctl-routing-mark", getIntEnv("CLASH_OVERRIDE_EXTERNAL_CONTROLLER_ROUTING_MARK"), "override external controller routing mark")
 	flag.StringVar(&secret, "secret", os.Getenv("CLASH_OVERRIDE_SECRET"), "override secret for RESTful API")
 	flag.StringVar(&oixToken, "oix-token", os.Getenv("OIX_TOKEN"), "specify OIX token for managed subscription")
-	flag.StringVar(&oixQueryParams, "oix-query-params", os.Getenv("OIX_QUERY_PARAMS"), "specify OIX query params (default: clash=smart)")
 	flag.StringVar(&oixProviderName, "oix-provider-name", os.Getenv("OIX_PROVIDER_NAME"), "specify OIX provider name (default: oixCloud)")
 	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
 	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
@@ -149,9 +147,6 @@ func main() {
 		age.SetGlobalSecretKeys(ageSecretKey)
 	}
 
-	if oixQueryParams != "" {
-		oix.SetQueryParams(oixQueryParams)
-	}
 	if oixProviderName != "" {
 		oix.SetProviderName(oixProviderName)
 	}
