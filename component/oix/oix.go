@@ -1,7 +1,6 @@
 package oix
 
 import (
-	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
@@ -15,7 +14,6 @@ import (
 	"io"
 	"net"
 	"net/http"
-	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -33,24 +31,24 @@ import (
 )
 
 var (
-	AppSecret         string
-	AgeSecretKey      string
-	AgePublicKey      string
-	ApiDomains        string
-	ProfileKey        string
+	AppSecret    string
+	AgeSecretKey string
+	AgePublicKey string
+	ApiDomains   string
+	ProfileKey   string
 
-	flclashBuild      string
-	flclashBuildOnce  sync.Once
+	flclashBuild     string
+	flclashBuildOnce sync.Once
 
-	oixQueryParams    string
-	oixProviderName   string
+	oixQueryParams  string
+	oixProviderName string
 
-	periodicCancel    context.CancelFunc
-	periodicDir       string
-	periodicHome      string
+	periodicCancel context.CancelFunc
+	periodicDir    string
+	periodicHome   string
 
-	oixHTTPOnce       sync.Once
-	oixHTTPClient     *http.Client
+	oixHTTPOnce   sync.Once
+	oixHTTPClient *http.Client
 )
 
 var (
@@ -80,13 +78,6 @@ type apiResponse struct {
 	Msg      string `json:"msg"`
 	Config   string `json:"config"`
 	Provider string `json:"provider"`
-}
-
-type managedAPIResponse struct {
-	Ret   int    `json:"ret"`
-	Msg   string `json:"msg"`
-	Name  string `json:"name"`
-	Smart string `json:"smart"`
 }
 
 func IsAuthError(err error) bool {
@@ -269,14 +260,6 @@ func fetchBest(token string, urls []string) (*Result, error) {
 		flclashBuild = fetchBuildVersion(urls)
 	})
 
-	result, err := fetchManaged(token, urls)
-	if err == nil && result != nil && (len(result.Config) > 0 || len(result.Provider) > 0) {
-		return result, nil
-	}
-	if err != nil && !IsAuthError(err) {
-		log.Warnln("[OixCloud] SUB API failed, fallback to Direct API")
-	}
-
 	var lastErr error
 	for _, baseURL := range urls {
 		result, err := fetchFrom(token, baseURL)
@@ -286,98 +269,6 @@ func fetchBest(token string, urls []string) (*Result, error) {
 		lastErr = err
 	}
 	return nil, lastErr
-}
-
-func fetchManaged(token string, urls []string) (*Result, error) {
-	if ProfileKey == "" {
-		return nil, fmt.Errorf("profile key not configured")
-	}
-	var lastErr error
-	for _, baseURL := range urls {
-		result, err := fetchManagedFrom(token, baseURL)
-		if err == nil {
-			return result, nil
-		}
-		lastErr = err
-	}
-	return nil, lastErr
-}
-
-func fetchManagedFrom(token, baseURL string) (*Result, error) {
-	req, err := http.NewRequest(http.MethodPost, baseURL+"/api/v1/managed/clash", bytes.NewReader([]byte("{}")))
-	if err != nil {
-		return nil, fmt.Errorf("create managed request: %w", err)
-	}
-	req.Header.Set("Content-Type", "application/json")
-	setOixHeaders(req, token)
-
-	resp, err := oixHTTPDo(req)
-	if err != nil {
-		return nil, fmt.Errorf("server request failed")
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
-		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
-			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		return nil, err
-	}
-
-	var mResp managedAPIResponse
-	if err := json.NewDecoder(resp.Body).Decode(&mResp); err != nil {
-		return nil, fmt.Errorf("decode managed response: %w", err)
-	}
-
-	if mResp.Smart == "" {
-		return nil, fmt.Errorf("managed API: empty sub URL")
-	}
-
-	downloadURL := strings.Replace(mResp.Smart, "clash=", "flclash=", 1)
-	if idx := strings.Index(downloadURL, "flclash="); idx != -1 {
-		start := idx + len("flclash=")
-		origValue := downloadURL[start:]
-		ext := ""
-		if dot := strings.LastIndex(origValue, "."); dot != -1 {
-			ext = origValue[dot:]
-		}
-		downloadURL = downloadURL[:start] + url.QueryEscape(queryParams()) + ext
-	}
-
-	req2, err := http.NewRequest(http.MethodGet, downloadURL, nil)
-	if err != nil {
-		return nil, fmt.Errorf("create download request: %w", err)
-	}
-	setOixHeaders(req2, token)
-
-	resp2, err := oixHTTPDo(req2)
-	if err != nil {
-		return nil, fmt.Errorf("download: %w", err)
-	}
-	defer resp2.Body.Close()
-
-	if resp2.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp2.Body, 1024))
-		err := fmt.Errorf("download: HTTP %d: %s", resp2.StatusCode, string(body))
-		if resp2.StatusCode == 401 || resp2.StatusCode == 403 {
-			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		return nil, err
-	}
-
-	encrypted, err := io.ReadAll(resp2.Body)
-	if err != nil {
-		return nil, fmt.Errorf("read download: %w", err)
-	}
-
-	plaintext, err := decryptFlClash(encrypted)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt: %w", err)
-	}
-
-	return &Result{Config: plaintext}, nil
 }
 
 func fetchFrom(token, baseURL string) (*Result, error) {
@@ -421,7 +312,11 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode config: %w", err)
 		}
-		result.Config = config
+		plaintext, err := decryptFlClashIfNeeded(config)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt config: %w", err)
+		}
+		result.Config = plaintext
 	}
 
 	if apiResp.Provider != "" {
@@ -429,7 +324,11 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 		if err != nil {
 			return nil, fmt.Errorf("decode provider: %w", err)
 		}
-		result.Provider = data
+		plaintext, err := decryptFlClashIfNeeded(data)
+		if err != nil {
+			return nil, fmt.Errorf("decrypt provider: %w", err)
+		}
+		result.Provider = plaintext
 	}
 
 	return result, nil
@@ -442,6 +341,17 @@ func sign(timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(AppSecret))
 	mac.Write([]byte(timestamp))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func isFlClashEncrypted(data []byte) bool {
+	return len(data) >= 5 && string(data[:4]) == "FLEN" && data[4] == 0x02
+}
+
+func decryptFlClashIfNeeded(data []byte) ([]byte, error) {
+	if !isFlClashEncrypted(data) {
+		return data, nil
+	}
+	return decryptFlClash(data)
 }
 
 func decryptFlClash(data []byte) ([]byte, error) {
