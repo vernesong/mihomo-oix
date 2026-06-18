@@ -1,11 +1,13 @@
 package oix
 
 import (
+	"bytes"
 	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
+	"crypto/tls"
 	"encoding/base64"
 	"encoding/hex"
 	"encoding/json"
@@ -36,9 +38,6 @@ var (
 	AgePublicKey string
 	ApiDomains   string
 	ProfileKey   string
-
-	flclashBuild     string
-	flclashBuildOnce sync.Once
 
 	oixProviderName string
 
@@ -247,10 +246,6 @@ func CreateProvider(dir, homeDir string, base map[string]any) (P.ProxyProvider, 
 }
 
 func fetchBest(token string, urls []string) (*Result, error) {
-	flclashBuildOnce.Do(func() {
-		flclashBuild = fetchBuildVersion(urls)
-	})
-
 	var lastErr error
 	for _, baseURL := range urls {
 		result, err := fetchFrom(token, baseURL)
@@ -264,7 +259,13 @@ func fetchBest(token string, urls []string) (*Result, error) {
 
 func fetchFrom(token, baseURL string) (*Result, error) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
-	sig := sign(ts)
+
+	ageSecretKey, agePublicKey, err := age.GenX25519KeyPair()
+	if err != nil {
+		return nil, fmt.Errorf("generate age key pair failed")
+	}
+
+	sig := sign(ts + "." + agePublicKey)
 
 	url := baseURL + "/api/v1/managed/flclash/direct"
 
@@ -272,9 +273,10 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 	if err != nil {
 		return nil, fmt.Errorf("create request failed")
 	}
-	setOixHeaders(req, token)
+	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
 	req.Header.Set("X-Flclash-Signature", sig)
+	req.Header.Set("X-Flclash-Age-Pubkey", agePublicKey)
 
 	resp, err := oixHTTPDo(req)
 	if err != nil {
@@ -296,17 +298,21 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 
+	if err := verifyResponseSignature(ts, apiResp.Config, resp.Header.Get("X-Flclash-Response-Signature")); err != nil {
+		return nil, err
+	}
+
 	result := &Result{}
 
 	if apiResp.Config != "" {
-		result.Config, err = decodeAndDecrypt(apiResp.Config, "config")
+		result.Config, err = decodeAndDecrypt(apiResp.Config, "config", ageSecretKey)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if apiResp.Provider != "" {
-		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider")
+		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider", ageSecretKey)
 		if err != nil {
 			return nil, err
 		}
@@ -315,16 +321,27 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 	return result, nil
 }
 
-func decodeAndDecrypt(encoded, label string) ([]byte, error) {
+func decodeAndDecrypt(encoded, label, ageSecretKey string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", label, err)
 	}
-	plaintext, err := decryptFlClashIfNeeded(raw)
+	plaintext, err := decryptConfigPayload(raw, ageSecretKey)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %s: %w", label, err)
 	}
 	return plaintext, nil
+}
+
+func decryptConfigPayload(data []byte, ageSecretKey string) ([]byte, error) {
+	if ageSecretKey != "" {
+		decrypted, err := age.DecryptBytes(data, ageSecretKey)
+		if err != nil {
+			return nil, err
+		}
+		data = decrypted
+	}
+	return decryptFlClashIfNeeded(data)
 }
 
 func sign(timestamp string) string {
@@ -334,6 +351,28 @@ func sign(timestamp string) string {
 	mac := hmac.New(sha256.New, []byte(AppSecret))
 	mac.Write([]byte(timestamp))
 	return hex.EncodeToString(mac.Sum(nil))
+}
+
+func verifyResponseSignature(timestamp, configB64, headerSig string) error {
+	if headerSig != "" {
+		expected := sign(timestamp + "." + configB64)
+		if !hmac.Equal([]byte(expected), []byte(headerSig)) {
+			return fmt.Errorf("response signature mismatch")
+		}
+		return nil
+	}
+	raw, err := base64.StdEncoding.DecodeString(configB64)
+	if err != nil {
+		return nil
+	}
+	if isAgeArmored(raw) {
+		return fmt.Errorf("missing response signature")
+	}
+	return nil
+}
+
+func isAgeArmored(data []byte) bool {
+	return bytes.HasPrefix(bytes.TrimLeft(data, " \t\r\n"), []byte("-----BEGIN AGE ENCRYPTED FILE-----"))
 }
 
 func isFlClashEncrypted(data []byte) bool {
@@ -385,47 +424,6 @@ func decryptFlClash(data []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-func fetchBuildVersion(urls []string) string {
-	for _, baseURL := range urls {
-		req, err := http.NewRequest(http.MethodGet, baseURL+"/api/v1/version/get", nil)
-		if err != nil {
-			continue
-		}
-		resp, err := oixHTTPDo(req)
-		if err != nil {
-			continue
-		}
-		if resp.StatusCode != 200 {
-			resp.Body.Close()
-			continue
-		}
-		var result struct {
-			Ret  int    `json:"ret"`
-			Msg  string `json:"msg"`
-			Data struct {
-				Version string `json:"version"`
-			} `json:"data"`
-		}
-		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-			resp.Body.Close()
-			continue
-		}
-		resp.Body.Close()
-		if result.Data.Version != "" {
-			log.Infoln("[OixCloud] build version: %s", result.Data.Version)
-			return result.Data.Version
-		}
-	}
-	return ""
-}
-
-func setOixHeaders(req *http.Request, token string) {
-	req.Header.Set("Authorization", "Bearer "+token)
-	if flclashBuild != "" {
-		req.Header.Set("X-Flclash-Build", flclashBuild)
-	}
-}
-
 func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	oixHTTPOnce.Do(func() {
 		oixHTTPClient = &http.Client{
@@ -434,6 +432,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					return dialer.DialContext(ctx, network, addr)
 				},
+				TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 				ForceAttemptHTTP2:     true,
 				MaxIdleConns:          100,
 				IdleConnTimeout:       30 * time.Second,
@@ -512,7 +511,9 @@ func apiBaseURLs() []string {
 		if d == "" {
 			continue
 		}
-		if !strings.HasPrefix(d, "https://") && !strings.HasPrefix(d, "http://") {
+		if strings.HasPrefix(d, "http://") {
+			d = "https://" + strings.TrimPrefix(d, "http://")
+		} else if !strings.HasPrefix(d, "https://") {
 			d = "https://" + d
 		}
 		urls = append(urls, d)
