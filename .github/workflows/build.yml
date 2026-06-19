@@ -240,6 +240,7 @@ jobs:
       env:
         OIX_APP_SECRET: ${{ secrets.OIX_APP_SECRET }}
         OIX_DNS_SECRET: ${{ secrets.OIX_DNS_SECRET }}
+        OIX_DNS_PRIVATE_KEY: ${{ secrets.OIX_DNS_PRIVATE_KEY }}
         OIX_DOMAINS: ${{ secrets.OIX_DOMAINS }}
         OIX_DNS_ADDR: ${{ secrets.OIX_DNS_ADDR }}
         OIX_API_DOMAINS: ${{ secrets.OIX_API_DOMAINS }}
@@ -250,6 +251,7 @@ jobs:
         }
         echo "ENC_APP_SECRET=$(xor_hex OIX_APP_SECRET A3)"          >> $GITHUB_ENV
         echo "ENC_DNS_SECRET=$(xor_hex OIX_DNS_SECRET D4)"          >> $GITHUB_ENV
+        echo "ENC_DNS_PRIVATE_KEY=$(xor_hex OIX_DNS_PRIVATE_KEY 9B)" >> $GITHUB_ENV
         echo "ENC_DOMAINS=$(xor_hex OIX_DOMAINS E8)"                >> $GITHUB_ENV
         echo "ENC_DNS_ADDR=$(xor_hex OIX_DNS_ADDR F2)"              >> $GITHUB_ENV
         echo "ENC_API_DOMAINS=$(xor_hex OIX_API_DOMAINS 5E)"        >> $GITHUB_ENV
@@ -271,6 +273,7 @@ jobs:
           -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' \
           -X 'github.com/metacubex/mihomo/component/oix.AppSecret=${ENC_APP_SECRET}' \
           -X 'github.com/metacubex/mihomo/component/oix/oixdns.DNSSecret=${ENC_DNS_SECRET}' \
+          -X 'github.com/metacubex/mihomo/component/oix/oixdns.DNSPrivateKey=${ENC_DNS_PRIVATE_KEY}' \
           -X 'github.com/metacubex/mihomo/component/oix/oixdns.NodesDomains=${ENC_DOMAINS}' \
           -X 'github.com/metacubex/mihomo/component/oix/oixdns.DNSAddr=${ENC_DNS_ADDR}' \
           -X 'github.com/metacubex/mihomo/component/oix.ApiDomains=${ENC_API_DOMAINS}' \
