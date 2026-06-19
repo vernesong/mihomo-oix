@@ -9,8 +9,6 @@ import (
 
 func init() {
 	AppSecret = decodeXORHex(AppSecret, 0xA3)
-	AgeSecretKey = decodeXORHex(AgeSecretKey, 0xB7)
-	AgePublicKey = decodeXORHex(AgePublicKey, 0xC1)
 	oixdns.DNSSecret = decodeXORHex(oixdns.DNSSecret, 0xD4)
 	oixdns.NodesDomains = decodeXORHex(oixdns.NodesDomains, 0xE8)
 	oixdns.DNSAddr = decodeXORHex(oixdns.DNSAddr, 0xF2)
