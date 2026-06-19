@@ -332,7 +332,7 @@ func updateOixProvider(cfg *config.Config) {
 		}
 	}
 
-	_, providerExists := cfg.Providers[name]
+	oixProvider, providerExists := cfg.Providers[name]
 	ok, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
 
 	if oix.IsConfigError(err) {
@@ -352,6 +352,9 @@ func updateOixProvider(cfg *config.Config) {
 	}
 
 	if !ok {
+		if providerExists {
+			_ = oixProvider.Update()
+		}
 		oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
 		return
 	}
@@ -359,16 +362,15 @@ func updateOixProvider(cfg *config.Config) {
 	oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
 
 	if providerExists {
+		_ = oixProvider.Update()
+	} else {
+		pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), nil)
+		if err != nil {
+			return
+		}
+		cfg.Providers[name] = pd
 		tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
-		return
 	}
-
-	pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), nil)
-	if err != nil {
-		return
-	}
-	cfg.Providers[name] = pd
-	tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {
