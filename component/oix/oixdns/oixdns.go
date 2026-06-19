@@ -3,9 +3,11 @@
 package oixdns
 
 import (
+	"crypto/ed25519"
 	"crypto/hmac"
 	"crypto/sha256"
 	"encoding/base32"
+	"encoding/base64"
 	"net"
 	"net/netip"
 	"strconv"
@@ -15,15 +17,33 @@ import (
 )
 
 var (
-	DNSSecret    string
-	NodesDomains string
-	DNSAddr      string
+	DNSSecret     string
+	DNSPrivateKey string
+	NodesDomains  string
+	DNSAddr       string
 )
 
 var (
 	base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
 	cloudIPs       sync.Map
+
+	privKeyOnce sync.Once
+	privKey     ed25519.PrivateKey
 )
+
+func loadPrivKey() ed25519.PrivateKey {
+	privKeyOnce.Do(func() {
+		if DNSPrivateKey == "" {
+			return
+		}
+		seed, err := base64.StdEncoding.DecodeString(strings.TrimSpace(DNSPrivateKey))
+		if err != nil || len(seed) != ed25519.SeedSize {
+			return
+		}
+		privKey = ed25519.NewKeyFromSeed(seed)
+	})
+	return privKey
+}
 
 func MarkCloudIP(ip string) {
 	cloudIPs.Store(ip, true)
@@ -54,10 +74,18 @@ func ShouldObfuscate(domain string) bool {
 func Obfuscate(domain string) string {
 	basename := strings.ToLower(strings.TrimSuffix(domain, "."))
 	window := time.Now().Unix() / 300
-	payload := basename + "|" + strconv.FormatInt(window, 10)
+	message := []byte(basename + "|" + strconv.FormatInt(window, 10))
+
+	if pk := loadPrivKey(); pk != nil {
+		sig := ed25519.Sign(pk, message)
+		half := ed25519.SignatureSize / 2
+		p1 := strings.ToLower(base32Encoding.EncodeToString(sig[:half]))
+		p2 := strings.ToLower(base32Encoding.EncodeToString(sig[half:]))
+		return p1 + "." + p2 + "." + basename
+	}
 
 	mac := hmac.New(sha256.New, []byte(DNSSecret))
-	mac.Write([]byte(payload))
+	mac.Write(message)
 	digest := mac.Sum(nil)[:10]
 
 	token := strings.ToLower(base32Encoding.EncodeToString(digest))
