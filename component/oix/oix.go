@@ -33,20 +33,22 @@ import (
 )
 
 var (
-	AppSecret    string
-	AgeSecretKey string
-	AgePublicKey string
-	ApiDomains   string
-	ProfileKey   string
+	AppSecret         string
+	ApiDomains        string
+	ProfileKey        string
 
-	oixProviderName string
+	ageSecretKey      string
+	agePublicKey      string
+	ageKeyInitOnce    sync.Once
 
-	periodicCancel context.CancelFunc
-	periodicDir    string
-	periodicHome   string
+	oixProviderName   string
 
-	oixHTTPOnce   sync.Once
-	oixHTTPClient *http.Client
+	periodicCancel    context.CancelFunc
+	periodicDir       string
+	periodicHome      string
+
+	oixHTTPOnce       sync.Once
+	oixHTTPClient     *http.Client
 )
 
 var (
@@ -85,11 +87,26 @@ func IsConfigError(err error) bool {
 	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoDomains)
 }
 
+func ageKeyPair() (secretKey, publicKey string) {
+	ageKeyInitOnce.Do(func() {
+		sk, pk, err := age.GenX25519KeyPair()
+		if err != nil {
+			log.Warnln("[OixCloud] failed to generate age key pair: %s", err)
+			return
+		}
+		ageSecretKey = sk
+		agePublicKey = pk
+	})
+	return ageSecretKey, agePublicKey
+}
+
 func ProviderConfig(relPath string) map[string]any {
+	ageKeyPair()
+
 	return map[string]any{
 		"type":           "file",
 		"path":           "./" + relPath,
-		"age-secret-key": AgeSecretKey,
+		"age-secret-key": ageSecretKey,
 		"health-check": map[string]any{
 			"enable":   true,
 			"url":      "https://www.gstatic.com/generate_204",
@@ -260,11 +277,6 @@ func fetchBest(token string, urls []string) (*Result, error) {
 func fetchFrom(token, baseURL string) (*Result, error) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
-	ageSecretKey, agePublicKey, err := age.GenX25519KeyPair()
-	if err != nil {
-		return nil, fmt.Errorf("generate age key pair failed")
-	}
-
 	sig := sign(ts + "." + agePublicKey)
 
 	url := baseURL + "/api/v1/managed/flclash/direct"
@@ -305,14 +317,14 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 	result := &Result{}
 
 	if apiResp.Config != "" {
-		result.Config, err = decodeAndDecrypt(apiResp.Config, "config", ageSecretKey)
+		result.Config, err = decodeAndDecrypt(apiResp.Config, "config", agePublicKey)
 		if err != nil {
 			return nil, err
 		}
 	}
 
 	if apiResp.Provider != "" {
-		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider", ageSecretKey)
+		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider", agePublicKey)
 		if err != nil {
 			return nil, err
 		}
@@ -321,27 +333,27 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 	return result, nil
 }
 
-func decodeAndDecrypt(encoded, label, ageSecretKey string) ([]byte, error) {
+func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
 		return nil, fmt.Errorf("decode %s: %w", label, err)
 	}
-	plaintext, err := decryptConfigPayload(raw, ageSecretKey)
+	plaintext, err := decryptConfigPayload(raw, agePublicKey)
 	if err != nil {
 		return nil, fmt.Errorf("decrypt %s: %w", label, err)
 	}
 	return plaintext, nil
 }
 
-func decryptConfigPayload(data []byte, ageSecretKey string) ([]byte, error) {
-	if ageSecretKey != "" {
-		decrypted, err := age.DecryptBytes(data, ageSecretKey)
-		if err != nil {
-			return nil, err
-		}
-		data = decrypted
+func decryptConfigPayload(data []byte, agePublicKey string) ([]byte, error) {
+	if isAgeArmored(data) {
+		return data, nil
 	}
-	return decryptFlClashIfNeeded(data)
+	plaintext, err := decryptFlClashIfNeeded(data)
+	if err != nil {
+		return nil, err
+	}
+	return age.EncryptBytes(plaintext, agePublicKey)
 }
 
 func sign(timestamp string) string {
@@ -469,16 +481,6 @@ func saveResult(dir, homeDir string, result *Result) bool {
 	raw := result.Provider
 	if len(raw) == 0 {
 		raw = result.Config
-	}
-
-	// Encrypt with age public key if configured
-	if AgePublicKey != "" {
-		encrypted, err := age.EncryptBytes(raw, AgePublicKey)
-		if err != nil {
-			log.Warnln("[OixCloud] age encrypt: %s", err)
-			return false
-		}
-		raw = encrypted
 	}
 
 	os.MkdirAll(filepath.Dir(p), 0o755)
