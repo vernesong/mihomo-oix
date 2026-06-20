@@ -192,7 +192,7 @@ jobs:
 
     - name: Set variables
       run: |
-        VERSION="${GITHUB_REF_NAME,,}-smart-$(git rev-parse --short HEAD)"
+        VERSION="${GITHUB_REF_NAME,,}-oix-$(git rev-parse --short HEAD)"
         VERSION="${VERSION//\//-}"
         PackageVersion="$(curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest" | jq -r '.tag_name' | sed 's/v//g' | awk -F '.' '{$NF = $NF + 1; print}' OFS='.').${VERSION/-/.}"
         if [ -n "${{ github.event.inputs.version }}" ]; then
@@ -200,7 +200,7 @@ jobs:
           PackageVersion="${VERSION#v}"
         fi
         echo "VERSION=${VERSION}" >> $GITHUB_ENV
-        echo "PackageVersion=${PackageVersion}-smart" >> $GITHUB_ENV
+        echo "PackageVersion=${PackageVersion}-oix" >> $GITHUB_ENV
       
         echo "BUILDTIME=$(date)" >> $GITHUB_ENV
         echo "CGO_ENABLED=0" >> $GITHUB_ENV
