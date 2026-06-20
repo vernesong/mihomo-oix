@@ -332,11 +332,12 @@ func updateOixProvider(cfg *config.Config) {
 		}
 	}
 
-	oixProvider, providerExists := cfg.Providers[name]
+	_, providerExists := cfg.Providers[name]
+	_, userConfigured := cfg.ProviderRawConfig[name]
 	ok, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
 
 	if oix.IsConfigError(err) {
-		if providerExists {
+		if providerExists && !userConfigured {
 			delete(cfg.Providers, name)
 			tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 		}
@@ -344,7 +345,7 @@ func updateOixProvider(cfg *config.Config) {
 	}
 
 	if oix.IsAuthError(err) {
-		if providerExists {
+		if providerExists && !userConfigured {
 			delete(cfg.Providers, name)
 			tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 		}
@@ -352,25 +353,11 @@ func updateOixProvider(cfg *config.Config) {
 	}
 
 	if !ok {
-		if providerExists {
-			_ = oixProvider.Update()
-		}
 		oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
 		return
 	}
 
 	oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
-
-	if providerExists {
-		_ = oixProvider.Update()
-	} else {
-		pd, err := oix.CreateProvider(dir, C.Path.HomeDir(), nil)
-		if err != nil {
-			return
-		}
-		cfg.Providers[name] = pd
-		tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
-	}
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {

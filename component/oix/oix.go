@@ -23,13 +23,9 @@ import (
 	"sync"
 	"time"
 
-	"github.com/metacubex/mihomo/adapter/provider"
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/dialer"
-	C "github.com/metacubex/mihomo/constant"
-	P "github.com/metacubex/mihomo/constant/provider"
 	"github.com/metacubex/mihomo/log"
-	"github.com/metacubex/mihomo/tunnel"
 )
 
 var (
@@ -100,10 +96,10 @@ func ageKeyPair() (secretKey, publicKey string) {
 	return ageSecretKey, agePublicKey
 }
 
-func ProviderConfig(relPath string) map[string]any {
+func ProviderConfig(relPath string, base map[string]any) map[string]any {
 	ageKeyPair()
 
-	return map[string]any{
+	oixCfg := map[string]any{
 		"type":           "file",
 		"path":           "./" + relPath,
 		"age-secret-key": ageSecretKey,
@@ -113,6 +109,31 @@ func ProviderConfig(relPath string) map[string]any {
 			"interval": 300,
 		},
 	}
+
+	if base != nil {
+		if userHC, ok := base["health-check"]; ok {
+			if userHCMap, ok := userHC.(map[string]any); ok {
+				if oixHC, ok := oixCfg["health-check"].(map[string]any); ok {
+					hcMerged := make(map[string]any, len(oixHC)+len(userHCMap))
+					for hk, hv := range oixHC {
+						hcMerged[hk] = hv
+					}
+					for hk, hv := range userHCMap {
+						hcMerged[hk] = hv
+					}
+					oixCfg["health-check"] = hcMerged
+				}
+			}
+		}
+		for k, v := range base {
+			if _, exists := oixCfg[k]; exists {
+				continue
+			}
+			oixCfg[k] = v
+		}
+	}
+
+	return oixCfg
 }
 
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
@@ -224,43 +245,6 @@ func IsOixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
-func CreateProvider(dir, homeDir string, base map[string]any) (P.ProxyProvider, error) {
-	name := ProviderFile()
-	providerPath := filepath.Join(homeDir, dir, name)
-	relPath, _ := filepath.Rel(homeDir, providerPath)
-
-	oixCfg := ProviderConfig(relPath)
-	if base != nil {
-		if userHC, ok := base["health-check"]; ok {
-			if userHCMap, ok := userHC.(map[string]any); ok {
-				if oixHC, ok := oixCfg["health-check"].(map[string]any); ok {
-					hcMerged := make(map[string]any, len(oixHC)+len(userHCMap))
-					for hk, hv := range oixHC {
-						hcMerged[hk] = hv
-					}
-					for hk, hv := range userHCMap {
-						hcMerged[hk] = hv
-					}
-					base["health-check"] = hcMerged
-				}
-			}
-		}
-		for k, v := range oixCfg {
-			if _, exists := base[k]; exists && k == "health-check" {
-				continue
-			}
-			base[k] = v
-		}
-		oixCfg = base
-	}
-
-	pd, err := provider.ParseProxyProvider(name, oixCfg, C.Tunnel(tunnel.Tunnel))
-	if err != nil {
-		log.Warnln("[OixCloud] parse provider error: %s", err)
-		return nil, err
-	}
-	return pd, nil
-}
 
 func fetchBest(token string, urls []string) (*Result, error) {
 	var lastErr error
