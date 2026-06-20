@@ -968,21 +968,31 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		if oixName == "" {
 			oixName = "oixCloud"
 		}
-		if _, exists := providersMap[oixName]; !exists {
-			dir := "proxy_providers"
-			for _, pv := range providersMap {
-				if p := pv.Path(); p != "" {
-					if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
-						dir = rel
-						break
-					}
+
+		dir := "proxy_providers"
+		for _, pv := range providersMap {
+			if p := pv.Path(); p != "" {
+				if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
+					dir = rel
+					break
 				}
 			}
-			providerPath := filepath.Join(C.Path.HomeDir(), dir, oixName)
-			relPath, _ := filepath.Rel(C.Path.HomeDir(), providerPath)
-			oixPlaceholder, err := provider.ParseProxyProvider(oixName, oix.ProviderConfig(relPath), T.Tunnel)
-			if err == nil {
-				providersMap[oixName] = oixPlaceholder
+		}
+		providerPath := filepath.Join(C.Path.HomeDir(), dir, oixName)
+		relPath, _ := filepath.Rel(C.Path.HomeDir(), providerPath)
+
+		userMapping, userConfigured := providersConfig[oixName]
+		var mapping map[string]any
+		if userConfigured {
+			mapping = oix.ProviderConfig(relPath, userMapping)
+		} else {
+			mapping = oix.ProviderConfig(relPath, nil)
+		}
+
+		pd, err := provider.ParseProxyProvider(oixName, mapping, T.Tunnel)
+		if err == nil {
+			providersMap[oixName] = pd
+			if !userConfigured {
 				AllProviders = append(AllProviders, oixName)
 			}
 		}
