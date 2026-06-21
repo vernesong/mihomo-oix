@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 )
 
@@ -22,6 +23,16 @@ var (
 	NodesDomains  string
 	DNSAddr       string
 )
+
+var Ensured int32
+
+func SetEnsured() {
+	atomic.StoreInt32(&Ensured, 1)
+}
+
+func IsEnsured() bool {
+	return atomic.LoadInt32(&Ensured) == 1
+}
 
 var (
 	base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
