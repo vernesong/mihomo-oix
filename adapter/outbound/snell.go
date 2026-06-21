@@ -472,6 +472,10 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	return s, nil
 }
 
+func (s *Snell) NeedsUnifiedDelay() bool {
+	return isSnellECHTLSMode(s.obfsOption.Mode)
+}
+
 func (s *Snell) Close() error {
 	return s.Base.Close()
 }
