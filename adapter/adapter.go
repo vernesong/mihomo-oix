@@ -215,6 +215,12 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 	unifiedDelay := UnifiedDelay.Load()
 
+	if !unifiedDelay {
+		if needs, ok := p.ProxyAdapter.(interface{ NeedsUnifiedDelay() bool }); ok {
+			unifiedDelay = needs.NeedsUnifiedDelay()
+		}
+	}
+
 	addr, err := urlToMetadata(url)
 	if err != nil {
 		return
