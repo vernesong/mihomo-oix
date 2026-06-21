@@ -25,6 +25,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/log"
 )
 
@@ -165,6 +166,7 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	if !ok {
 		return false, errors.New("save failed")
 	}
+	oixdns.SetEnsured()
 	if providerExists {
 		log.Infoln("[OixCloud] provider [%s] already exists, file updated", ProviderFile())
 	} else {

@@ -129,7 +129,7 @@ func (r *Resolver) shouldIPFallback(ip netip.Addr) bool {
 }
 
 func (r *Resolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
-	if r.oixClient != nil && oixdns.ShouldObfuscate(host) {
+	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(host) {
 		host = oixdns.Obfuscate(host)
 		query := &D.Msg{}
 		query.SetQuestion(D.Fqdn(host), D.TypeHTTPS)
@@ -214,7 +214,7 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 // ExchangeWithoutCache a batch of dns request, and it do NOT GET from cache
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	domain := msgToDomain(m)
-	if r.oixClient != nil && oixdns.ShouldObfuscate(domain) {
+	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain) {
 		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
 		msg, err = r.oixClient.ExchangeContext(ctx, m)
 		if err == nil && msg != nil {
