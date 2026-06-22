@@ -224,8 +224,13 @@ func ParseProxy(mapping map[string]any, options ...ProxyOption) (C.Proxy, error)
 		}
 	}
 
+	needsUD := false
+	if n, ok := proxy.(interface{ NeedsUnifiedDelay() bool }); ok {
+		needsUD = n.NeedsUnifiedDelay()
+	}
+
 	proxy = outbound.NewAutoCloseProxyAdapter(proxy)
-	return NewProxy(proxy), nil
+	return NewProxy(proxy, needsUD), nil
 }
 
 type proxyOption struct {
