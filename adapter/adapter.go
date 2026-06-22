@@ -51,9 +51,10 @@ type internalProxyState struct {
 
 type Proxy struct {
 	C.ProxyAdapter
-	alive   atomic.Bool
-	history *queue.Queue[C.DelayHistory]
-	extra   xsync.Map[string, *internalProxyState]
+	alive             atomic.Bool
+	history           *queue.Queue[C.DelayHistory]
+	extra             xsync.Map[string, *internalProxyState]
+	needsUnifiedDelay bool
 }
 
 // Adapter implements C.Proxy
@@ -217,13 +218,7 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 	}()
 
-	unifiedDelay := UnifiedDelay.Load()
-
-	if !unifiedDelay {
-		if needs, ok := p.ProxyAdapter.(interface{ NeedsUnifiedDelay() bool }); ok {
-			unifiedDelay = needs.NeedsUnifiedDelay()
-		}
-	}
+	unifiedDelay := UnifiedDelay.Load() || p.needsUnifiedDelay
 
 	addr, err := urlToMetadata(url)
 	if err != nil {
@@ -302,11 +297,16 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	return
 }
 
-func NewProxy(adapter C.ProxyAdapter) *Proxy {
+func NewProxy(adapter C.ProxyAdapter, needsUnifiedDelay ...bool) *Proxy {
+	nud := false
+	if len(needsUnifiedDelay) > 0 {
+		nud = needsUnifiedDelay[0]
+	}
 	return &Proxy{
-		ProxyAdapter: adapter,
-		history:      queue.New[C.DelayHistory](defaultHistoriesNum),
-		alive:        atomic.NewBool(true),
+		ProxyAdapter:      adapter,
+		history:           queue.New[C.DelayHistory](defaultHistoriesNum),
+		alive:             atomic.NewBool(true),
+		needsUnifiedDelay: nud,
 	}
 }
 
