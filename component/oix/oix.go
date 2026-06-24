@@ -30,22 +30,22 @@ import (
 )
 
 var (
-	AppSecret         string
-	ApiDomains        string
-	ProfileKey        string
+	AppSecret  string
+	ApiDomains string
+	ProfileKey string
 
-	ageSecretKey      string
-	agePublicKey      string
-	ageKeyInitOnce    sync.Once
+	ageSecretKey   string
+	agePublicKey   string
+	ageKeyInitOnce sync.Once
 
-	oixProviderName   string
+	oixProviderName string
 
-	periodicCancel    context.CancelFunc
-	periodicDir       string
-	periodicHome      string
+	periodicCancel context.CancelFunc
+	periodicDir    string
+	periodicHome   string
 
-	oixHTTPOnce       sync.Once
-	oixHTTPClient     *http.Client
+	oixHTTPOnce   sync.Once
+	oixHTTPClient *http.Client
 )
 
 var (
@@ -140,11 +140,11 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	token := os.Getenv("OIX_TOKEN")
 	if token == "" {
-		return false, fmt.Errorf("%w", ErrNoToken)
+		return false, ErrNoToken
 	}
 	urls := apiBaseURLs()
 	if len(urls) == 0 {
-		return false, fmt.Errorf("%w", ErrNoDomains)
+		return false, ErrNoDomains
 	}
 
 	log.Infoln("[OixCloud] fetching provider...")
@@ -247,7 +247,6 @@ func IsOixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
-
 func fetchBest(token string, urls []string) (*Result, error) {
 	var lastErr error
 	for _, baseURL := range urls {
@@ -269,7 +268,7 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 
 	req, err := http.NewRequest(http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request failed")
+		return nil, errors.New("create request failed")
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
@@ -278,7 +277,7 @@ func fetchFrom(token, baseURL string) (*Result, error) {
 
 	resp, err := oixHTTPDo(req)
 	if err != nil {
-		return nil, fmt.Errorf("server request failed")
+		return nil, errors.New("server request failed")
 	}
 	defer resp.Body.Close()
 
@@ -355,7 +354,7 @@ func verifyResponseSignature(timestamp, configB64, headerSig string) error {
 	if headerSig != "" {
 		expected := sign(timestamp + "." + configB64)
 		if !hmac.Equal([]byte(expected), []byte(headerSig)) {
-			return fmt.Errorf("response signature mismatch")
+			return errors.New("response signature mismatch")
 		}
 		return nil
 	}
@@ -364,7 +363,7 @@ func verifyResponseSignature(timestamp, configB64, headerSig string) error {
 		return nil
 	}
 	if isAgeArmored(raw) {
-		return fmt.Errorf("missing response signature")
+		return errors.New("missing response signature")
 	}
 	return nil
 }
@@ -386,16 +385,16 @@ func decryptFlClashIfNeeded(data []byte) ([]byte, error) {
 
 func decryptFlClash(data []byte) ([]byte, error) {
 	if len(data) < 4+1+12+16 {
-		return nil, fmt.Errorf("invalid encrypted structure size")
+		return nil, errors.New("invalid encrypted structure size")
 	}
 	if string(data[:4]) != "FLEN" || data[4] != 0x02 {
-		return nil, fmt.Errorf("magic or version mismatch")
+		return nil, errors.New("magic or version mismatch")
 	}
 	iv := data[5 : 5+12]
 	ciphertext := data[5+12:]
 
 	if ProfileKey == "" {
-		return nil, fmt.Errorf("profile key is not injected")
+		return nil, errors.New("profile key is not injected")
 	}
 	hash := sha256.Sum256([]byte(ProfileKey))
 
@@ -415,7 +414,7 @@ func decryptFlClash(data []byte) ([]byte, error) {
 
 	for i := 0; i < len(plaintext); i++ {
 		if plaintext[i] < 32 && plaintext[i] != '\n' && plaintext[i] != '\r' && plaintext[i] != '\t' {
-			return nil, fmt.Errorf("invalid character found in decrypted text")
+			return nil, errors.New("invalid character found in decrypted text")
 		}
 	}
 
@@ -427,6 +426,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 		oixHTTPClient = &http.Client{
 			Timeout: 15 * time.Second,
 			Transport: &http.Transport{
+				Proxy: nil,
 				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
 					return dialer.DialContext(ctx, network, addr)
 				},
@@ -443,7 +443,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	deadline := time.Now().Add(totalTimeout)
 	for i := 0; i <= maxRetries; i++ {
 		if time.Now().After(deadline) {
-			return nil, fmt.Errorf("retry timeout")
+			return nil, errors.New("retry timeout")
 		}
 		if i > 0 {
 			time.Sleep(time.Duration(i) * time.Second)

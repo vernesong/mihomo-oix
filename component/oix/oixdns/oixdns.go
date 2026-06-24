@@ -4,8 +4,6 @@ package oixdns
 
 import (
 	"crypto/ed25519"
-	"crypto/hmac"
-	"crypto/sha256"
 	"encoding/base32"
 	"encoding/base64"
 	"net"
@@ -18,7 +16,6 @@ import (
 )
 
 var (
-	DNSSecret     string
 	DNSPrivateKey string
 	NodesDomains  string
 	DNSAddr       string
@@ -84,23 +81,17 @@ func ShouldObfuscate(domain string) bool {
 
 func Obfuscate(domain string) string {
 	basename := strings.ToLower(strings.TrimSuffix(domain, "."))
+	pk := loadPrivKey()
+	if pk == nil {
+		return domain
+	}
 	window := time.Now().Unix() / 300
 	message := []byte(basename + "|" + strconv.FormatInt(window, 10))
-
-	if pk := loadPrivKey(); pk != nil {
-		sig := ed25519.Sign(pk, message)
-		half := ed25519.SignatureSize / 2
-		p1 := strings.ToLower(base32Encoding.EncodeToString(sig[:half]))
-		p2 := strings.ToLower(base32Encoding.EncodeToString(sig[half:]))
-		return p1 + "." + p2 + "." + basename
-	}
-
-	mac := hmac.New(sha256.New, []byte(DNSSecret))
-	mac.Write(message)
-	digest := mac.Sum(nil)[:10]
-
-	token := strings.ToLower(base32Encoding.EncodeToString(digest))
-	return token + "." + basename
+	sig := ed25519.Sign(pk, message)
+	half := ed25519.SignatureSize / 2
+	p1 := strings.ToLower(base32Encoding.EncodeToString(sig[:half]))
+	p2 := strings.ToLower(base32Encoding.EncodeToString(sig[half:]))
+	return p1 + "." + p2 + "." + basename
 }
 
 func MaskDomain(domain string) string {
