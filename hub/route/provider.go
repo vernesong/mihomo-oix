@@ -2,10 +2,13 @@ package route
 
 import (
 	"context"
+	"net"
+	"sort"
+	"strings"
 
+	"github.com/metacubex/mihomo/component/oix"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
-	"github.com/metacubex/mihomo/component/oix"
 	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/metacubex/chi"
@@ -23,6 +26,7 @@ func proxyProviderRouter() http.Handler {
 		r.Get("/", getProvider)
 		r.Put("/", updateProvider)
 		r.Get("/healthcheck", healthCheckProvider)
+		r.Get("/servers", getProviderServers)
 		r.Mount("/", proxyProviderProxyRouter())
 	})
 	return r
@@ -76,6 +80,57 @@ func healthCheckProvider(w http.ResponseWriter, r *http.Request) {
 	provider := r.Context().Value(CtxKeyProvider).(P.ProxyProvider)
 	provider.HealthCheck()
 	render.NoContent(w, r)
+}
+
+func getProviderServers(w http.ResponseWriter, r *http.Request) {
+	name := r.Context().Value(CtxKeyProviderName).(string)
+	if !oix.IsOixProvider(name) {
+		render.Status(r, http.StatusNotFound)
+		render.JSON(w, r, ErrNotFound)
+		return
+	}
+
+	provider := r.Context().Value(CtxKeyProvider).(P.ProxyProvider)
+	render.JSON(w, r, render.M{
+		"servers": providerServerHosts(provider.Proxies()),
+	})
+}
+
+func providerServerHosts(proxies []C.Proxy) []string {
+	serverSet := make(map[string]struct{}, len(proxies))
+	for _, proxy := range proxies {
+		if proxy == nil {
+			continue
+		}
+
+		host := proxyServerHost(proxy.Addr())
+		if host == "" {
+			continue
+		}
+
+		serverSet[host] = struct{}{}
+	}
+
+	servers := make([]string, 0, len(serverSet))
+	for server := range serverSet {
+		servers = append(servers, server)
+	}
+	sort.Strings(servers)
+	return servers
+}
+
+func proxyServerHost(addr string) string {
+	addr = strings.TrimSpace(addr)
+	if addr == "" {
+		return ""
+	}
+
+	host, _, err := net.SplitHostPort(addr)
+	if err != nil {
+		return strings.Trim(addr, "[]")
+	}
+
+	return strings.Trim(host, "[]")
 }
 
 func parseProviderName(next http.Handler) http.Handler {
