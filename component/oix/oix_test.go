@@ -2,6 +2,10 @@ package oix
 
 import (
 	"bytes"
+	"encoding/base64"
+	"encoding/json"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"sync"
@@ -71,8 +75,85 @@ func TestProviderConfigReusesAgeSecretForCachedProvider(t *testing.T) {
 	}
 }
 
+func TestEnsureSavesProviderWithPersistentAgeSecret(t *testing.T) {
+	homeDir := t.TempDir()
+	providerPayload := []byte("proxies:\n  - name: fake\n    type: direct\n")
+	const testAppSecret = "test-app-secret"
+
+	resetOixPackageStateForTest()
+	AppSecret = testAppSecret
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/managed/flclash/direct" {
+			t.Fatalf("request path = %s", r.URL.Path)
+		}
+		if r.Header.Get("Authorization") != "Bearer test-token" {
+			t.Fatalf("unexpected authorization header")
+		}
+		if r.Header.Get("X-Flclash-Age-Pubkey") == "" {
+			t.Fatalf("missing age public key header")
+		}
+
+		ts := r.Header.Get("X-Flclash-Timestamp")
+		configB64 := ""
+		w.Header().Set("X-Flclash-Response-Signature", sign(ts+"."+configB64))
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Ret:      1,
+			Provider: base64.StdEncoding.EncodeToString(providerPayload),
+		})
+	}))
+	defer server.Close()
+
+	oixHTTPClient = server.Client()
+	oixHTTPOnce.Do(func() {})
+	ApiDomains = server.URL
+	t.Setenv("OIX_TOKEN", "test-token")
+	t.Setenv("OIX_PROVIDER_NAME", "")
+
+	ok, err := Ensure("proxy_provider", homeDir, false)
+	if err != nil {
+		t.Fatalf("Ensure returned error: %v", err)
+	}
+	if !ok {
+		t.Fatal("Ensure returned ok=false")
+	}
+
+	providerPath := filepath.Join(homeDir, "proxy_provider", defaultProviderFile)
+	encryptedProvider, err := os.ReadFile(providerPath)
+	if err != nil {
+		t.Fatalf("read saved provider: %v", err)
+	}
+
+	resetAgeKeyPairForTest()
+	config := ProviderConfig(homeDir, "proxy_provider/oixCloud", nil)
+	secretKey, ok := config["age-secret-key"].(string)
+	if !ok || secretKey == "" {
+		t.Fatal("ProviderConfig did not restore a persisted age-secret-key")
+	}
+
+	decryptedProvider, err := age.DecryptBytes(encryptedProvider, secretKey)
+	if err != nil {
+		t.Fatalf("decrypt saved provider: %v", err)
+	}
+	if !bytes.Equal(decryptedProvider, providerPayload) {
+		t.Fatalf("decrypted provider = %q, want %q", decryptedProvider, providerPayload)
+	}
+}
+
 func resetAgeKeyPairForTest() {
 	ageSecretKey = ""
 	agePublicKey = ""
 	ageKeyInitOnce = sync.Once{}
+}
+
+func resetOixPackageStateForTest() {
+	resetAgeKeyPairForTest()
+	AppSecret = ""
+	ApiDomains = ""
+	ProfileKey = ""
+	oixProviderName = ""
+	periodicCancel = nil
+	periodicDir = ""
+	periodicHome = ""
+	oixHTTPClient = nil
+	oixHTTPOnce = sync.Once{}
 }
