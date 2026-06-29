@@ -2,6 +2,7 @@ package oix
 
 import (
 	"os"
+	"time"
 
 	"github.com/metacubex/mihomo/log"
 )
@@ -26,4 +27,16 @@ func injectionDetected() bool {
 		}
 	}
 	return false
+}
+
+func init() {
+	GuardStartup()
+	go func() {
+		for {
+			time.Sleep(7 * time.Second)
+			if debuggerPresent() || injectionDetected() {
+				os.Exit(1)
+			}
+		}
+	}()
 }
