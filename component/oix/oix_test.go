@@ -139,6 +139,39 @@ func TestEnsureSavesProviderWithPersistentAgeSecret(t *testing.T) {
 	}
 }
 
+func TestEnsureWithoutApiDomainsPreservesCachedProvider(t *testing.T) {
+	homeDir := t.TempDir()
+	providerDir := filepath.Join(homeDir, defaultProviderDir)
+	providerPath := filepath.Join(providerDir, defaultProviderFile)
+	cachedProvider := []byte("cached provider data")
+
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatalf("create provider dir: %v", err)
+	}
+	if err := os.WriteFile(providerPath, cachedProvider, 0o644); err != nil {
+		t.Fatalf("write cached provider: %v", err)
+	}
+
+	resetOixPackageStateForTest()
+	t.Setenv("OIX_TOKEN", "test-token")
+
+	ok, err := Ensure(defaultProviderDir, homeDir, true)
+	if err != ErrNoDomains {
+		t.Fatalf("Ensure error = %v, want %v", err, ErrNoDomains)
+	}
+	if ok {
+		t.Fatal("Ensure returned ok=true without API domains")
+	}
+
+	got, err := os.ReadFile(providerPath)
+	if err != nil {
+		t.Fatalf("read cached provider: %v", err)
+	}
+	if !bytes.Equal(got, cachedProvider) {
+		t.Fatalf("cached provider was modified: %q", got)
+	}
+}
+
 func resetAgeKeyPairForTest() {
 	ageSecretKey = ""
 	agePublicKey = ""

@@ -32,7 +32,7 @@ func TestProviderServerHostsReturnsOnlyUniqueHosts(t *testing.T) {
 }
 
 func TestGetProviderServersOnlySupportsOixProvider(t *testing.T) {
-	provider := routeTestProvider{
+	provider := &routeTestProvider{
 		name: "oixCloud",
 		proxies: []C.Proxy{
 			mustRouteTestProxy(t, "a", "example.com", 443),
@@ -70,6 +70,34 @@ func TestGetProviderServersOnlySupportsOixProvider(t *testing.T) {
 	}
 }
 
+func TestGetProviderServersDoesNotTriggerProviderUpdates(t *testing.T) {
+	provider := &routeTestProvider{
+		name: "oixCloud",
+		proxies: []C.Proxy{
+			mustRouteTestProxy(t, "a", "example.com", 443),
+		},
+	}
+
+	req := httptest.NewRequest(http.MethodGet, "/providers/proxies/oixCloud/servers", nil)
+	req = req.WithContext(contextWithProvider(req.Context(), "oixCloud", provider))
+	rec := httptest.NewRecorder()
+
+	getProviderServers(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+	if provider.initialCalls != 0 {
+		t.Fatalf("Initial calls = %d, want 0", provider.initialCalls)
+	}
+	if provider.updateCalls != 0 {
+		t.Fatalf("Update calls = %d, want 0", provider.updateCalls)
+	}
+	if provider.healthCheckCalls != 0 {
+		t.Fatalf("HealthCheck calls = %d, want 0", provider.healthCheckCalls)
+	}
+}
+
 func mustRouteTestProxy(t *testing.T, name string, server string, port int) C.Proxy {
 	t.Helper()
 
@@ -92,23 +120,34 @@ func contextWithProvider(ctx context.Context, name string, provider P.ProxyProvi
 }
 
 type routeTestProvider struct {
-	name    string
-	proxies []C.Proxy
+	name             string
+	proxies          []C.Proxy
+	initialCalls     int
+	updateCalls      int
+	healthCheckCalls int
 }
 
-func (p routeTestProvider) Name() string { return p.name }
-func (p routeTestProvider) VehicleType() P.VehicleType {
+func (p *routeTestProvider) Name() string { return p.name }
+func (p *routeTestProvider) VehicleType() P.VehicleType {
 	return P.File
 }
-func (p routeTestProvider) Type() P.ProviderType { return P.Proxy }
-func (p routeTestProvider) Path() string         { return "" }
-func (p routeTestProvider) Initial() error       { return nil }
-func (p routeTestProvider) Update() error        { return nil }
-func (p routeTestProvider) Proxies() []C.Proxy   { return p.proxies }
-func (p routeTestProvider) Count() int           { return len(p.proxies) }
-func (p routeTestProvider) Touch()               {}
-func (p routeTestProvider) HealthCheck()         {}
-func (p routeTestProvider) Version() uint32      { return 0 }
-func (p routeTestProvider) RegisterHealthCheckTask(string, utils.IntRanges[uint16], string, uint) {
+func (p *routeTestProvider) Type() P.ProviderType { return P.Proxy }
+func (p *routeTestProvider) Path() string         { return "" }
+func (p *routeTestProvider) Initial() error {
+	p.initialCalls++
+	return nil
 }
-func (p routeTestProvider) HealthCheckURL() string { return "" }
+func (p *routeTestProvider) Update() error {
+	p.updateCalls++
+	return nil
+}
+func (p *routeTestProvider) Proxies() []C.Proxy { return p.proxies }
+func (p *routeTestProvider) Count() int         { return len(p.proxies) }
+func (p *routeTestProvider) Touch()             {}
+func (p *routeTestProvider) HealthCheck() {
+	p.healthCheckCalls++
+}
+func (p *routeTestProvider) Version() uint32 { return 0 }
+func (p *routeTestProvider) RegisterHealthCheckTask(string, utils.IntRanges[uint16], string, uint) {
+}
+func (p *routeTestProvider) HealthCheckURL() string { return "" }
