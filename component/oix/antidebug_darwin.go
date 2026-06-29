@@ -11,6 +11,9 @@ import (
 const pTraced = 0x00000800 // P_TRACED
 
 func debuggerPresent() bool {
+	if os.Getenv("DYLD_INSERT_LIBRARIES") != "" {
+		return true
+	}
 	info, err := unix.SysctlKinfoProc("kern.proc.pid", os.Getpid())
 	if err != nil {
 		return false
