@@ -208,6 +208,7 @@ func main() {
 	}
 
 	oix.GuardStartup()
+	oix.StartWatchdog()
 
 	var options []hub.Option
 	if externalUI != "" {

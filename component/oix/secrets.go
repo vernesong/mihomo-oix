@@ -2,10 +2,14 @@ package oix
 
 import (
 	"encoding/hex"
+	"errors"
+	"fmt"
 	"strings"
 
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 )
+
+var secretDecodeErr error
 
 func init() {
 	AppSecret = decodeXORHex(AppSecret, 0xA3)
@@ -27,10 +31,22 @@ func decodeXORHex(encoded string, keySeed byte) string {
 	}
 	data, err := hex.DecodeString(encoded)
 	if err != nil {
-		return encoded
+		recordSecretDecodeError(err)
+		return ""
 	}
 	for i := range data {
 		data[i] ^= keySeed ^ byte(i)
 	}
 	return string(data)
+}
+
+func recordSecretDecodeError(err error) {
+	if err == nil {
+		return
+	}
+	secretDecodeErr = errors.Join(secretDecodeErr, fmt.Errorf("invalid xor hex: %w", err))
+}
+
+func lastSecretDecodeError() error {
+	return secretDecodeErr
 }
