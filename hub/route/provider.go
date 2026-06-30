@@ -84,13 +84,13 @@ func healthCheckProvider(w http.ResponseWriter, r *http.Request) {
 
 func getProviderServers(w http.ResponseWriter, r *http.Request) {
 	name := r.Context().Value(CtxKeyProviderName).(string)
+	provider := r.Context().Value(CtxKeyProvider).(P.ProxyProvider)
 	if !oix.IsOixProvider(name) {
-		render.Status(r, http.StatusNotFound)
-		render.JSON(w, r, ErrNotFound)
+		ctx := context.WithValue(r.Context(), CtxKeyProxyName, "servers")
+		findProviderProxyByName(http.HandlerFunc(getProxy)).ServeHTTP(w, r.WithContext(ctx))
 		return
 	}
 
-	provider := r.Context().Value(CtxKeyProvider).(P.ProxyProvider)
 	render.JSON(w, r, render.M{
 		"servers": providerServerHosts(provider.Proxies()),
 	})

@@ -10,6 +10,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+	"github.com/metacubex/mihomo/tunnel"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httptest"
@@ -95,6 +96,41 @@ func TestGetProviderServersDoesNotTriggerProviderUpdates(t *testing.T) {
 	}
 	if provider.healthCheckCalls != 0 {
 		t.Fatalf("HealthCheck calls = %d, want 0", provider.healthCheckCalls)
+	}
+}
+
+func TestProviderServersRoutePreservesNonOixProxyNamedServers(t *testing.T) {
+	provider := &routeTestProvider{
+		name: "other",
+		proxies: []C.Proxy{
+			mustRouteTestProxy(t, "servers", "example.com", 443),
+		},
+	}
+
+	oldProxies := tunnel.Proxies()
+	oldProviders := tunnel.Providers()
+	tunnel.UpdateProxies(oldProxies, map[string]P.ProxyProvider{"other": provider})
+	t.Cleanup(func() {
+		tunnel.UpdateProxies(oldProxies, oldProviders)
+	})
+
+	req := httptest.NewRequest(http.MethodGet, "/other/servers", nil)
+	rec := httptest.NewRecorder()
+
+	proxyProviderRouter().ServeHTTP(rec, req)
+
+	if rec.Code != http.StatusOK {
+		t.Fatalf("status = %d, want %d, body: %s", rec.Code, http.StatusOK, rec.Body.String())
+	}
+
+	var body struct {
+		Type string `json:"type"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &body); err != nil {
+		t.Fatalf("decode response: %v", err)
+	}
+	if body.Type == "" {
+		t.Fatal("expected proxy JSON response")
 	}
 }
 
