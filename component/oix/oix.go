@@ -30,9 +30,10 @@ import (
 )
 
 var (
-	AppSecret  string
-	ApiDomains string
-	ProfileKey string
+	AppSecret      string
+	ApiDomains     string
+	SpareApiDomain string
+	ProfileKey     string
 
 	ageSecretKey   string
 	agePublicKey   string
@@ -62,6 +63,7 @@ const (
 const (
 	maxRetries   = 2
 	totalTimeout = 30 * time.Second
+	hedgeDelay   = 250 * time.Millisecond
 )
 
 type Result struct {
@@ -248,25 +250,64 @@ func IsOixProvider(name string) bool {
 }
 
 func fetchBest(token string, urls []string) (*Result, error) {
+	if len(urls) == 0 {
+		return nil, ErrNoDomains
+	}
+	if len(urls) == 1 {
+		return fetchFrom(context.Background(), token, urls[0])
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+
+	type outcome struct {
+		result *Result
+		err    error
+	}
+	results := make(chan outcome, len(urls))
+
+	for i, baseURL := range urls {
+		go func(index int, baseURL string) {
+			if index > 0 {
+				timer := time.NewTimer(hedgeDelay)
+				defer timer.Stop()
+				select {
+				case <-timer.C:
+				case <-ctx.Done():
+					results <- outcome{nil, ctx.Err()}
+					return
+				}
+			}
+			result, err := fetchFrom(ctx, token, baseURL)
+			results <- outcome{result, err}
+		}(i, baseURL)
+	}
+
 	var lastErr error
-	for _, baseURL := range urls {
-		result, err := fetchFrom(token, baseURL)
-		if err == nil {
-			return result, nil
+	for range urls {
+		o := <-results
+		if o.err == nil && o.result != nil {
+			cancel()
+			return o.result, nil
 		}
-		lastErr = err
+		if o.err != nil {
+			lastErr = o.err
+		}
+	}
+	if lastErr == nil {
+		lastErr = ErrNoDomains
 	}
 	return nil, lastErr
 }
 
-func fetchFrom(token, baseURL string) (*Result, error) {
+func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
 	sig := sign(ts + "." + agePublicKey)
 
 	url := baseURL + "/api/v1/managed/flclash/direct"
 
-	req, err := http.NewRequest(http.MethodGet, url, nil)
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return nil, errors.New("create request failed")
 	}
@@ -440,13 +481,23 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 		}
 	})
 
+	ctx := req.Context()
 	deadline := time.Now().Add(totalTimeout)
 	for i := 0; i <= maxRetries; i++ {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
 		if time.Now().After(deadline) {
 			return nil, errors.New("retry timeout")
 		}
 		if i > 0 {
-			time.Sleep(time.Duration(i) * time.Second)
+			timer := time.NewTimer(time.Duration(i) * time.Second)
+			select {
+			case <-timer.C:
+			case <-ctx.Done():
+				timer.Stop()
+				return nil, ctx.Err()
+			}
 		}
 		resp, err := oixHTTPClient.Do(req)
 		if err != nil {
@@ -489,11 +540,10 @@ func ProviderFile() string {
 }
 
 func apiBaseURLs() []string {
-	if ApiDomains == "" {
-		return nil
-	}
 	domains := strings.Split(ApiDomains, ",")
+	domains = append(domains, strings.Split(SpareApiDomain, ",")...)
 	urls := make([]string, 0, len(domains))
+	seen := make(map[string]struct{}, len(domains))
 	for _, d := range domains {
 		d = strings.TrimSpace(d)
 		if d == "" {
@@ -504,6 +554,10 @@ func apiBaseURLs() []string {
 		} else if !strings.HasPrefix(d, "https://") {
 			d = "https://" + d
 		}
+		if _, ok := seen[d]; ok {
+			continue
+		}
+		seen[d] = struct{}{}
 		urls = append(urls, d)
 	}
 	return urls

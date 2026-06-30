@@ -13,6 +13,7 @@ func init() {
 	oixdns.NodesDomains = decodeXORHex(oixdns.NodesDomains, 0xE8)
 	oixdns.DNSAddr = decodeXORHex(oixdns.DNSAddr, 0xF2)
 	ApiDomains = decodeXORHex(ApiDomains, 0x5E)
+	SpareApiDomain = decodeXORHex(SpareApiDomain, 0x6D)
 	ProfileKey = decodeXORHex(ProfileKey, 0x7F)
 }
 
