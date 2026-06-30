@@ -284,20 +284,33 @@ func fetchBest(token string, urls []string) (*Result, error) {
 	}
 
 	var lastErr error
+	var authErr error
+	var emptySeen bool
 	for range urls {
 		o := <-results
-		if o.err == nil && o.result != nil {
+		if o.err == nil && hasResult(o.result) {
 			cancel()
 			return o.result, nil
 		}
 		if o.err != nil {
 			lastErr = o.err
+			if errors.Is(o.err, ErrAuthFailed) && authErr == nil {
+				authErr = o.err
+			}
+		} else {
+			emptySeen = true
 		}
 	}
-	if lastErr == nil {
-		lastErr = ErrNoDomains
+	if authErr != nil {
+		return nil, authErr
 	}
-	return nil, lastErr
+	if lastErr != nil {
+		return nil, lastErr
+	}
+	if emptySeen {
+		return &Result{}, nil
+	}
+	return nil, ErrNoDomains
 }
 
 func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
@@ -335,8 +348,15 @@ func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
+	if apiResp.Ret != 0 {
+		err := fmt.Errorf("API ret %d: %s", apiResp.Ret, apiResp.Msg)
+		if apiResp.Ret == http.StatusUnauthorized || apiResp.Ret == http.StatusForbidden {
+			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
+		}
+		return nil, err
+	}
 
-	if err := verifyResponseSignature(ts, apiResp.Config, resp.Header.Get("X-Flclash-Response-Signature")); err != nil {
+	if err := verifyResponseSignature(ts, apiResp.Config, apiResp.Provider, resp.Header.Get("X-Flclash-Response-Signature")); err != nil {
 		return nil, err
 	}
 
@@ -357,6 +377,10 @@ func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func hasResult(result *Result) bool {
+	return result != nil && (len(result.Config) > 0 || len(result.Provider) > 0)
 }
 
 func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
@@ -391,15 +415,26 @@ func sign(timestamp string) string {
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
-func verifyResponseSignature(timestamp, configB64, headerSig string) error {
+func verifyResponseSignature(timestamp, configB64, providerB64, headerSig string) error {
 	if headerSig != "" {
-		expected := sign(timestamp + "." + configB64)
+		payload := timestamp + "." + configB64
+		if providerB64 != "" {
+			payload += "." + providerB64
+		}
+		expected := sign(payload)
 		if !hmac.Equal([]byte(expected), []byte(headerSig)) {
 			return errors.New("response signature mismatch")
 		}
 		return nil
 	}
 	raw, err := base64.StdEncoding.DecodeString(configB64)
+	if err != nil {
+		return nil
+	}
+	if isAgeArmored(raw) {
+		return errors.New("missing response signature")
+	}
+	raw, err = base64.StdEncoding.DecodeString(providerB64)
 	if err != nil {
 		return nil
 	}
@@ -482,6 +517,15 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	})
 
 	ctx := req.Context()
+	deadlineCtx, cancel := context.WithTimeout(ctx, totalTimeout)
+	responseReturned := false
+	defer func() {
+		if !responseReturned {
+			cancel()
+		}
+	}()
+	req = req.WithContext(deadlineCtx)
+	ctx = deadlineCtx
 	deadline := time.Now().Add(totalTimeout)
 	for i := 0; i <= maxRetries; i++ {
 		if err := ctx.Err(); err != nil {
@@ -507,9 +551,25 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 			resp.Body.Close()
 			continue
 		}
+		resp.Body = &cancelOnCloseReadCloser{
+			ReadCloser: resp.Body,
+			cancel:     cancel,
+		}
+		responseReturned = true
 		return resp, nil
 	}
 	return nil, fmt.Errorf("request failed after %d retries", maxRetries+1)
+}
+
+type cancelOnCloseReadCloser struct {
+	io.ReadCloser
+	cancel context.CancelFunc
+}
+
+func (r *cancelOnCloseReadCloser) Close() error {
+	err := r.ReadCloser.Close()
+	r.cancel()
+	return err
 }
 
 func saveResult(dir, homeDir string, result *Result) bool {
