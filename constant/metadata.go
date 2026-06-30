@@ -311,7 +311,11 @@ func (m *Metadata) String() string {
 		}
 		return host
 	} else if m.DstIP.IsValid() {
-		return m.DstIP.String()
+		host := m.DstIP.String()
+		if oixdns.ShouldMask(host) {
+			host = oixdns.Mask(host)
+		}
+		return host
 	} else {
 		return "<nil>"
 	}

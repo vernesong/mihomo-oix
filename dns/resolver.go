@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/arc"
@@ -190,8 +191,12 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 	q := m.Question[0]
 	domain := msgToDomain(m)
 	isCloud := oixdns.ShouldObfuscate(domain)
+	cacheQuestion := q
+	if r.useOIXDNS(domain) {
+		cacheQuestion = oixCacheQuestion(q)
+	}
 
-	msg, expireTime, hit := getMsgFromCache(r.cache, q)
+	msg, expireTime, hit := getMsgFromCache(r.cache, cacheQuestion)
 	if hit {
 		if isCloud {
 			markCloudIPsFromMsg(msg)
@@ -214,11 +219,19 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 // ExchangeWithoutCache a batch of dns request, and it do NOT GET from cache
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	domain := msgToDomain(m)
-	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain) {
-		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
-		msg, err = r.oixClient.ExchangeContext(ctx, m)
+	if r.useOIXDNS(domain) {
+		q := m.Question[0]
+		query := m.Copy()
+		query.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
+		msg, err = r.oixClient.ExchangeContext(ctx, query)
 		if err == nil && msg != nil {
 			markCloudIPsFromMsg(msg)
+			msg = msg.Copy()
+			restoreOIXMsgNames(msg, query.Question[0].Name, q.Name)
+			msg.Question = m.Question
+			if r.cache != nil {
+				putMsgToCache(r.cache, oixCacheQuestion(q), msg)
+			}
 		}
 		return msg, err
 	}
@@ -295,6 +308,28 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 	}
 
 	return
+}
+
+func (r *Resolver) useOIXDNS(domain string) bool {
+	return r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain)
+}
+
+func oixCacheQuestion(q D.Question) D.Question {
+	q.Name = "\x00oix\x00" + q.Name
+	return q
+}
+
+func restoreOIXMsgNames(msg *D.Msg, obfuscatedName, originalName string) {
+	restore := func(records []D.RR) {
+		for _, rr := range records {
+			if strings.EqualFold(rr.Header().Name, obfuscatedName) {
+				rr.Header().Name = originalName
+			}
+		}
+	}
+	restore(msg.Answer)
+	restore(msg.Ns)
+	restore(msg.Extra)
 }
 
 func (r *Resolver) matchPolicy(m *D.Msg) []dnsClient {

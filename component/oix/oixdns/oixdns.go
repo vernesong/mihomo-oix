@@ -27,6 +27,10 @@ func SetEnsured() {
 	atomic.StoreInt32(&Ensured, 1)
 }
 
+func ClearEnsured() {
+	atomic.StoreInt32(&Ensured, 0)
+}
+
 func IsEnsured() bool {
 	return atomic.LoadInt32(&Ensured) == 1
 }
@@ -68,19 +72,28 @@ func isCloudIP(host string) bool {
 	return ok
 }
 
+func normalizeDomain(domain string) string {
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+}
+
+func nodesDomain() string {
+	return normalizeDomain(NodesDomains)
+}
+
 func ShouldObfuscate(domain string) bool {
-	if NodesDomains == "" {
+	nodes := nodesDomain()
+	if nodes == "" {
 		return false
 	}
-	d := strings.ToLower(strings.TrimSuffix(domain, "."))
-	if d == NodesDomains {
+	d := normalizeDomain(domain)
+	if d == nodes {
 		return true
 	}
-	return strings.HasSuffix(d, "."+NodesDomains)
+	return strings.HasSuffix(d, "."+nodes)
 }
 
 func Obfuscate(domain string) string {
-	basename := strings.ToLower(strings.TrimSuffix(domain, "."))
+	basename := normalizeDomain(domain)
 	pk := loadPrivKey()
 	if pk == nil {
 		return domain
@@ -95,15 +108,19 @@ func Obfuscate(domain string) string {
 }
 
 func MaskDomain(domain string) string {
-	d := strings.ToLower(strings.TrimSuffix(domain, "."))
-	if d == NodesDomains {
-		return "***." + NodesDomains
+	nodes := nodesDomain()
+	if nodes == "" {
+		return "***"
 	}
-	suffix := "." + NodesDomains
+	d := normalizeDomain(domain)
+	if d == nodes {
+		return "***." + nodes
+	}
+	suffix := "." + nodes
 	if strings.HasSuffix(d, suffix) {
 		return "***" + suffix
 	}
-	return "***." + NodesDomains
+	return "***." + nodes
 }
 
 func ShouldMask(host string) bool {

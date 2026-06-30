@@ -142,10 +142,12 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	token := os.Getenv("OIX_TOKEN")
 	if token == "" {
+		oixdns.ClearEnsured()
 		return false, ErrNoToken
 	}
 	urls := apiBaseURLs()
 	if len(urls) == 0 {
+		oixdns.ClearEnsured()
 		return false, ErrNoDomains
 	}
 
@@ -154,6 +156,7 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	result, err := fetchBest(token, urls)
 	if err != nil {
 		if IsAuthError(err) {
+			oixdns.ClearEnsured()
 			log.Warnln("[OixCloud] auth failed, provider [%s] removed", ProviderFile())
 		} else {
 			log.Warnln("[OixCloud] config fetch failed")

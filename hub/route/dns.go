@@ -80,6 +80,7 @@ func queryDNS(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if oixdns.ShouldObfuscate(name) {
+		responseData["Question"] = []string{"***"}
 		responseData["Answer"] = []string{"***"}
 		responseData["Authority"] = []string{"***"}
 		responseData["Additional"] = []string{"***"}
