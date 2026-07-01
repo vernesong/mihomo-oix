@@ -128,7 +128,7 @@ func snellECHTLSConfig(opt *snellECHTLSObfsOption) (*ech.Config, error) {
 }
 
 func requiresSnellV4Identity(mode string) bool {
-	return mode == "ech-tls" || mode == shadowtls.Mode
+	return mode == "ech-tls"
 }
 
 func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell, error) {
@@ -436,5 +436,5 @@ func NewSnell(option SnellOption) (*Snell, error) {
 }
 
 func (s *Snell) NeedsUnifiedDelay() bool {
-	return s.obfsOption.Mode == "ech-tls" || s.obfsOption.Mode == shadowtls.Mode
+	return s.obfsOption.Mode == "ech-tls"
 }
