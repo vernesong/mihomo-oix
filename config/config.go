@@ -984,9 +984,9 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		userMapping, userConfigured := providersConfig[oixName]
 		var mapping map[string]any
 		if userConfigured {
-			mapping = oix.ProviderConfig(C.Path.HomeDir(), relPath, userMapping)
+			mapping = oix.ProviderConfig(relPath, userMapping)
 		} else {
-			mapping = oix.ProviderConfig(C.Path.HomeDir(), relPath, nil)
+			mapping = oix.ProviderConfig(relPath, nil)
 		}
 
 		pd, err := provider.ParseProxyProvider(oixName, mapping, T.Tunnel)
