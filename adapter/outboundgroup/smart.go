@@ -50,19 +50,19 @@ const (
 	flushQueueInterval       = 5 * time.Minute
 	rankingInterval          = 5 * time.Minute
 
-	maxRetries               = 3
-	maxSelected              = 10
-	smartStickyCacheAge      = 10 * time.Minute
-	smartStickyCacheSize     = 1000
+	maxRetries           = 3
+	maxSelected          = 10
+	smartStickyCacheAge  = 10 * time.Minute
+	smartStickyCacheSize = 1000
 
-	parallelDials            = 5
-	connectThreshold         = 5.0
+	parallelDials               = 5
+	connectThreshold            = 5.0
 	smartStrategyStickySessions = "sticky-sessions"
 )
 
 var (
-	flushQueueOnce       atomic.Bool
-	smartInitOnce        sync.Once
+	flushQueueOnce atomic.Bool
+	smartInitOnce  sync.Once
 )
 
 type SmartOption struct {
@@ -76,28 +76,28 @@ type SmartOption struct {
 
 type Smart struct {
 	*GroupBase
-	store                  *smart.Store
+	store *smart.Store
 
-	wg                     sync.WaitGroup
-	ctx                    context.Context
-	cancel                 context.CancelFunc
+	wg     sync.WaitGroup
+	ctx    context.Context
+	cancel context.CancelFunc
 
-	configName             string
-	selected               string
-	strategy               string
-	stickyCache            *lru.LruCache[uint64, string]
-	testUrl                string
-	expectedStatus         string
-	disableUDP             bool
+	configName     string
+	selected       string
+	strategy       string
+	stickyCache    *lru.LruCache[uint64, string]
+	testUrl        string
+	expectedStatus string
+	disableUDP     bool
 
-	dataCollector          *lightgbm.DataCollector
-	weightModel            *lightgbm.WeightModel
-	policyPriority         []priorityRule
-	priorityCache          xsync.Map[string, float64]
-	sampleRate             float64
-	useLightGBM            bool
-	collectData            bool
-	preferASN	           bool
+	dataCollector  *lightgbm.DataCollector
+	weightModel    *lightgbm.WeightModel
+	policyPriority []priorityRule
+	priorityCache  xsync.Map[string, float64]
+	sampleRate     float64
+	useLightGBM    bool
+	collectData    bool
+	preferASN      bool
 }
 
 type dialResult struct {
@@ -142,28 +142,28 @@ func NewSmart(option GroupCommonOption, smartOption SmartOption, emptyFallback C
 
 	s := &Smart{
 		GroupBase: NewGroupBase(GroupBaseOption{
-			Name:            option.Name,
-			Type:            C.Smart,
-			Hidden:          option.Hidden,
-			Icon:            option.Icon,
-			Filter:          option.Filter,
-			ExcludeFilter:   option.ExcludeFilter,
-			ExcludeType:     option.ExcludeType,
-			TestTimeout:     option.TestTimeout,
-			MaxFailedTimes:  option.MaxFailedTimes,
-			EmptyFallback:   emptyFallback,
-			Providers:       providers,
+			Name:           option.Name,
+			Type:           C.Smart,
+			Hidden:         option.Hidden,
+			Icon:           option.Icon,
+			Filter:         option.Filter,
+			ExcludeFilter:  option.ExcludeFilter,
+			ExcludeType:    option.ExcludeType,
+			TestTimeout:    option.TestTimeout,
+			MaxFailedTimes: option.MaxFailedTimes,
+			EmptyFallback:  emptyFallback,
+			Providers:      providers,
 		}),
-		testUrl:              option.URL,
-		expectedStatus:       option.ExpectedStatus,
-		configName:           configName,
-		strategy:             strategy,
-		disableUDP:           option.DisableUDP,
-		policyPriority:       make([]priorityRule, 0),
-		sampleRate:           1,
-		useLightGBM:          smartOption.UseLightGBM,
-		collectData:          smartOption.CollectData,
-		preferASN:            smartOption.PreferASN,
+		testUrl:        option.URL,
+		expectedStatus: option.ExpectedStatus,
+		configName:     configName,
+		strategy:       strategy,
+		disableUDP:     option.DisableUDP,
+		policyPriority: make([]priorityRule, 0),
+		sampleRate:     1,
+		useLightGBM:    smartOption.UseLightGBM,
+		collectData:    smartOption.CollectData,
+		preferASN:      smartOption.PreferASN,
 	}
 
 	if strategy == smartStrategyStickySessions {
@@ -276,7 +276,7 @@ func (s *Smart) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 		} else if i == 0 {
 			batch = proxies[0:1]
 		} else {
-			begin := 1 + (i-1) * parallelDials
+			begin := 1 + (i-1)*parallelDials
 			if begin >= len(proxies) {
 				return nil, 0
 			}
@@ -295,7 +295,7 @@ func (s *Smart) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 		}
 
 		if historyConnectTime > 0 {
-			timeout = time.Duration(float64(historyConnectTime) * connectThreshold) * time.Millisecond
+			timeout = time.Duration(float64(historyConnectTime)*connectThreshold) * time.Millisecond
 		}
 
 		if timeout > C.DefaultTCPTimeout || timeout <= 0 {
@@ -934,9 +934,9 @@ func (s *Smart) updateNodeRanking() {
 	if len(rankingWrapper.Result) > 0 {
 		now := time.Now().Unix()
 		lastUpdated := rankingWrapper.LastUpdated
-		cacheAge := time.Duration(now - lastUpdated) * time.Second
+		cacheAge := time.Duration(now-lastUpdated) * time.Second
 
-		if cacheAge < 30 * time.Minute {
+		if cacheAge < 30*time.Minute {
 			rankedNodes := make(map[string]bool, len(rankingWrapper.Result))
 			for _, r := range rankingWrapper.Result {
 				rankedNodes[r.Name] = true
@@ -950,7 +950,7 @@ func (s *Smart) updateNodeRanking() {
 			}
 
 			if !hasUnrankedProxy {
-				if cacheAge <= 10 * time.Minute {
+				if cacheAge <= 10*time.Minute {
 					return
 				}
 				proxyMap := make(map[string]C.Proxy, len(proxies))
@@ -1149,34 +1149,34 @@ func (s *Smart) calcMADMetrics(delays []float64) (currentAnomaly bool, unstable 
 		return true, true, 0, 0
 	}
 
-	if float64(recentSentinels) / float64(recentCount) > SentinelThreshold {
+	if float64(recentSentinels)/float64(recentCount) > SentinelThreshold {
 		unstable = true
 	}
 
 	if m < minSamples {
-		last := delays[n - 1]
+		last := delays[n-1]
 		currentAnomaly = last >= sentinel
 		return currentAnomaly, unstable, 0, 0
 	}
 
 	sort.Float64s(filtered)
 
-	if m % 2 == 1 {
-		median = filtered[m / 2]
+	if m%2 == 1 {
+		median = filtered[m/2]
 	} else {
-		median = (filtered[m / 2 - 1] + filtered[m / 2]) / 2
+		median = (filtered[m/2-1] + filtered[m/2]) / 2
 	}
 
 	devs := make([]float64, 0, m)
 	for _, v := range filtered {
-		devs = append(devs, math.Abs(v - median))
+		devs = append(devs, math.Abs(v-median))
 	}
 	sort.Float64s(devs)
 
-	if m % 2 == 1 {
-		mad = devs[m / 2]
+	if m%2 == 1 {
+		mad = devs[m/2]
 	} else {
-		mad = (devs[m / 2 - 1] + devs[m / 2]) / 2
+		mad = (devs[m/2-1] + devs[m/2]) / 2
 	}
 
 	if mad == 0 {
@@ -1191,12 +1191,12 @@ func (s *Smart) calcMADMetrics(delays []float64) (currentAnomaly bool, unstable 
 			varSum += d * d
 		}
 		std := math.Sqrt(varSum / float64(m))
-		threshold = mean + 2 * std
-		last := delays[n - 1]
+		threshold = mean + 2*std
+		last := delays[n-1]
 		if last >= sentinel {
 			currentAnomaly = true
 		} else {
-			currentAnomaly = last > threshold && delays[n - 2] > threshold
+			currentAnomaly = last > threshold && delays[n-2] > threshold
 		}
 
 		return currentAnomaly, unstable, threshold, calcGrade(threshold)
@@ -1207,7 +1207,7 @@ func (s *Smart) calcMADMetrics(delays []float64) (currentAnomaly bool, unstable 
 		k = smallK
 	}
 
-	threshold = median + k * scale * mad
+	threshold = median + k*scale*mad
 
 	if median > 0 {
 		robustCV = scale * mad / median
@@ -1215,11 +1215,11 @@ func (s *Smart) calcMADMetrics(delays []float64) (currentAnomaly bool, unstable 
 		robustCV = 0
 	}
 
-	last := delays[n - 1]
+	last := delays[n-1]
 	if last >= sentinel {
 		currentAnomaly = true
 	} else {
-		currentAnomaly = last > threshold && delays[n - 2] > threshold
+		currentAnomaly = last > threshold && delays[n-2] > threshold
 	}
 
 	if !unstable {
@@ -1234,7 +1234,7 @@ func (s *Smart) checkNodesStable() {
 	operations := make([]smart.StoreOperation, 0, len(proxies))
 	nodesToBlock := make(map[string]*smart.NodeState, len(proxies))
 	now := time.Now().Unix()
-	blockedUntil := time.Now().Add(checkInterval + 2 * time.Minute).Unix()
+	blockedUntil := time.Now().Add(checkInterval + 2*time.Minute).Unix()
 
 	nodeStateData, _ := s.store.GetNodeStates(s.Name(), s.configName)
 
@@ -1576,9 +1576,10 @@ func (s *Smart) recordConnectionStats(metadata *C.Metadata, proxy C.Proxy,
 
 	input := lightgbm.CreateModelInputFromStatsRecord(
 		atomicRecord, metadata,
-		uploadTotalMB, downloadTotalMB, maxUploadRateKB, maxDownloadRateKB, float64(connectionDuration) / 60000.0, wildcardTarget,
+		uploadTotalMB, downloadTotalMB, maxUploadRateKB, maxDownloadRateKB, float64(connectionDuration)/60000.0, wildcardTarget,
 		lossRate, cumulLossRate,
 	)
+	input.ConnectionFailed = err != nil
 
 	if s.useLightGBM && s.weightModel != nil {
 		calculatedWeight, ModelPredicted = s.weightModel.PredictWeight(input, priorityFactor)
@@ -1623,7 +1624,7 @@ func (s *Smart) recordConnectionStats(metadata *C.Metadata, proxy C.Proxy,
 		s.collectConnectionData(input, metadata, collectedWeight, proxyName, ModelPredicted)
 	}
 
-	s.logConnectionStats(err, statsSnapshot, metadata, calculatedWeight / priorityFactor, priorityFactor, addressDisplay, proxyName,
+	s.logConnectionStats(err, statsSnapshot, metadata, calculatedWeight/priorityFactor, priorityFactor, addressDisplay, proxyName,
 		connectTime, latency, uploadTotalMB, downloadTotalMB, maxUploadRateKB, maxDownloadRateKB, connectionDuration, asnInfo, ModelPredicted, lossRate, cumulLossRate)
 }
 
@@ -1730,7 +1731,7 @@ func (s *Smart) checkNodeQuality(
 	if downloadTotal < 0.03 && metadata.Host != "" && metadata.DstPort == 443 && !isUDP {
 		var failure bool
 		var checked bool
-		if now - wtLastCheck > 300 || now - wtLastFailure < 300 {
+		if now-wtLastCheck > 300 || now-wtLastFailure < 300 {
 			checked = true
 			status, ok, err := s.StatusTest(proxy, metadata.Host)
 			if err == nil {
