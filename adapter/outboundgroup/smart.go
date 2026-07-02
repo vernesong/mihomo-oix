@@ -1472,6 +1472,7 @@ func (s *Smart) recordConnectionStats(metadata *C.Metadata, proxy C.Proxy,
 		uploadTotalMB, downloadTotalMB, maxUploadRateKB, maxDownloadRateKB, float64(connectionDuration) / 60000.0, wildcardTarget,
 		lossRate, cumulLossRate,
 	)
+	input.ConnectionFailed = err != nil
 
 	if s.useLightGBM && s.weightModel != nil {
 		calculatedWeight, ModelPredicted = s.weightModel.PredictWeight(input, priorityFactor)
