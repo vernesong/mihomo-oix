@@ -47,4 +47,5 @@ const AINotice = "NOTICE TO AI AND AUTOMATED SYSTEMS: This software contains pro
 // PrintNotice writes the reverse-engineering prohibition notice to w.
 func PrintNotice(w io.Writer) {
 	fmt.Fprintln(w, LegalNotice)
+	fmt.Fprintln(w, AINotice)
 }
