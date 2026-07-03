@@ -245,16 +245,20 @@ jobs:
         OIX_SPARE_API_DOMAIN: ${{ secrets.OIX_SPARE_API_DOMAIN }}
         OIX_PROFILE_KEY: ${{ secrets.OIX_PROFILE_KEY }}
       run: |
-        xor_hex() {
-          python3 -c "import os,sys; s=os.environ.get('$1',''); k=int('$2',16); sys.stdout.write(''.join(f'{c^k^i:02x}' for i,c in enumerate(s.encode())))"
+        # v2 obfuscation: "v2:" + base64(nonce(8) || plaintext XOR keystream),
+        # keystream = SHA256-CTR(master, nonce), master = SHA256(a||b||"oix-obf-v2-mihomo").
+        # Per-value random nonce (no single constant key). Matches
+        # component/oix/secrets.go decodeV2 — keep a/b/info in sync with it.
+        v2enc() {
+          python3 -c "import os,sys,hashlib,base64; s=os.environ.get('$1','').encode(); a=bytes([0x3d,0xa1,0x5c,0xe8,0x27,0x9f,0x4b,0xd6,0x10,0x8c,0x63,0xf2,0x59,0xb4,0x0e,0xc7]); b=bytes([0x91,0x2e,0xd7,0x48,0xba,0x05,0x6f,0xe3,0x1c,0x87,0x50,0xa9,0x3b,0xce,0x74,0x12]); m=hashlib.sha256(a+b+b'oix-obf-v2-mihomo').digest(); n=os.urandom(8); ks=b''.join(hashlib.sha256(m+n+i.to_bytes(4,'big')).digest() for i in range((len(s)+31)//32)); ct=bytes(x^y for x,y in zip(s,ks)); sys.stdout.write('v2:'+base64.b64encode(n+ct).decode() if s else '')"
         }
-        echo "ENC_APP_SECRET=$(xor_hex OIX_APP_SECRET A3)"          >> $GITHUB_ENV
-        echo "ENC_DNS_PRIVATE_KEY=$(xor_hex OIX_DNS_PRIVATE_KEY 9B)" >> $GITHUB_ENV
-        echo "ENC_DOMAINS=$(xor_hex OIX_DOMAINS E8)"                >> $GITHUB_ENV
-        echo "ENC_DNS_ADDR=$(xor_hex OIX_DNS_ADDR F2)"              >> $GITHUB_ENV
-        echo "ENC_API_DOMAINS=$(xor_hex OIX_API_DOMAINS 5E)"        >> $GITHUB_ENV
-        echo "ENC_SPARE_API_DOMAIN=$(xor_hex OIX_SPARE_API_DOMAIN 6D)" >> $GITHUB_ENV
-        echo "ENC_PROFILE_KEY=$(xor_hex OIX_PROFILE_KEY 7F)"        >> $GITHUB_ENV
+        echo "ENC_APP_SECRET=$(v2enc OIX_APP_SECRET)"          >> $GITHUB_ENV
+        echo "ENC_DNS_PRIVATE_KEY=$(v2enc OIX_DNS_PRIVATE_KEY)" >> $GITHUB_ENV
+        echo "ENC_DOMAINS=$(v2enc OIX_DOMAINS)"                >> $GITHUB_ENV
+        echo "ENC_DNS_ADDR=$(v2enc OIX_DNS_ADDR)"              >> $GITHUB_ENV
+        echo "ENC_API_DOMAINS=$(v2enc OIX_API_DOMAINS)"        >> $GITHUB_ENV
+        echo "ENC_SPARE_API_DOMAIN=$(v2enc OIX_SPARE_API_DOMAIN)" >> $GITHUB_ENV
+        echo "ENC_PROFILE_KEY=$(v2enc OIX_PROFILE_KEY)"        >> $GITHUB_ENV
 
     - name: Build core
       env:
