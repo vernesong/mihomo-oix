@@ -301,13 +301,13 @@ func (s *Smart) DialContext(ctx context.Context, metadata *C.Metadata) (C.Conn, 
 				}
 				finalErr = err
 			} else {
-				s.store.StoreUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, metadata.NetWork == C.UDP, []C.Proxy{p})
+				s.store.StoreUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, []C.Proxy{p})
 				return s.WrapConnWithMetric(c, p, metadata, connectTime), nil
 			}
 		}
 
 		if len(proxies) == 1 {
-			s.store.DeleteUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, metadata.NetWork == C.UDP)
+			s.store.DeleteUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber)
 		}
 
 		return nil, finalErr
@@ -359,12 +359,12 @@ func (s *Smart) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 				continue
 			}
 
-			s.store.StoreUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, metadata.NetWork == C.UDP, []C.Proxy{proxy})
+			s.store.StoreUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, []C.Proxy{proxy})
 			return s.WrapPacketConnWithMetric(pc, proxy, metadata, connectTime), nil
 		}
 
 		if singleProxyRetry {
-			s.store.DeleteUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, metadata.NetWork == C.UDP)
+			s.store.DeleteUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber)
 			break
 		}
 	}
@@ -694,7 +694,7 @@ func (s *Smart) selectProxies(metadata *C.Metadata, proxies []C.Proxy) ([]C.Prox
 
 	trySelector := func(isUDP bool) ([]string, []float64) {
 		// 检查匹配缓存
-		if proxiesName := s.store.GetUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber, isUDP); len(proxiesName) > 0 {
+		if proxiesName := s.store.GetUnwrapResult(s.Name(), s.configName, metadata.SmartTarget, asnNumber); len(proxiesName) > 0 {
 			return proxiesName, nil
 		}
 
@@ -1492,7 +1492,7 @@ func (s *Smart) recordConnectionStats(metadata *C.Metadata, proxy C.Proxy,
 	failedBlock := s.store.UpdateHostStatus(s.Name(), s.configName, wildcardTarget, metadata, proxyName, s.maxFailedTimes, isDegraded, checked, blockCode)
 
 	if isDegraded || failedBlock {
-		s.findSameConnection(metadata, proxyName, target, asnInfo, isUDP)
+		s.findSameConnection(metadata, proxyName, target, asnInfo)
 	}
 
 	// 平均权重(适应 target 调整为 rule based 和 asn based 的情况)
@@ -1644,7 +1644,7 @@ func (s *Smart) checkNodeQuality(
 	return newWeight, false, false, 0
 }
 
-func (s *Smart) findSameConnection(metadata *C.Metadata, proxyName, target, asnInfo string, isUDP bool) {
+func (s *Smart) findSameConnection(metadata *C.Metadata, proxyName, target, asnInfo string) {
 	allIDs := statistic.DefaultManager.GetSmartTargetIDs(target, asnInfo)
 
 	for id := range allIDs {
@@ -1658,7 +1658,7 @@ func (s *Smart) findSameConnection(metadata *C.Metadata, proxyName, target, asnI
 		}
 	}
 
-	s.store.DeleteUnwrapResult(s.Name(), s.configName, target, asnInfo, isUDP)
+	s.store.DeleteUnwrapResult(s.Name(), s.configName, target, asnInfo)
 
 }
 

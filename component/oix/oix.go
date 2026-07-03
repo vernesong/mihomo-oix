@@ -58,6 +58,7 @@ var (
 const (
 	defaultProviderFile = "oixCloud"
 	defaultProviderDir  = "proxy_providers"
+	ageSecretKeyFile    = ".oix_age_secret_key"
 )
 
 const (
@@ -86,8 +87,16 @@ func IsConfigError(err error) bool {
 	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoDomains)
 }
 
-func ageKeyPair() (secretKey, publicKey string) {
+func ageKeyPair(homeDir string) (secretKey, publicKey string) {
 	ageKeyInitOnce.Do(func() {
+		if homeDir != "" {
+			if sk, pk, err := loadAgeKeyPair(homeDir); err == nil {
+				ageSecretKey = sk
+				agePublicKey = pk
+				return
+			}
+		}
+
 		sk, pk, err := age.GenX25519KeyPair()
 		if err != nil {
 			log.Warnln("[OixCloud] failed to generate age key pair: %s", err)
@@ -95,12 +104,52 @@ func ageKeyPair() (secretKey, publicKey string) {
 		}
 		ageSecretKey = sk
 		agePublicKey = pk
+		if homeDir != "" {
+			if err := saveAgeKeyPair(homeDir, sk); err != nil {
+				log.Warnln("[OixCloud] failed to persist age key pair: %s", err)
+			}
+		}
 	})
 	return ageSecretKey, agePublicKey
 }
 
-func ProviderConfig(relPath string, base map[string]any) map[string]any {
-	ageKeyPair()
+func loadAgeKeyPair(homeDir string) (secretKey, publicKey string, err error) {
+	data, err := os.ReadFile(filepath.Join(homeDir, ageSecretKeyFile))
+	if err != nil {
+		return "", "", err
+	}
+
+	secretKey = strings.TrimSpace(string(data))
+	if secretKey == "" {
+		return "", "", errors.New("empty age secret key")
+	}
+	if err := age.VeritySecretKeys(secretKey); err != nil {
+		return "", "", err
+	}
+
+	publicKeys, err := age.ToPublicKeys(secretKey)
+	if err != nil {
+		return "", "", err
+	}
+	if len(publicKeys) == 0 {
+		return "", "", errors.New("empty age public key")
+	}
+	return secretKey, publicKeys[0], nil
+}
+
+func saveAgeKeyPair(homeDir string, secretKey string) error {
+	if err := os.MkdirAll(homeDir, 0o755); err != nil {
+		return err
+	}
+	path := filepath.Join(homeDir, ageSecretKeyFile)
+	if err := os.WriteFile(path, []byte(secretKey+"\n"), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
+}
+
+func ProviderConfig(homeDir, relPath string, base map[string]any) map[string]any {
+	ageKeyPair(homeDir)
 
 	oixCfg := map[string]any{
 		"type":           "file",
@@ -140,6 +189,8 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 }
 
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
+	ageKeyPair(homeDir)
+
 	token := os.Getenv("OIX_TOKEN")
 	if token == "" {
 		return false, ErrNoToken
@@ -183,6 +234,7 @@ func SetProviderName(name string) {
 
 func StartPeriodicUpdate(dir, homeDir string) {
 	StopPeriodicUpdate()
+	ageKeyPair(homeDir)
 
 	periodicDir = dir
 	periodicHome = homeDir
