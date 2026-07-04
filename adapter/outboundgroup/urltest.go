@@ -60,6 +60,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
+		u.resetFastSingle()
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -68,6 +69,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			if err == nil {
 				u.onDialSuccess()
 			} else {
+				u.resetFastSingle()
 				u.onDialFailed(proxy.Type(), err, u.healthCheck)
 			}
 		})
@@ -83,6 +85,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
+		u.resetFastSingle()
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -100,49 +103,78 @@ func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 }
 
-func (u *URLTest) fast(touch bool) C.Proxy {
-	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
-		proxies := u.GetProxies(touch)
-		if u.selected != "" {
-			for _, proxy := range proxies {
-				if !proxy.AliveForTestUrl(u.testUrl) {
-					continue
-				}
-				if proxy.Name() == u.selected {
-					u.fastNode = proxy
-					return proxy, nil
-				}
+func (u *URLTest) resetFastSingle() {
+	u.fastSingle.Reset()
+}
+
+func (u *URLTest) selectFast(proxies []C.Proxy, exclude C.Proxy) C.Proxy {
+	if exclude != nil && !exclude.AliveForTestUrl(u.testUrl) {
+		candidates := make([]C.Proxy, 0, len(proxies))
+		for _, proxy := range proxies {
+			if proxy.Name() != exclude.Name() {
+				candidates = append(candidates, proxy)
 			}
 		}
+		if len(candidates) > 0 {
+			proxies = candidates
+		}
+	}
 
-		fast := proxies[0]
-		minDelay := fast.LastDelayForTestUrl(u.testUrl)
-		fastNotExist := true
-
-		for _, proxy := range proxies[1:] {
-			if u.fastNode != nil && proxy.Name() == u.fastNode.Name() {
-				fastNotExist = false
-			}
-
+	if u.selected != "" {
+		for _, proxy := range proxies {
 			if !proxy.AliveForTestUrl(u.testUrl) {
 				continue
 			}
-
-			delay := proxy.LastDelayForTestUrl(u.testUrl)
-			if delay < minDelay {
-				fast = proxy
-				minDelay = delay
+			if proxy.Name() == u.selected {
+				u.fastNode = proxy
+				return proxy
 			}
+		}
+	}
 
+	fast := proxies[0]
+	minDelay := fast.LastDelayForTestUrl(u.testUrl)
+	fastNotExist := true
+
+	for _, proxy := range proxies[1:] {
+		if u.fastNode != nil && proxy.Name() == u.fastNode.Name() {
+			fastNotExist = false
 		}
-		// tolerance
-		if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
-			u.fastNode = fast
+
+		if !proxy.AliveForTestUrl(u.testUrl) {
+			continue
 		}
-		return u.fastNode, nil
+
+		delay := proxy.LastDelayForTestUrl(u.testUrl)
+		if delay < minDelay {
+			fast = proxy
+			minDelay = delay
+		}
+
+	}
+	// tolerance
+	if u.fastNode == nil || fastNotExist || !u.fastNode.AliveForTestUrl(u.testUrl) || u.fastNode.LastDelayForTestUrl(u.testUrl) > fast.LastDelayForTestUrl(u.testUrl)+u.tolerance {
+		u.fastNode = fast
+	}
+	return u.fastNode
+}
+
+func (u *URLTest) fast(touch bool) C.Proxy {
+	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
+		return u.selectFast(u.GetProxies(touch), nil), nil
 	})
 	if shared && touch { // a shared fastSingle.Do() may cause providers untouched, so we touch them again
 		u.Touch()
+	}
+
+	if !elm.AliveForTestUrl(u.testUrl) {
+		u.resetFastSingle()
+		elm, _, shared = u.fastSingle.Do(func() (C.Proxy, error) {
+			return u.selectFast(u.GetProxies(touch), elm), nil
+		})
+		if shared && touch {
+			u.Touch()
+		}
 	}
 
 	return elm
