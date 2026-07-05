@@ -129,27 +129,6 @@ func (r *Resolver) shouldIPFallback(ip netip.Addr) bool {
 }
 
 func (r *Resolver) ResolveECH(ctx context.Context, host string) ([]byte, error) {
-	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(host) {
-		host = oixdns.Obfuscate(host)
-		query := &D.Msg{}
-		query.SetQuestion(D.Fqdn(host), D.TypeHTTPS)
-		msg, err := r.oixClient.ExchangeContext(ctx, query)
-		if err != nil {
-			return nil, err
-		}
-		for _, rr := range msg.Answer {
-			switch resource := rr.(type) {
-			case *D.HTTPS:
-				for _, value := range resource.Value {
-					if echConfig, ok := value.(*D.SVCBECHConfig); ok {
-						return echConfig.ECH, nil
-					}
-				}
-			}
-		}
-		return nil, errors.New("no ECH config found in DNS records")
-	}
-
 	query := &D.Msg{}
 	query.SetQuestion(D.Fqdn(host), D.TypeHTTPS)
 
@@ -214,16 +193,17 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 // ExchangeWithoutCache a batch of dns request, and it do NOT GET from cache
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	domain := msgToDomain(m)
+	q := m.Question[0]
 	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain) {
 		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
 		msg, err = r.oixClient.ExchangeContext(ctx, m)
+		m.Question[0] = q
 		if err == nil && msg != nil {
 			markCloudIPsFromMsg(msg)
+			putOixMsgToCache(r.cache, q, msg)
 		}
 		return msg, err
 	}
-
-	q := m.Question[0]
 
 	retryNum := 0
 	retryMax := 3
@@ -538,7 +518,10 @@ func NewResolverFromClient(client dnsClient) *Resolver {
 func NewResolver(config Config) (rs Resolvers) {
 	var oixClient dnsClient
 	if oixdns.DNSAddr != "" {
-		oixClient = newClient(oixdns.DNSAddr, nil, "tcp", nil, nil, "")
+		oixClient = &oixDNSClient{
+			udp: newClient(oixdns.DNSAddr, nil, "udp", nil, nil, ""),
+			tcp: newClient(oixdns.DNSAddr, nil, "tcp", nil, nil, ""),
+		}
 	}
 
 	defaultResolver := &Resolver{
@@ -651,6 +634,47 @@ func markCloudIPsFromMsg(msg *D.Msg) {
 	for _, ip := range msgToIP(msg) {
 		oixdns.MarkCloudIP(ip.String())
 	}
+}
+
+func putOixMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
+	if msg.Rcode != D.RcodeSuccess || len(msg.Answer) == 0 {
+		return
+	}
+	ttl := minimalTTL(msg.Answer)
+	if ttl == 0 {
+		return
+	}
+	cached := msg.Copy()
+	setMsgTTL(cached, ttl)
+	c.SetWithExpire(q.String(), cached, time.Now().Add(time.Duration(ttl)*time.Second))
+}
+
+// oixUDPTimeout bounds the UDP attempt so a blocked or black-holed UDP path
+// still leaves time to fall back to TCP within the caller's deadline.
+const oixUDPTimeout = 3 * time.Second
+
+// oixDNSClient queries the managed DNS server over UDP first and falls back to
+// TCP when the UDP attempt errors (blocked, dropped, or times out). Truncated
+// UDP replies are already retried over TCP inside the udp client.
+type oixDNSClient struct {
+	udp dnsClient
+	tcp dnsClient
+}
+
+func (c *oixDNSClient) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
+	udpCtx, cancel := context.WithTimeout(ctx, oixUDPTimeout)
+	defer cancel()
+	if msg, err := c.udp.ExchangeContext(udpCtx, m); err == nil && msg != nil {
+		return msg, nil
+	}
+	return c.tcp.ExchangeContext(ctx, m)
+}
+
+func (c *oixDNSClient) Address() string { return c.udp.Address() }
+
+func (c *oixDNSClient) ResetConnection() {
+	c.udp.ResetConnection()
+	c.tcp.ResetConnection()
 }
 
 var ParseNameServer func(servers []string) ([]NameServer, error) // define in config/config.go

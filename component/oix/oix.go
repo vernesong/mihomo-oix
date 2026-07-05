@@ -55,6 +55,42 @@ var (
 	ErrNoDomains  = errors.New("no API domains configured")
 )
 
+var (
+	tokenMu    sync.RWMutex
+	loginToken string
+)
+
+func SetToken(token string) {
+	tokenMu.Lock()
+	loginToken = normalizeToken(token)
+	tokenMu.Unlock()
+}
+
+func normalizeToken(token string) string {
+	token = strings.TrimSpace(token)
+	if len(token) >= 7 && strings.EqualFold(token[:7], "bearer ") {
+		token = strings.TrimSpace(token[7:])
+	}
+	return token
+}
+
+func CurrentToken() string {
+	tokenMu.RLock()
+	defer tokenMu.RUnlock()
+	return loginToken
+}
+
+func getToken() string {
+	if t := CurrentToken(); t != "" {
+		return t
+	}
+	return os.Getenv("OIX_TOKEN")
+}
+
+func HasToken() bool {
+	return getToken() != ""
+}
+
 const (
 	defaultProviderFile = "oixCloud"
 	defaultProviderDir  = "proxy_providers"
@@ -140,7 +176,7 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 }
 
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
-	token := os.Getenv("OIX_TOKEN")
+	token := getToken()
 	if token == "" {
 		return false, ErrNoToken
 	}
@@ -203,7 +239,7 @@ func StartPeriodicUpdate(dir, homeDir string) {
 		for {
 			select {
 			case <-ticker.C:
-				token := os.Getenv("OIX_TOKEN")
+				token := getToken()
 				if token == "" {
 					continue
 				}
@@ -243,6 +279,68 @@ func ForceUpdate() error {
 	}
 	_, err := Ensure(periodicDir, periodicHome, true)
 	return err
+}
+
+func SetProviderPaths(dir, homeDir string) {
+	periodicDir = dir
+	periodicHome = homeDir
+}
+
+func tokenFilePath(homeDir string) string {
+	return filepath.Join(homeDir, ".oix_token")
+}
+
+func LoadPersistedToken(homeDir string) {
+	if homeDir == "" || getToken() != "" {
+		return
+	}
+	data, err := os.ReadFile(tokenFilePath(homeDir))
+	if err != nil {
+		return
+	}
+	if t := strings.TrimSpace(string(data)); t != "" {
+		SetToken(t)
+	}
+}
+
+func persistToken(homeDir, token string) error {
+	if homeDir == "" {
+		return errors.New("home dir not set")
+	}
+	return os.WriteFile(tokenFilePath(homeDir), []byte(token), 0o600)
+}
+
+func Login(token string) (bool, error) {
+	token = normalizeToken(token)
+	if token == "" {
+		return false, ErrNoToken
+	}
+	if periodicDir == "" {
+		return false, errors.New("oix provider not initialized")
+	}
+	prev := CurrentToken()
+	SetToken(token)
+	ok, err := Ensure(periodicDir, periodicHome, true)
+	if err != nil || !ok {
+		SetToken(prev)
+		return ok, err
+	}
+	if err := persistToken(periodicHome, token); err != nil {
+		log.Warnln("[OixCloud] persist token failed: %s", err)
+	}
+	StartPeriodicUpdate(periodicDir, periodicHome)
+	return true, nil
+}
+
+func Logout() {
+	SetToken("")
+	if periodicHome != "" {
+		_ = os.Remove(tokenFilePath(periodicHome))
+		if periodicDir != "" {
+			_ = os.Remove(filepath.Join(periodicHome, periodicDir, ProviderFile()))
+		}
+	}
+	StopPeriodicUpdate()
 }
 
 func IsOixProvider(name string) bool {

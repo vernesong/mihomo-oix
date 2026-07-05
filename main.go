@@ -161,6 +161,10 @@ func main() {
 		oix.SetProviderName(oixProviderName)
 	}
 
+	if oixToken != "" {
+		oix.SetToken(oixToken)
+	}
+
 	if configString != "" {
 		var err error
 		configBytes, err = base64.StdEncoding.DecodeString(configString)
