@@ -33,8 +33,6 @@ type dnsCache interface {
 	Clear()
 }
 
-const oixDNSCacheTTL = 5 * time.Minute
-
 type result struct {
 	Msg   *D.Msg
 	Error error
@@ -672,10 +670,14 @@ func putOixMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 	if c == nil || msg.Rcode != D.RcodeSuccess || len(msg.Answer) == 0 {
 		return
 	}
+	ttl := minimalTTL(msg.Answer)
+	if ttl == 0 {
+		return
+	}
 	cached := msg.Copy()
-	setMsgTTL(cached, uint32(oixDNSCacheTTL/time.Second))
+	setMsgTTL(cached, ttl)
 	cacheQuestion := oixCacheQuestion(q)
-	c.SetWithExpire(cacheQuestion.String(), cached, time.Now().Add(oixDNSCacheTTL))
+	c.SetWithExpire(cacheQuestion.String(), cached, time.Now().Add(time.Duration(ttl)*time.Second))
 }
 
 // oixUDPTimeout bounds the UDP attempt so a blocked or black-holed UDP path
