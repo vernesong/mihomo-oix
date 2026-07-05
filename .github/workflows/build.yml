@@ -245,6 +245,25 @@ jobs:
         OIX_SPARE_API_DOMAIN: ${{ secrets.OIX_SPARE_API_DOMAIN }}
         OIX_PROFILE_KEY: ${{ secrets.OIX_PROFILE_KEY }}
       run: |
+        required=(
+          OIX_APP_SECRET
+          OIX_DNS_PRIVATE_KEY
+          OIX_DOMAINS
+          OIX_DNS_ADDR
+          OIX_API_DOMAINS
+          OIX_PROFILE_KEY
+        )
+        missing=0
+        for name in "${required[@]}"; do
+          if [ -z "${!name}" ]; then
+            echo "::error title=Missing OIX secret::${name} is required for OIX builds"
+            missing=1
+          fi
+        done
+        if [ "$missing" -ne 0 ]; then
+          exit 1
+        fi
+
         xor_hex() {
           python3 -c "import os,sys; s=os.environ.get('$1',''); k=int('$2',16); sys.stdout.write(''.join(f'{c^k^i:02x}' for i,c in enumerate(s.encode())))"
         }
