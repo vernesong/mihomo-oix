@@ -6,7 +6,6 @@ import (
 	"net"
 	"net/netip"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strings"
 	"time"
@@ -963,11 +962,9 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		AllProviders = append(AllProviders, name)
 	}
 
-	if os.Getenv("OIX_TOKEN") != "" {
-		oixName := os.Getenv("OIX_PROVIDER_NAME")
-		if oixName == "" {
-			oixName = "oixCloud"
-		}
+	oix.LoadPersistedToken(C.Path.HomeDir())
+	if oix.HasToken() {
+		oixName := oix.ProviderFile()
 
 		dir := "proxy_providers"
 		for _, pv := range providersMap {
