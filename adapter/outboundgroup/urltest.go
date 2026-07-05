@@ -60,7 +60,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 	if err == nil {
 		c.AppendToChains(u)
 	} else {
-		u.resetFastSingle()
+		u.fastSingle.Reset()
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -69,7 +69,7 @@ func (u *URLTest) DialContext(ctx context.Context, metadata *C.Metadata) (c C.Co
 			if err == nil {
 				u.onDialSuccess()
 			} else {
-				u.resetFastSingle()
+				u.fastSingle.Reset()
 				u.onDialFailed(proxy.Type(), err, u.healthCheck)
 			}
 		})
@@ -85,7 +85,7 @@ func (u *URLTest) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if err == nil {
 		pc.AppendToChains(u)
 	} else {
-		u.resetFastSingle()
+		u.fastSingle.Reset()
 		u.onDialFailed(proxy.Type(), err, u.healthCheck)
 	}
 
@@ -100,10 +100,6 @@ func (u *URLTest) Unwrap(metadata *C.Metadata, touch bool) C.Proxy {
 func (u *URLTest) healthCheck() {
 	u.fastSingle.Reset()
 	u.GroupBase.healthCheck()
-	u.fastSingle.Reset()
-}
-
-func (u *URLTest) resetFastSingle() {
 	u.fastSingle.Reset()
 }
 
@@ -160,23 +156,21 @@ func (u *URLTest) selectFast(proxies []C.Proxy, exclude C.Proxy) C.Proxy {
 }
 
 func (u *URLTest) fast(touch bool) C.Proxy {
-	elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
-		return u.selectFast(u.GetProxies(touch), nil), nil
-	})
-	if shared && touch { // a shared fastSingle.Do() may cause providers untouched, so we touch them again
-		u.Touch()
-	}
-
-	if !elm.AliveForTestUrl(u.testUrl) {
-		u.resetFastSingle()
-		elm, _, shared = u.fastSingle.Do(func() (C.Proxy, error) {
-			return u.selectFast(u.GetProxies(touch), elm), nil
+	pick := func(exclude C.Proxy) C.Proxy {
+		elm, _, shared := u.fastSingle.Do(func() (C.Proxy, error) {
+			return u.selectFast(u.GetProxies(touch), exclude), nil
 		})
-		if shared && touch {
+		if shared && touch { // a shared fastSingle.Do() may cause providers untouched, so we touch them again
 			u.Touch()
 		}
+		return elm
 	}
 
+	elm := pick(nil)
+	if !elm.AliveForTestUrl(u.testUrl) {
+		u.fastSingle.Reset()
+		elm = pick(elm)
+	}
 	return elm
 }
 
