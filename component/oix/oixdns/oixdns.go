@@ -81,14 +81,6 @@ func isCloudIP(host string) bool {
 	return ok
 }
 
-// IsCloudIP reports whether host (an IP, optionally "ip:port") is a known oix
-// node address recorded from managed DNS answers. The tunnel consults this to
-// force such destinations DIRECT and break TUN proxy loops, without exposing or
-// logging the address (it stays masked elsewhere).
-func IsCloudIP(host string) bool {
-	return isCloudIP(host)
-}
-
 func ShouldObfuscate(domain string) bool {
 	if NodesDomains == "" {
 		return false
