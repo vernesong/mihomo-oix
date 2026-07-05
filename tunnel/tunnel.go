@@ -18,6 +18,7 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/nat"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/proxydialer"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -326,6 +327,18 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 		}
 		return
 	}
+
+	// oix: a connection whose destination is a known oix node IP is our own
+	// proxy-to-node traffic that the TUN re-captured. Routing it through a proxy
+	// again forms a loop (random TLS "bad record MAC", packet loss, dead health
+	// checks). Force it DIRECT to break the loop. No-op unless oix has recorded
+	// node IPs, and the address stays masked in logs.
+	if metadata.DstIP.IsValid() && oixdns.IsCloudIP(metadata.DstIP.String()) {
+		if direct, ok := proxies["DIRECT"]; ok {
+			return direct, nil, nil
+		}
+	}
+
 	var (
 		resolved             bool
 		attemptProcessLookup = metadata.Type != C.INNER
@@ -480,7 +493,7 @@ func handleUDPConn(packet C.PacketAdapter) {
 			logMetadata(metadata, rule, rawPc)
 
 			// recover info to dialMetadata for smart
-			dialMetadata.Host = metadata.Host 
+			dialMetadata.Host = metadata.Host
 			dialMetadata.SmartTarget = metadata.SmartTarget
 			dialMetadata.SmartBlock = metadata.SmartBlock
 
@@ -701,7 +714,7 @@ func match(metadata *C.Metadata, helper C.RuleMatchHelper) (C.Proxy, C.Rule, err
 					}
 				}
 
-				if ! smart {
+				if !smart {
 					metadata.SmartTarget = ""
 				} else {
 					metadata.SmartBlock = "normal"
