@@ -88,7 +88,18 @@ func init() {
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
 	flag.BoolVar(&version, "v", false, "show current version of mihomo")
 	flag.BoolVar(&testConfig, "t", false, "test configuration and exit")
-	flag.Parse()
+}
+
+func legacySubcommand(args []string) (string, []string, bool) {
+	if len(args) <= 1 {
+		return "", nil, false
+	}
+	switch args[1] {
+	case "convert-ruleset", "generate", "age":
+		return args[1], args[2:], true
+	default:
+		return "", nil, false
+	}
 }
 
 func main() {
@@ -112,20 +123,19 @@ func main() {
 
 	_, _ = maxprocs.Set(maxprocs.Logger(func(string, ...any) {}))
 
-	if len(os.Args) > 1 && os.Args[1] == "convert-ruleset" {
-		provider.ConvertMain(os.Args[2:])
+	if subcommand, args, ok := legacySubcommand(os.Args); ok {
+		switch subcommand {
+		case "convert-ruleset":
+			provider.ConvertMain(args)
+		case "generate":
+			generator.Main(args)
+		case "age":
+			age.Main(args)
+		}
 		return
 	}
 
-	if len(os.Args) > 1 && os.Args[1] == "generate" {
-		generator.Main(os.Args[2:])
-		return
-	}
-
-	if len(os.Args) > 1 && os.Args[1] == "age" {
-		age.Main(os.Args[2:])
-		return
-	}
+	flag.Parse()
 
 	if version {
 		fmt.Printf("Mihomo Meta %s %s %s with %s %s\n",
