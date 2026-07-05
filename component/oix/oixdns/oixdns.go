@@ -54,18 +54,39 @@ func loadPrivKey() ed25519.PrivateKey {
 }
 
 func MarkCloudIP(ip string) {
-	cloudIPs.Store(ip, true)
+	if key, ok := normalizeIPKey(ip); ok {
+		cloudIPs.Store(key, true)
+	}
 }
 
-func isCloudIP(host string) bool {
+// normalizeIPKey strips an optional port and returns the unmapped textual form
+// of an IP so stored and looked-up keys always match (e.g. IPv4-in-IPv6).
+func normalizeIPKey(host string) (string, bool) {
 	if h, _, err := net.SplitHostPort(host); err == nil {
 		host = h
 	}
-	if _, err := netip.ParseAddr(host); err != nil {
+	addr, err := netip.ParseAddr(host)
+	if err != nil {
+		return "", false
+	}
+	return addr.Unmap().String(), true
+}
+
+func isCloudIP(host string) bool {
+	key, ok := normalizeIPKey(host)
+	if !ok {
 		return false
 	}
-	_, ok := cloudIPs.Load(host)
+	_, ok = cloudIPs.Load(key)
 	return ok
+}
+
+// IsCloudIP reports whether host (an IP, optionally "ip:port") is a known oix
+// node address recorded from managed DNS answers. The tunnel consults this to
+// force such destinations DIRECT and break TUN proxy loops, without exposing or
+// logging the address (it stays masked elsewhere).
+func IsCloudIP(host string) bool {
+	return isCloudIP(host)
 }
 
 func ShouldObfuscate(domain string) bool {
