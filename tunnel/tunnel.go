@@ -18,7 +18,6 @@ import (
 	"github.com/metacubex/mihomo/common/utils"
 	"github.com/metacubex/mihomo/component/loopback"
 	"github.com/metacubex/mihomo/component/nat"
-	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/process"
 	"github.com/metacubex/mihomo/component/proxydialer"
 	"github.com/metacubex/mihomo/component/resolver"
@@ -326,17 +325,6 @@ func resolveMetadata(metadata *C.Metadata) (proxy C.Proxy, rule C.Rule, err erro
 			err = fmt.Errorf("proxy %s not found", metadata.SpecialProxy)
 		}
 		return
-	}
-
-	// oix: a connection whose destination is a known oix node IP is our own
-	// proxy-to-node traffic that the TUN re-captured. Routing it through a proxy
-	// again forms a loop (random TLS "bad record MAC", packet loss, dead health
-	// checks). Force it DIRECT to break the loop. No-op unless oix has recorded
-	// node IPs, and the address stays masked in logs.
-	if metadata.DstIP.IsValid() && oixdns.IsCloudIP(metadata.DstIP.String()) {
-		if direct, ok := proxies["DIRECT"]; ok {
-			return direct, nil, nil
-		}
 	}
 
 	var (
