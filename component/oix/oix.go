@@ -126,7 +126,7 @@ func ageKeyPair() (secretKey, publicKey string) {
 	ageKeyInitOnce.Do(func() {
 		sk, pk, err := age.GenX25519KeyPair()
 		if err != nil {
-			log.Warnln("[OixCloud] failed to generate age key pair: %s", err)
+			log.Warnln("[oixCloud] failed to generate age key pair: %s", err)
 			return
 		}
 		ageSecretKey = sk
@@ -185,19 +185,19 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 		return false, ErrNoDomains
 	}
 
-	log.Infoln("[OixCloud] fetching provider...")
+	log.Infoln("[oixCloud] fetching provider...")
 
 	result, err := fetchBest(token, urls)
 	if err != nil {
 		if IsAuthError(err) {
-			log.Warnln("[OixCloud] auth failed, provider [%s] removed", ProviderFile())
+			log.Warnln("[oixCloud] auth failed, provider [%s] removed", ProviderFile())
 		} else {
-			log.Warnln("[OixCloud] config fetch failed")
+			log.Warnln("[oixCloud] config fetch failed")
 		}
 		return false, err
 	}
 	if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
-		log.Warnln("[OixCloud] ensure failed, no provider found for [%s]", ProviderFile())
+		log.Warnln("[oixCloud] ensure failed, no provider found for [%s]", ProviderFile())
 		return false, nil
 	}
 	ok := saveResult(dir, homeDir, result)
@@ -206,9 +206,9 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	}
 	oixdns.SetEnsured()
 	if providerExists {
-		log.Infoln("[OixCloud] provider [%s] already exists, file updated", ProviderFile())
+		log.Infoln("[oixCloud] provider [%s] already exists, file updated", ProviderFile())
 	} else {
-		log.Infoln("[OixCloud] provider fetched successfully: [%s]", ProviderFile())
+		log.Infoln("[oixCloud] provider fetched successfully: [%s]", ProviderFile())
 	}
 	return true, nil
 }
@@ -249,7 +249,7 @@ func StartPeriodicUpdate(dir, homeDir string) {
 				}
 				result, err := fetchBest(token, urls)
 				if err != nil {
-					log.Warnln("[OixCloud] periodic update failed: %s", err)
+					log.Warnln("[oixCloud] periodic update failed: %s", err)
 					continue
 				}
 				if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
@@ -257,7 +257,7 @@ func StartPeriodicUpdate(dir, homeDir string) {
 				}
 				ok := saveResult(dir, homeDir, result)
 				if ok {
-					log.Infoln("[OixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
+					log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 				}
 			case <-ctx.Done():
 				return
@@ -326,7 +326,7 @@ func Login(token string) (bool, error) {
 		return ok, err
 	}
 	if err := persistToken(periodicHome, token); err != nil {
-		log.Warnln("[OixCloud] persist token failed: %s", err)
+		log.Warnln("[oixCloud] persist token failed: %s", err)
 	}
 	StartPeriodicUpdate(periodicDir, periodicHome)
 	return true, nil
@@ -620,7 +620,7 @@ func saveResult(dir, homeDir string, result *Result) bool {
 
 	os.MkdirAll(filepath.Dir(p), 0o755)
 	if err := os.WriteFile(p, raw, 0o644); err != nil {
-		log.Warnln("[OixCloud] write file %s: %s", p, err)
+		log.Warnln("[oixCloud] write file %s: %s", p, err)
 		return false
 	}
 
