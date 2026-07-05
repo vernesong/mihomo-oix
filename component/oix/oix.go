@@ -351,6 +351,7 @@ func fetchBest(token string, urls []string) (*Result, error) {
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
+	ageKeyPair()
 	if len(urls) == 1 {
 		return fetchFrom(context.Background(), token, urls[0])
 	}
