@@ -332,6 +332,8 @@ func updateOixProvider(cfg *config.Config) {
 		}
 	}
 
+	oix.SetProviderPaths(dir, C.Path.HomeDir())
+
 	_, providerExists := cfg.Providers[name]
 	_, userConfigured := cfg.ProviderRawConfig[name]
 	_, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
