@@ -334,7 +334,7 @@ func updateOixProvider(cfg *config.Config) {
 
 	_, providerExists := cfg.Providers[name]
 	_, userConfigured := cfg.ProviderRawConfig[name]
-	ok, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
+	_, err := oix.Ensure(dir, C.Path.HomeDir(), providerExists)
 
 	if oix.IsConfigError(err) {
 		if providerExists && !userConfigured {
@@ -349,11 +349,6 @@ func updateOixProvider(cfg *config.Config) {
 			delete(cfg.Providers, name)
 			tunnel.UpdateProxies(cfg.Proxies, cfg.Providers)
 		}
-		return
-	}
-
-	if !ok {
-		oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
 		return
 	}
 
