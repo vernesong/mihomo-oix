@@ -26,6 +26,7 @@ import (
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
+	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
 
@@ -122,8 +123,23 @@ func IsConfigError(err error) bool {
 	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoDomains)
 }
 
+func ageKeyFilePath(homeDir string) string {
+	return filepath.Join(homeDir, ".oix_age_key")
+}
+
 func ageKeyPair() (secretKey, publicKey string) {
 	ageKeyInitOnce.Do(func() {
+		homeDir := C.Path.HomeDir()
+		if homeDir != "" {
+			if data, err := os.ReadFile(ageKeyFilePath(homeDir)); err == nil {
+				sk := strings.TrimSpace(string(data))
+				if pks, err := age.ToPublicKeys(sk); err == nil && len(pks) > 0 {
+					ageSecretKey = sk
+					agePublicKey = pks[0]
+					return
+				}
+			}
+		}
 		sk, pk, err := age.GenX25519KeyPair()
 		if err != nil {
 			log.Warnln("[oixCloud] failed to generate age key pair: %s", err)
@@ -131,6 +147,11 @@ func ageKeyPair() (secretKey, publicKey string) {
 		}
 		ageSecretKey = sk
 		agePublicKey = pk
+		if homeDir != "" {
+			if err := os.WriteFile(ageKeyFilePath(homeDir), []byte(sk), 0o600); err != nil {
+				log.Warnln("[oixCloud] persist age key failed: %s", err)
+			}
+		}
 	})
 	return ageSecretKey, agePublicKey
 }
@@ -410,6 +431,7 @@ func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	if err != nil {
 		return nil, errors.New("create request failed")
 	}
+	req.Header.Set("User-Agent", "OpenClash for oixCloud")
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
 	req.Header.Set("X-Flclash-Signature", sig)
