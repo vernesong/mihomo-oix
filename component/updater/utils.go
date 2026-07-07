@@ -2,6 +2,7 @@ package updater
 
 import (
 	"context"
+	"fmt"
 	"io"
 	"os"
 	"time"
@@ -21,6 +22,12 @@ func downloadForBytes(url string) ([]byte, error) {
 		return nil, err
 	}
 	defer resp.Body.Close()
+
+	// A non-200 response (e.g. a CDN/gateway error page) must not be returned as
+	// if it were valid content.
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("download %s: unexpected status %d", url, resp.StatusCode)
+	}
 
 	return io.ReadAll(resp.Body)
 }
