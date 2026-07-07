@@ -184,6 +184,12 @@ func (u *CoreUpdater) getLatestVersion(versionURL string) (version string, err e
 		}
 	}()
 
+	// A non-200 response (e.g. a CDN/gateway error page) must not be treated as
+	// the latest version string.
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("get latest version: unexpected status %d", resp.StatusCode)
+	}
+
 	body, err := io.ReadAll(resp.Body)
 	if err != nil {
 		return "", err
@@ -207,6 +213,13 @@ func (u *CoreUpdater) download(updateDir, packagePath, packageURL string) (err e
 			err = closeErr
 		}
 	}()
+
+	// A non-200 response (e.g. a CDN/gateway error page or a 404) must not be
+	// written to disk as if it were the update package; fail before touching the
+	// filesystem so the package file is never created on a bad gateway.
+	if resp.StatusCode != http.StatusOK {
+		return fmt.Errorf("download %s: unexpected status %d", packageURL, resp.StatusCode)
+	}
 
 	log.Debugln("updateDir %s", updateDir)
 	err = os.Mkdir(updateDir, 0o755)
