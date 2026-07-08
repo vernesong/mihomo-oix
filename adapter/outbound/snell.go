@@ -439,7 +439,3 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	}
 	return s, nil
 }
-
-func (s *Snell) NeedsUnifiedDelay() bool {
-	return s.obfsOption.Mode == "ech-tls"
-}
