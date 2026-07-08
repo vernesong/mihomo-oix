@@ -126,25 +126,25 @@ func getProxyDelay(w http.ResponseWriter, r *http.Request) {
 	defer cancel()
 
 	delay, err := proxy.URLTest(ctx, url, expectedStatus)
+	if err == nil && delay > 0 {
+		render.JSON(w, r, render.M{
+			"delay": delay,
+		})
+		return
+	}
+
 	if ctx.Err() != nil {
 		render.Status(r, http.StatusGatewayTimeout)
 		render.JSON(w, r, ErrRequestTimeout)
 		return
 	}
 
-	if err != nil || delay == 0 {
-		render.Status(r, http.StatusServiceUnavailable)
-		if err != nil && delay != 0 {
-			render.JSON(w, r, err)
-		} else {
-			render.JSON(w, r, newError("An error occurred in the delay test"))
-		}
-		return
+	render.Status(r, http.StatusServiceUnavailable)
+	if err != nil {
+		render.JSON(w, r, err)
+	} else {
+		render.JSON(w, r, newError("An error occurred in the delay test"))
 	}
-
-	render.JSON(w, r, render.M{
-		"delay": delay,
-	})
 }
 
 func unfixedProxy(w http.ResponseWriter, r *http.Request) {
