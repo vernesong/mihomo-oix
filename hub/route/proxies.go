@@ -104,6 +104,9 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func getProxyDelay(w http.ResponseWriter, r *http.Request) {
+	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
+	unfixNonSelectorGroup(proxy)
+
 	query := r.URL.Query()
 	url := query.Get("url")
 	timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 16)
@@ -119,8 +122,6 @@ func getProxyDelay(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, ErrBadRequest)
 		return
 	}
-
-	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(timeout))
 	defer cancel()
@@ -157,4 +158,11 @@ func unfixedProxy(w http.ResponseWriter, r *http.Request) {
 	}
 	render.Status(r, http.StatusBadRequest)
 	render.JSON(w, r, ErrBadRequest)
+}
+
+func unfixNonSelectorGroup(proxy C.Proxy) {
+	if selectAble, ok := proxy.Adapter().(outboundgroup.SelectAble); ok && proxy.Type() != C.Selector {
+		selectAble.ForceSet("")
+		cachefile.Cache().SetSelected(proxy.Name(), "")
+	}
 }

@@ -64,10 +64,7 @@ func getGroupDelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if selectAble, ok := proxy.Adapter().(outboundgroup.SelectAble); ok && proxy.Type() != C.Selector {
-		selectAble.ForceSet("")
-		cachefile.Cache().SetSelected(proxy.Name(), "")
-	}
+	unfixNonSelectorGroup(proxy)
 
 	query := r.URL.Query()
 	url := query.Get("url")
@@ -164,9 +161,9 @@ func getAllGroupWeights(w http.ResponseWriter, r *http.Request) {
 	errorsMap := make(map[string]string)
 
 	var (
-		mu    sync.Mutex
-		wg    sync.WaitGroup
-		sem   = make(chan struct{}, 5)
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, 5)
 	)
 
 	for _, p := range tunnel.Proxies() {
