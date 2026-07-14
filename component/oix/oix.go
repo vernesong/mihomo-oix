@@ -115,6 +115,24 @@ type apiResponse struct {
 	Provider string `json:"provider"`
 }
 
+type planIdentity struct {
+	Code string
+	Rank *int
+	Name string
+}
+
+type informationData struct {
+	Plan     string `json:"plan"`
+	PlanCode string `json:"plan_code"`
+	PlanRank *int   `json:"plan_rank"`
+}
+
+type informationResponse struct {
+	Ret  int              `json:"ret"`
+	Msg  string           `json:"msg"`
+	Data *informationData `json:"data"`
+}
+
 func IsAuthError(err error) bool {
 	return errors.Is(err, ErrAuthFailed)
 }
@@ -404,6 +422,7 @@ func fetchBest(token string, urls []string) (*Result, error) {
 	}
 
 	var lastErr error
+	var authErr error
 	for range urls {
 		o := <-results
 		if o.err == nil && o.result != nil {
@@ -412,7 +431,13 @@ func fetchBest(token string, urls []string) (*Result, error) {
 		}
 		if o.err != nil {
 			lastErr = o.err
+			if errors.Is(o.err, ErrAuthFailed) {
+				authErr = o.err
+			}
 		}
+	}
+	if authErr != nil {
+		return nil, authErr
 	}
 	if lastErr == nil {
 		lastErr = ErrNoDomains
@@ -421,11 +446,19 @@ func fetchBest(token string, urls []string) (*Result, error) {
 }
 
 func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
+	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
+	defer cancel()
+
+	plan, err := fetchPlanIdentity(ctx, token, baseURL)
+	if err != nil {
+		return nil, err
+	}
+
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
 	sig := sign(ts + "." + agePublicKey)
 
-	url := baseURL + "/api/v1/managed/flclash/direct"
+	url := baseURL + "/api/v1/managed/flclash/direct" + planQuery(plan)
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -478,6 +511,89 @@ func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	}
 
 	return result, nil
+}
+
+func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity, error) {
+	url := baseURL + "/api/v1/information"
+	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
+	if err != nil {
+		return planIdentity{}, errors.New("create account request failed")
+	}
+	req.Header.Set("User-Agent", "OpenClash for oixCloud")
+	req.Header.Set("Authorization", "Bearer "+token)
+
+	resp, err := oixHTTPDo(req)
+	if err != nil {
+		return planIdentity{}, errors.New("account request failed")
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		err := fmt.Errorf("account HTTP %d: %s", resp.StatusCode, string(body))
+		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
+		}
+		return planIdentity{}, err
+	}
+
+	var apiResp informationResponse
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&apiResp); err != nil {
+		return planIdentity{}, fmt.Errorf("decode account response: %w", err)
+	}
+	return planIdentityFromResponse(apiResp)
+}
+
+func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error) {
+	if apiResp.Ret != http.StatusOK {
+		err := fmt.Errorf("account rejected (ret=%d): %s", apiResp.Ret, apiResp.Msg)
+		if apiResp.Ret == http.StatusUnauthorized || apiResp.Ret == http.StatusForbidden {
+			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
+		}
+		return planIdentity{}, err
+	}
+	if apiResp.Data == nil {
+		return planIdentity{}, errors.New("account response has no data")
+	}
+
+	return planIdentity{
+		Code: strings.ToLower(strings.TrimSpace(apiResp.Data.PlanCode)),
+		Rank: apiResp.Data.PlanRank,
+		Name: strings.TrimSpace(apiResp.Data.Plan),
+	}, nil
+}
+
+func planQuery(plan planIdentity) string {
+	if plan.Rank != nil {
+		rank := *plan.Rank
+		if rank >= 30 {
+			return "?type=love"
+		}
+		if rank >= 20 {
+			return "?lv=2"
+		}
+		return ""
+	}
+
+	switch plan.Code {
+	case "alu":
+		return "?lv=2"
+	case "bronze", "silver", "gold", "platinum", "diamond", "developer", "team", "enterprise", "realtime", "titanium":
+		return "?type=love"
+	case "no_plan", "iron":
+		return ""
+	}
+
+	switch strings.ToLower(plan.Name) {
+	case "", "null", "no plan":
+		return ""
+	case "pass iron":
+		return ""
+	case "pass alu", "pass bronze":
+		return "?lv=2"
+	default:
+		return "?type=love"
+	}
 }
 
 func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
