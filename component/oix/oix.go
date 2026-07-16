@@ -43,8 +43,10 @@ var (
 	oixProviderName string
 
 	periodicCancel context.CancelFunc
+	periodicDone   chan struct{}
 	periodicDir    string
 	periodicHome   string
+	periodicMu     sync.RWMutex
 
 	oixHTTPOnce   sync.Once
 	oixHTTPClient *http.Client
@@ -226,12 +228,12 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 
 	log.Infoln("[oixCloud] fetching provider...")
 
-	result, err := fetchBest(token, urls)
+	result, err := fetchBest(context.Background(), token, urls, homeDir)
 	if err != nil {
 		if IsAuthError(err) {
 			log.Warnln("[oixCloud] auth failed, provider [%s] removed", ProviderFile())
 		} else {
-			log.Warnln("[oixCloud] config fetch failed")
+			log.Warnln("[oixCloud] config fetch failed: %s", err)
 		}
 		return false, err
 	}
@@ -257,11 +259,6 @@ func SetProviderName(name string) {
 }
 
 func StartPeriodicUpdate(dir, homeDir string) {
-	StopPeriodicUpdate()
-
-	periodicDir = dir
-	periodicHome = homeDir
-
 	interval := 3600 * time.Second
 	if s := os.Getenv("OIX_UPDATE_INTERVAL"); s != "" {
 		if d, err := strconv.Atoi(s); err == nil && d > 0 {
@@ -270,9 +267,16 @@ func StartPeriodicUpdate(dir, homeDir string) {
 	}
 
 	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	periodicMu.Lock()
+	stopPeriodicLocked()
 	periodicCancel = cancel
+	periodicDone = done
+	periodicDir = dir
+	periodicHome = homeDir
 
 	go func() {
+		defer close(done)
 		ticker := time.NewTicker(interval)
 		defer ticker.Stop()
 		for {
@@ -286,13 +290,19 @@ func StartPeriodicUpdate(dir, homeDir string) {
 				if len(urls) == 0 {
 					continue
 				}
-				result, err := fetchBest(token, urls)
+				result, err := fetchBest(ctx, token, urls, homeDir)
 				if err != nil {
+					if ctx.Err() != nil {
+						return
+					}
 					log.Warnln("[oixCloud] periodic update failed: %s", err)
 					continue
 				}
 				if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
 					continue
+				}
+				if ctx.Err() != nil {
+					return
 				}
 				ok := saveResult(dir, homeDir, result)
 				if ok {
@@ -303,26 +313,46 @@ func StartPeriodicUpdate(dir, homeDir string) {
 			}
 		}
 	}()
+	periodicMu.Unlock()
 }
 
 func StopPeriodicUpdate() {
+	periodicMu.Lock()
+	stopPeriodicLocked()
+	periodicMu.Unlock()
+}
+
+func stopPeriodicLocked() {
 	if periodicCancel != nil {
 		periodicCancel()
-		periodicCancel = nil
 	}
+	if periodicDone != nil {
+		<-periodicDone
+	}
+	periodicCancel = nil
+	periodicDone = nil
 }
 
 func ForceUpdate() error {
-	if periodicDir == "" {
+	dir, homeDir := providerPaths()
+	if dir == "" {
 		return errors.New("periodic update not started")
 	}
-	_, err := Ensure(periodicDir, periodicHome, true)
+	_, err := Ensure(dir, homeDir, true)
 	return err
 }
 
 func SetProviderPaths(dir, homeDir string) {
+	periodicMu.Lock()
+	defer periodicMu.Unlock()
 	periodicDir = dir
 	periodicHome = homeDir
+}
+
+func providerPaths() (dir, homeDir string) {
+	periodicMu.RLock()
+	defer periodicMu.RUnlock()
+	return periodicDir, periodicHome
 }
 
 func tokenFilePath(homeDir string) string {
@@ -354,48 +384,51 @@ func Login(token string) (bool, error) {
 	if token == "" {
 		return false, ErrNoToken
 	}
-	if periodicDir == "" {
+	dir, homeDir := providerPaths()
+	if dir == "" {
 		return false, errors.New("oix provider not initialized")
 	}
 	prev := CurrentToken()
 	SetToken(token)
-	ok, err := Ensure(periodicDir, periodicHome, true)
+	ok, err := Ensure(dir, homeDir, true)
 	if err != nil || !ok {
 		SetToken(prev)
 		return ok, err
 	}
-	if err := persistToken(periodicHome, token); err != nil {
+	if err := persistToken(homeDir, token); err != nil {
 		log.Warnln("[oixCloud] persist token failed: %s", err)
 	}
-	StartPeriodicUpdate(periodicDir, periodicHome)
+	StartPeriodicUpdate(dir, homeDir)
 	return true, nil
 }
 
 func Logout() {
 	SetToken("")
-	if periodicHome != "" {
-		_ = os.Remove(tokenFilePath(periodicHome))
-		if periodicDir != "" {
-			_ = os.Remove(filepath.Join(periodicHome, periodicDir, ProviderFile()))
+	StopPeriodicUpdate()
+	dir, homeDir := providerPaths()
+	if homeDir != "" {
+		_ = os.Remove(tokenFilePath(homeDir))
+		clearParams(homeDir)
+		if dir != "" {
+			_ = os.Remove(filepath.Join(homeDir, dir, ProviderFile()))
 		}
 	}
-	StopPeriodicUpdate()
 }
 
 func IsOixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
-func fetchBest(token string, urls []string) (*Result, error) {
+func fetchBest(parent context.Context, token string, urls []string, homeDir string) (*Result, error) {
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
 	ageKeyPair()
 	if len(urls) == 1 {
-		return fetchFrom(context.Background(), token, urls[0])
+		return fetchFrom(parent, token, urls[0], homeDir)
 	}
 
-	ctx, cancel := context.WithCancel(context.Background())
+	ctx, cancel := context.WithCancel(parent)
 	defer cancel()
 
 	type outcome struct {
@@ -416,7 +449,7 @@ func fetchBest(token string, urls []string) (*Result, error) {
 					return
 				}
 			}
-			result, err := fetchFrom(ctx, token, baseURL)
+			result, err := fetchFrom(ctx, token, baseURL, homeDir)
 			results <- outcome{result, err}
 		}(i, baseURL)
 	}
@@ -445,7 +478,7 @@ func fetchBest(token string, urls []string) (*Result, error) {
 	return nil, lastErr
 }
 
-func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
+func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, error) {
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
@@ -453,12 +486,16 @@ func fetchFrom(ctx context.Context, token, baseURL string) (*Result, error) {
 	if err != nil {
 		return nil, err
 	}
+	params, err := effectiveParamsForPlan(homeDir, plan)
+	if err != nil {
+		return nil, fmt.Errorf("resolve account options: %w", err)
+	}
 
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
 	sig := sign(ts + "." + agePublicKey)
 
-	url := baseURL + "/api/v1/managed/flclash/direct" + planQuery(plan)
+	url := baseURL + "/api/v1/managed/flclash/direct" + params.query()
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -561,39 +598,6 @@ func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error)
 		Rank: apiResp.Data.PlanRank,
 		Name: strings.TrimSpace(apiResp.Data.Plan),
 	}, nil
-}
-
-func planQuery(plan planIdentity) string {
-	if plan.Rank != nil {
-		rank := *plan.Rank
-		if rank >= 30 {
-			return "?type=love"
-		}
-		if rank >= 20 {
-			return "?lv=2"
-		}
-		return ""
-	}
-
-	switch plan.Code {
-	case "alu":
-		return "?lv=2"
-	case "bronze", "silver", "gold", "platinum", "diamond", "developer", "team", "enterprise", "realtime", "titanium":
-		return "?type=love"
-	case "no_plan", "iron":
-		return ""
-	}
-
-	switch strings.ToLower(plan.Name) {
-	case "", "null", "no plan":
-		return ""
-	case "pass iron":
-		return ""
-	case "pass alu", "pass bronze":
-		return "?lv=2"
-	default:
-		return "?type=love"
-	}
 }
 
 func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
@@ -757,9 +761,16 @@ func saveResult(dir, homeDir string, result *Result) bool {
 		raw = result.Config
 	}
 
-	os.MkdirAll(filepath.Dir(p), 0o755)
-	if err := os.WriteFile(p, raw, 0o644); err != nil {
+	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
+		log.Warnln("[oixCloud] create provider directory %s: %s", filepath.Dir(p), err)
+		return false
+	}
+	if err := os.WriteFile(p, raw, 0o600); err != nil {
 		log.Warnln("[oixCloud] write file %s: %s", p, err)
+		return false
+	}
+	if err := os.Chmod(p, 0o600); err != nil {
+		log.Warnln("[oixCloud] secure file %s: %s", p, err)
 		return false
 	}
 
