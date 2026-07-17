@@ -7,6 +7,8 @@ import (
 	"runtime"
 	"sync"
 	"testing"
+
+	A "github.com/metacubex/mihomo/component/age"
 )
 
 func intPointer(value int) *int {
@@ -83,8 +85,21 @@ func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 	t.Cleanup(func() {
 		oixProviderName = oldProviderName
 	})
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldSecretKey := ageSecretKey
+	ageSecretKey = secretKey
+	t.Cleanup(func() {
+		ageSecretKey = oldSecretKey
+	})
 
-	if !saveResult("providers", homeDir, &Result{Provider: []byte("payload")}) {
+	if !saveResult("providers", homeDir, &Result{Provider: raw}) {
 		t.Fatal("saveResult failed")
 	}
 	info, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider"))
@@ -93,5 +108,41 @@ func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 	}
 	if got, want := info.Mode().Perm(), os.FileMode(0o600); got != want {
 		t.Fatalf("provider permissions = %o, want %o", got, want)
+	}
+}
+
+func TestSaveResultRejectsUnencryptedProvider(t *testing.T) {
+	homeDir := t.TempDir()
+	oldProviderName := oixProviderName
+	oixProviderName = "test-provider"
+	t.Cleanup(func() {
+		oixProviderName = oldProviderName
+	})
+
+	if saveResult("providers", homeDir, &Result{Provider: []byte("proxies: []")}) {
+		t.Fatal("saveResult accepted an unencrypted provider")
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider")); !os.IsNotExist(err) {
+		t.Fatalf("unencrypted provider was written: %v", err)
+	}
+}
+
+func TestSaveResultRejectsInvalidAgeProvider(t *testing.T) {
+	homeDir := t.TempDir()
+	oldProviderName := oixProviderName
+	oldSecretKey := ageSecretKey
+	oixProviderName = "test-provider"
+	ageSecretKey, _, _ = A.GenX25519KeyPair()
+	t.Cleanup(func() {
+		oixProviderName = oldProviderName
+		ageSecretKey = oldSecretKey
+	})
+
+	raw := []byte("-----BEGIN AGE ENCRYPTED FILE-----\nproxies: []")
+	if saveResult("providers", homeDir, &Result{Provider: raw}) {
+		t.Fatal("saveResult accepted an invalid Age provider")
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider")); !os.IsNotExist(err) {
+		t.Fatalf("invalid Age provider was written: %v", err)
 	}
 }
