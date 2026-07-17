@@ -151,7 +151,12 @@ func ageKeyPair() (secretKey, publicKey string) {
 	ageKeyInitOnce.Do(func() {
 		homeDir := C.Path.HomeDir()
 		if homeDir != "" {
-			if data, err := os.ReadFile(ageKeyFilePath(homeDir)); err == nil {
+			keyPath := ageKeyFilePath(homeDir)
+			if err := os.Chmod(keyPath, 0o600); err != nil && !os.IsNotExist(err) {
+				log.Warnln("[oixCloud] secure age key failed: %s", err)
+				return
+			}
+			if data, err := os.ReadFile(keyPath); err == nil {
 				sk := strings.TrimSpace(string(data))
 				if pks, err := age.ToPublicKeys(sk); err == nil && len(pks) > 0 {
 					ageSecretKey = sk
@@ -170,6 +175,11 @@ func ageKeyPair() (secretKey, publicKey string) {
 		if homeDir != "" {
 			if err := os.WriteFile(ageKeyFilePath(homeDir), []byte(sk), 0o600); err != nil {
 				log.Warnln("[oixCloud] persist age key failed: %s", err)
+			} else if err := os.Chmod(ageKeyFilePath(homeDir), 0o600); err != nil {
+				log.Warnln("[oixCloud] secure age key failed: %s", err)
+				_ = os.Remove(ageKeyFilePath(homeDir))
+				ageSecretKey = ""
+				agePublicKey = ""
 			}
 		}
 	})
@@ -759,6 +769,14 @@ func saveResult(dir, homeDir string, result *Result) bool {
 	raw := result.Provider
 	if len(raw) == 0 {
 		raw = result.Config
+	}
+	if !bytes.HasPrefix(raw, []byte(age.FileHeader)) || ageSecretKey == "" {
+		log.Warnln("[oixCloud] refuse to write unencrypted provider")
+		return false
+	}
+	if _, err := age.DecryptBytes(raw, ageSecretKey); err != nil {
+		log.Warnln("[oixCloud] refuse to write invalid encrypted provider")
+		return false
 	}
 
 	if err := os.MkdirAll(filepath.Dir(p), 0o755); err != nil {
