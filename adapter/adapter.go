@@ -38,6 +38,7 @@ var (
 
 const (
 	defaultHistoriesNum = 10
+	maxDelay            = ^uint16(0)
 )
 
 type internalProxyState struct {
@@ -130,8 +131,6 @@ func (p *Proxy) ExtraDelayHistories() map[string]C.ProxyState {
 // LastDelayForTestUrl return last history record of the specified URL. if proxy is not alive, return the max value of uint16.
 // implements C.Proxy
 func (p *Proxy) LastDelayForTestUrl(url string) (delay uint16) {
-	var maxDelay uint16 = 0xffff
-
 	alive := false
 	var history C.DelayHistory
 
@@ -288,8 +287,19 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	}
 
 	satisfied = resp != nil && (expectedStatus == nil || expectedStatus.Check(uint16(resp.StatusCode)))
-	t = uint16(time.Since(start) / time.Millisecond)
+	t = durationToDelay(time.Since(start))
 	return
+}
+
+func durationToDelay(duration time.Duration) uint16 {
+	delay := duration / time.Millisecond
+	if delay < 1 {
+		return 1
+	}
+	if delay > time.Duration(maxDelay) {
+		return maxDelay
+	}
+	return uint16(delay)
 }
 
 func NewProxy(adapter C.ProxyAdapter) *Proxy {

@@ -85,7 +85,7 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 	selector, ok := proxy.Adapter().(outboundgroup.SelectAble)
 	if !ok {
 		render.Status(r, http.StatusBadRequest)
-		render.JSON(w, r, newError("Must be a Selector"))
+		render.JSON(w, r, newError("Must be a selectable proxy group"))
 		return
 	}
 
@@ -104,9 +104,12 @@ func updateProxy(w http.ResponseWriter, r *http.Request) {
 }
 
 func getProxyDelay(w http.ResponseWriter, r *http.Request) {
+	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
+	unfixNonSelectorGroup(proxy)
+
 	query := r.URL.Query()
 	url := query.Get("url")
-	timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 16)
+	timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 32)
 	if err != nil {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
@@ -120,9 +123,7 @@ func getProxyDelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
-
-	ctx, cancel := context.WithTimeout(context.Background(), time.Millisecond*time.Duration(timeout))
+	ctx, cancel := context.WithTimeout(r.Context(), time.Millisecond*time.Duration(timeout))
 	defer cancel()
 
 	delay, err := proxy.URLTest(ctx, url, expectedStatus)
@@ -149,12 +150,19 @@ func getProxyDelay(w http.ResponseWriter, r *http.Request) {
 
 func unfixedProxy(w http.ResponseWriter, r *http.Request) {
 	proxy := r.Context().Value(CtxKeyProxy).(C.Proxy)
-	if selectAble, ok := proxy.Adapter().(outboundgroup.SelectAble); ok && proxy.Type() != C.Selector {
-		selectAble.ForceSet("")
-		cachefile.Cache().SetSelected(proxy.Name(), "")
+	if unfixNonSelectorGroup(proxy) {
 		render.NoContent(w, r)
 		return
 	}
 	render.Status(r, http.StatusBadRequest)
 	render.JSON(w, r, ErrBadRequest)
+}
+
+func unfixNonSelectorGroup(proxy C.Proxy) bool {
+	if selectAble, ok := proxy.Adapter().(outboundgroup.SelectAble); ok && proxy.Type() != C.Selector {
+		selectAble.ForceSet("")
+		cachefile.Cache().SetSelected(proxy.Name(), "")
+		return true
+	}
+	return false
 }
