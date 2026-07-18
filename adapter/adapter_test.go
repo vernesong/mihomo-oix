@@ -1,8 +1,15 @@
 package adapter
 
 import (
+	"context"
+	"sync/atomic"
 	"testing"
 	"time"
+
+	"github.com/metacubex/mihomo/adapter/outbound"
+
+	"github.com/metacubex/http"
+	"github.com/metacubex/http/httptest"
 )
 
 func TestDurationToDelay(t *testing.T) {
@@ -25,5 +32,38 @@ func TestDurationToDelay(t *testing.T) {
 				t.Fatalf("durationToDelay(%s) = %d, want %d", test.duration, got, test.want)
 			}
 		})
+	}
+}
+
+func TestURLTestUsesFirstMeasurementWhenUnifiedRetryFails(t *testing.T) {
+	previousUnifiedDelay := UnifiedDelay.Load()
+	UnifiedDelay.Store(true)
+	t.Cleanup(func() {
+		UnifiedDelay.Store(previousUnifiedDelay)
+	})
+
+	var requestCount atomic.Int32
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requestCount.Add(1) == 1 {
+			w.WriteHeader(http.StatusNoContent)
+			return
+		}
+		<-r.Context().Done()
+	}))
+	t.Cleanup(server.Close)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 300*time.Millisecond)
+	defer cancel()
+
+	proxy := NewProxy(outbound.NewDirectWithOption(outbound.DirectOption{Name: "direct"}))
+	delay, err := proxy.URLTest(ctx, server.URL, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := requestCount.Load(); got != 2 {
+		t.Fatalf("request count = %d, want 2", got)
+	}
+	if delay >= 100 {
+		t.Fatalf("delay = %dms, want first successful measurement below 100ms", delay)
 	}
 }
