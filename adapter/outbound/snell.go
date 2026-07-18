@@ -19,7 +19,7 @@ import (
 	"github.com/metacubex/mihomo/transport/shadowtls"
 	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
 	"github.com/metacubex/mihomo/transport/snell"
-	v2rayObfs "github.com/metacubex/mihomo/transport/v2ray-plugin"
+	"github.com/metacubex/mihomo/transport/vmess"
 )
 
 type Snell struct {
@@ -31,7 +31,7 @@ type Snell struct {
 	shadowTLSOption *shadowtls.ShadowTLSOption
 	restlsConfig    *restls.Config
 	jlsConfig       *jls.ClientConfig
-	echTLS          *v2rayObfs.Option
+	echTLS          *vmess.TLSConfig
 	identity        bool
 	version         int
 	reuse           bool
@@ -78,6 +78,7 @@ func snellECHTLSHost(opt *snellECHTLSObfsOption, server string) string {
 }
 
 const defaultSnellECHTLSClientFingerprint = "chrome"
+const snellECHTLSALPN = "h2"
 
 func resolveSnellECHTLSClientFingerprint(opt *snellECHTLSObfsOption, option SnellOption) string {
 	if opt.ClientFingerprint != "" {
@@ -155,7 +156,7 @@ func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell
 			return nil, err
 		}
 	case "ech-tls":
-		c, err = v2rayObfs.NewV2rayObfs(ctx, c, s.echTLS)
+		c, err = vmess.StreamTLSConn(ctx, c, s.echTLS)
 		if err != nil {
 			return nil, err
 		}
@@ -274,7 +275,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	var shadowTLSOpt *shadowtls.ShadowTLSOption
 	var restlsConfig *restls.Config
 	var jlsConfig *jls.ClientConfig
-	var echTLSOpt *v2rayObfs.Option
+	var echTLSOpt *vmess.TLSConfig
 	switch obfsOption.Mode {
 	case "tls", "http", "":
 		break
@@ -340,9 +341,6 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		if err := decoder.Decode(option.ObfsOpts, opt); err != nil {
 			return nil, fmt.Errorf("snell %s initialize ech-tls error: %w", addr, err)
 		}
-		if opt.Path == "" {
-			return nil, fmt.Errorf("snell %s ech-tls path is empty", addr)
-		}
 		host := snellECHTLSHost(opt, option.Server)
 		skipCertVerify := opt.SkipCertVerify || opt.Insecure
 		if opt.CAFile != "" && skipCertVerify {
@@ -352,19 +350,16 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		if err != nil {
 			return nil, err
 		}
-		echTLSOpt = &v2rayObfs.Option{
+		echTLSOpt = &vmess.TLSConfig{
 			Host:              host,
-			Port:              strconv.Itoa(option.Port),
-			Path:              opt.Path,
-			Headers:           opt.Headers,
-			TLS:               true,
-			ECHConfig:         echConfig,
 			SkipCertVerify:    skipCertVerify,
 			CAFile:            opt.CAFile,
 			ClientFingerprint: resolveSnellECHTLSClientFingerprint(opt, option),
-			Fingerprint:       opt.Fingerprint,
+			FingerPrint:       opt.Fingerprint,
 			Certificate:       opt.Certificate,
 			PrivateKey:        opt.PrivateKey,
+			NextProtos:        []string{snellECHTLSALPN},
+			ECH:               echConfig,
 		}
 	default:
 		return nil, fmt.Errorf("snell %s obfs mode error: %s", addr, obfsOption.Mode)

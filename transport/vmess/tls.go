@@ -20,6 +20,7 @@ type TLSConfig struct {
 	Host              string
 	SkipCertVerify    bool
 	NameCertVerify    string
+	CAFile            string
 	FingerPrint       string
 	Certificate       string
 	PrivateKey        string
@@ -35,7 +36,7 @@ type TLSConfig struct {
 }
 
 func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
-	return ca.GetTLSConfig(ca.Option{
+	tlsConfig, err := ca.GetTLSConfig(ca.Option{
 		TLSConfig: &tls.Config{
 			ServerName:         cfg.Host,
 			InsecureSkipVerify: cfg.SkipCertVerify,
@@ -46,6 +47,16 @@ func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
 		Certificate:    cfg.Certificate,
 		PrivateKey:     cfg.PrivateKey,
 	})
+	if err != nil {
+		return nil, err
+	}
+	if cfg.CAFile != "" {
+		tlsConfig.RootCAs, err = ca.LoadCertificates(cfg.CAFile)
+		if err != nil {
+			return nil, err
+		}
+	}
+	return tlsConfig, nil
 }
 
 func StreamTLSConn(ctx context.Context, conn net.Conn, cfg *TLSConfig) (net.Conn, error) {
