@@ -272,6 +272,7 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	}
 
 	_ = resp.Body.Close()
+	elapsed := time.Since(start)
 
 	if unifiedDelay {
 		second := time.Now()
@@ -281,7 +282,7 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 		if ignoredErr == nil {
 			resp = secondResp
 			_ = resp.Body.Close()
-			start = second
+			elapsed = time.Since(second)
 		} else {
 			if strings.HasPrefix(url, "http://") {
 				log.Errorln("%s failed to get the second response from %s: %v", p.Name(), url, ignoredErr)
@@ -291,7 +292,7 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	}
 
 	satisfied = resp != nil && (expectedStatus == nil || expectedStatus.Check(uint16(resp.StatusCode)))
-	t = durationToDelay(time.Since(start))
+	t = durationToDelay(elapsed)
 	return
 }
 
