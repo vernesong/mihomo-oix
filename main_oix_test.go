@@ -63,7 +63,7 @@ func TestBuildWorkflowFailsFastForRequiredOIXSecrets(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	body := string(data)
+	body := strings.ReplaceAll(string(data), "\r\n", "\n")
 	required := []string{
 		"OIX_APP_SECRET",
 		"OIX_DNS_PRIVATE_KEY",
