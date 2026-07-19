@@ -1,6 +1,6 @@
 module github.com/metacubex/mihomo
 
-go 1.20
+go 1.26
 
 require (
 	github.com/bahlo/generic-list-go v0.2.0
@@ -63,13 +63,13 @@ require (
 	go4.org/netipx v0.0.0-20231129151722-fdeea329fbba
 )
 
-// lastest version compatible with golang1.20
 require (
 	github.com/insomniacslk/dhcp v0.0.0-20250109001534-8abf58130905
 	github.com/klauspost/compress v1.17.9
 	github.com/mdlayher/netlink v1.7.2
 	github.com/miekg/dns v1.1.63
 	github.com/oschwald/maxminddb-golang v1.12.0
+	github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0
 	golang.org/x/crypto v0.33.0
 	golang.org/x/exp v0.0.0-20240904232852-e7e105dedf7e
 	golang.org/x/net v0.35.0
@@ -132,7 +132,6 @@ require (
 	github.com/tailscale/hujson v0.0.0-20221223112325-20486734a56a // indirect
 	github.com/tailscale/peercred v0.0.0-20250107143737-35a0c7bd7edc // indirect
 	github.com/u-root/uio v0.0.0-20230220225925-ffce2a382923 // indirect
-	github.com/vernesong/leaves v0.0.0-20260629081247-2a1c022f37d0 // indirect
 	github.com/ulikunitz/xz v0.5.15 // indirect
 	github.com/vishvananda/netns v0.0.5 // indirect
 	github.com/vmihailenco/tagparser/v2 v2.0.0 // indirect
