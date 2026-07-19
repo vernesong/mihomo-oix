@@ -23,35 +23,35 @@ var (
 )
 
 type StatsRecord struct {
-	Success            int64                   `json:"success"`
-	Failure            int64                   `json:"failure"`
-	ConnectTime        int64                   `json:"connect_time"`
-	Latency            int64                   `json:"latency"`
-	LastUsed           int64                   `json:"last_used"`
-	Weights            map[string]float64      `json:"weights"`
-	UploadTotal        float64                 `json:"upload_total"`
-	DownloadTotal      float64                 `json:"download_total"`
-	MaxUploadRate      float64                 `json:"max_upload_rate"`
-	MaxDownloadRate    float64                 `json:"max_download_rate"`
-	ConnectionDuration float64                 `json:"connection_duration"`
-	LossRate           float64                 `json:"loss_rate,omitempty"`
-	CumulSent          uint64                  `json:"cumul_sent,omitempty"`
-	CumulRetrans       uint64                  `json:"cumul_retrans,omitempty"`
+	Success            int64              `json:"success"`
+	Failure            int64              `json:"failure"`
+	ConnectTime        int64              `json:"connect_time"`
+	Latency            int64              `json:"latency"`
+	LastUsed           int64              `json:"last_used"`
+	Weights            map[string]float64 `json:"weights"`
+	UploadTotal        float64            `json:"upload_total"`
+	DownloadTotal      float64            `json:"download_total"`
+	MaxUploadRate      float64            `json:"max_upload_rate"`
+	MaxDownloadRate    float64            `json:"max_download_rate"`
+	ConnectionDuration float64            `json:"connection_duration"`
+	LossRate           float64            `json:"loss_rate,omitempty"`
+	CumulSent          uint64             `json:"cumul_sent,omitempty"`
+	CumulRetrans       uint64             `json:"cumul_retrans,omitempty"`
 }
 
 type NodeState struct {
-	Name               string         `json:"name"`
-	LastChecked        int64          `json:"last_checked"`
-	BlockedUntil       int64          `json:"blocked_until"`
-	ThresholdGrade     int            `json:"threshold_grade,omitempty"`
+	Name           string `json:"name"`
+	LastChecked    int64  `json:"last_checked"`
+	BlockedUntil   int64  `json:"blocked_until"`
+	ThresholdGrade int    `json:"threshold_grade,omitempty"`
 }
 
 type AtomicStatsRecord struct {
-	success         atomic.Int64
-	failure         atomic.Int64
-	connectTime     atomic.Int64
-	latency         atomic.Int64
-	lastUsed        atomic.Int64
+	success     atomic.Int64
+	failure     atomic.Int64
+	connectTime atomic.Int64
+	latency     atomic.Int64
+	lastUsed    atomic.Int64
 
 	uploadTotal     atomic.Float64
 	downloadTotal   atomic.Float64
@@ -62,7 +62,7 @@ type AtomicStatsRecord struct {
 	cumulSent       atomic.Int64
 	cumulRetrans    atomic.Int64
 
-	weights         *lru.LruCache[string, float64]
+	weights *lru.LruCache[string, float64]
 }
 
 type CodeNodeSet struct {
@@ -94,8 +94,8 @@ type NodeRankItem struct {
 }
 
 type NodeRank struct {
-	LastUpdated int64           `json:"last_updated"`
-	Result      []NodeRankItem  `json:"result"`
+	LastUpdated int64          `json:"last_updated"`
+	Result      []NodeRankItem `json:"result"`
 }
 
 type targetMinHeap []ActiveTarget
@@ -473,7 +473,7 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 
 	for _, node := range proxyNames {
 		score := nodeScores[node]
-		percentScore := math.Round(score / maxScore * 100 * 100) / 100
+		percentScore := math.Round(score/maxScore*100*100) / 100
 		resultItems = append(resultItems, NodeRankItem{Name: node, Weight: percentScore, Rank: ""})
 	}
 
@@ -502,22 +502,22 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 		}
 
 		if aliveCount > 0 && positiveAliveCount > 0 {
-				mostUsedBound := int(float64(positiveAliveCount) * 0.2)
-				if mostUsedBound < 1 {
-					mostUsedBound = 1
-				}
+			mostUsedBound := int(float64(positiveAliveCount) * 0.2)
+			if mostUsedBound < 1 {
+				mostUsedBound = 1
+			}
 
-				occasionalBound := mostUsedBound + int(float64(positiveAliveCount)*0.5)
+			occasionalBound := mostUsedBound + int(float64(positiveAliveCount)*0.5)
 
-				for i := 0; i < mostUsedBound; i++ {
-					resultItems[i].Rank = RankMostUsed
-				}
-				for i := mostUsedBound; i < occasionalBound; i++ {
-					resultItems[i].Rank = RankOccasional
-				}
-				for i := occasionalBound; i < aliveCount; i++ {
-					resultItems[i].Rank = RankRarelyUsed
-				}
+			for i := 0; i < mostUsedBound; i++ {
+				resultItems[i].Rank = RankMostUsed
+			}
+			for i := mostUsedBound; i < occasionalBound; i++ {
+				resultItems[i].Rank = RankOccasional
+			}
+			for i := occasionalBound; i < aliveCount; i++ {
+				resultItems[i].Rank = RankRarelyUsed
+			}
 		}
 
 		for i := aliveCount; i < len(resultItems); i++ {
@@ -527,9 +527,9 @@ func (s *Store) GetNodeWeightRanking(group, config, testUrl string, proxies []C.
 		wrapper := NodeRank{LastUpdated: time.Now().Unix(), Result: resultItems}
 		s.StoreNodeWeightRanking(group, config, wrapper)
 		return wrapper, nil
-    }
+	}
 
-    return NodeRank{}, nil
+	return NodeRank{}, nil
 }
 
 // 存储节点权重排名
@@ -590,12 +590,12 @@ func (s *Store) GetBestProxyForTarget(group, config, target, asnNumber string, i
 				if record.Weights == nil {
 					continue
 				}
-				
+
 				weight, ok := record.Weights[asnWeightType]
 				if !ok || weight <= 0 {
 					continue
 				}
-				
+
 				timeDecay := getTimeDecay(record.LastUsed)
 				decayedWeight := weight * timeDecay
 				nodesWithWeight[nodeName] += decayedWeight
@@ -664,9 +664,9 @@ func (s *Store) GetBestProxyForTarget(group, config, target, asnNumber string, i
 }
 
 // 获取活跃域名
-func (h targetMinHeap) Len() int           { return len(h) }
-func (h targetMinHeap) Less(i, j int) bool { return h[i].LastUsed < h[j].LastUsed }
-func (h targetMinHeap) Swap(i, j int)      { h[i], h[j] = h[j], h[i] }
+func (h targetMinHeap) Len() int            { return len(h) }
+func (h targetMinHeap) Less(i, j int) bool  { return h[i].LastUsed < h[j].LastUsed }
+func (h targetMinHeap) Swap(i, j int)       { h[i], h[j] = h[j], h[i] }
 func (h *targetMinHeap) Push(x interface{}) { *h = append(*h, x.(ActiveTarget)) }
 func (h *targetMinHeap) Pop() interface{} {
 	old := *h
@@ -781,7 +781,7 @@ func (s *Store) GetActiveTargets(group, config string, limit int) []ActiveTarget
 	for h.Len() > 0 {
 		sorted = append(sorted, heap.Pop(h).(ActiveTarget))
 	}
-	for i, j := 0, len(sorted) - 1; i < j; i, j = i + 1, j - 1 {
+	for i, j := 0, len(sorted)-1; i < j; i, j = i+1, j-1 {
 		sorted[i], sorted[j] = sorted[j], sorted[i]
 	}
 
@@ -812,13 +812,13 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]bool) int 
 	}
 
 	type asnCacheKey struct {
-		asnNumber   string
-		isUDP       bool
+		asnNumber string
+		isUDP     bool
 	}
 
 	type asnCacheValue struct {
-		nodes       []string
-		weights     []float64
+		nodes   []string
+		weights []float64
 	}
 
 	asnCache := make(map[asnCacheKey]asnCacheValue)
@@ -838,8 +838,8 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]bool) int 
 			} else {
 				bestNodes, bestWeights, err = s.GetBestProxyForTarget(group, config, active.Target, active.ASN, active.IsUDP)
 				asnCache[key] = asnCacheValue{
-					nodes:      bestNodes,
-					weights:    bestWeights,
+					nodes:   bestNodes,
+					weights: bestWeights,
 				}
 			}
 		} else {
@@ -918,7 +918,7 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]bool) int 
 					newW := item.bestWeights[i]
 					if oldW, exists := finalNodeMap[newNode]; exists {
 						// prevent degrade recovery too fast
-						if oldW <= 0 || math.Abs(newW - oldW) / oldW > 0.1 {
+						if oldW <= 0 || math.Abs(newW-oldW)/oldW > 0.1 {
 							finalNodeMap[newNode] = newW
 							needUpdate = true
 						}
@@ -979,8 +979,8 @@ func (s *Store) RunPrefetch(group, config string, proxyMap map[string]bool) int 
 			if item.asnNumber != "" && !CdnASNs[item.asnNumber] {
 				key := asnCacheKey{item.asnNumber, item.isUDP}
 				asnCache[key] = asnCacheValue{
-					nodes:      sortedNodes,
-					weights:    sortedWeights,
+					nodes:   sortedNodes,
+					weights: sortedWeights,
 				}
 			}
 		}
@@ -1096,7 +1096,7 @@ func (s *Store) GetStatsForTarget(group, config, target, proxy string) (map[stri
 		}
 	} else {
 		for fullPath, data := range rawResult {
-			nodeName := fullPath[strings.LastIndexByte(fullPath, '/') + 1:]
+			nodeName := fullPath[strings.LastIndexByte(fullPath, '/')+1:]
 			result[nodeName] = data
 		}
 	}
@@ -1185,7 +1185,7 @@ func (s *Store) GetAllNodesForGroup(group, config string) ([]string, error) {
 	nodeStatesData, err := s.GetSubBytesByPath(nodesPath)
 	if err == nil {
 		for key := range nodeStatesData {
-			nodeName := key[strings.LastIndexByte(key, '/') + 1:]
+			nodeName := key[strings.LastIndexByte(key, '/')+1:]
 			if nodeName != "" {
 				nodesMap[nodeName] = true
 			}
@@ -1199,7 +1199,7 @@ func (s *Store) GetAllNodesForGroup(group, config string) ([]string, error) {
 			if strings.Count(key, "/") < 5 {
 				continue
 			}
-			nodeName := key[strings.LastIndexByte(key, '/') + 1:]
+			nodeName := key[strings.LastIndexByte(key, '/')+1:]
 			if nodeName != "" {
 				nodesMap[nodeName] = true
 			}
@@ -1847,9 +1847,9 @@ func (s *Store) CleanupOldRecords(group, config string) {
 		}
 
 		type targetInfo struct {
-			time    time.Time
-			value   float64
-			target  string
+			time   time.Time
+			value  float64
+			target string
 		}
 		targetMap := make(map[string]*targetInfo)
 		var toDelete []string
@@ -1905,9 +1905,9 @@ func (s *Store) CleanupOldRecords(group, config string) {
 			}
 
 			targetMap[path] = &targetInfo{
-				time:    time.Unix(lastTime, 0),
-				value:   value,
-				target:  target,
+				time:   time.Unix(lastTime, 0),
+				value:  value,
+				target: target,
 			}
 		}
 
@@ -1967,7 +1967,7 @@ func (s *Store) CleanupOldRecords(group, config string) {
 				hostStatusCache.RemoveByKeyPrefix(pathPrefix)
 			}
 			log.Debugln("[SmartStore] Cleaned up [%d] old [%s] records, group [%s] keeping [%d] valuable and recent data...",
-				deleted, keyType, group, totalRecords - deleted)
+				deleted, keyType, group, totalRecords-deleted)
 		}
 	}
 
