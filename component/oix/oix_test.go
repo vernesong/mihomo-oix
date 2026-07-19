@@ -4,8 +4,11 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -13,8 +16,39 @@ import (
 	"sync"
 	"testing"
 
+	P "github.com/metacubex/mihomo/adapter/provider"
 	A "github.com/metacubex/mihomo/component/age"
+	R "github.com/metacubex/mihomo/component/resolver"
+	C "github.com/metacubex/mihomo/constant"
+	D "github.com/miekg/dns"
 )
+
+type staticResolver struct {
+	addresses []netip.Addr
+	err       error
+	calls     int
+}
+
+func (r *staticResolver) LookupIP(context.Context, string) ([]netip.Addr, error) {
+	r.calls++
+	return r.addresses, r.err
+}
+
+func (r *staticResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
+	return r.LookupIP(ctx, host)
+}
+
+func (r *staticResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
+	return r.LookupIP(ctx, host)
+}
+
+func (r *staticResolver) ResolveECH(context.Context, string) ([]byte, error) { return nil, r.err }
+func (r *staticResolver) ExchangeContext(context.Context, *D.Msg) (*D.Msg, error) {
+	return nil, r.err
+}
+func (r *staticResolver) Invalid() bool    { return true }
+func (r *staticResolver) ClearCache()      {}
+func (r *staticResolver) ResetConnection() {}
 
 func intPointer(value int) *int {
 	return &value
@@ -26,6 +60,39 @@ func setOixHTTPClientForTest(t *testing.T, client *http.Client) {
 	t.Cleanup(func() {
 		oixHTTPClient = previous
 	})
+}
+
+func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyResolver := &staticResolver{err: errors.New("proxy DNS unavailable")}
+	directResolver := &staticResolver{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+	oldProxyResolver := R.ProxyServerHostResolver
+	oldDirectResolver := R.DirectHostResolver
+	R.ProxyServerHostResolver = proxyResolver
+	R.DirectHostResolver = directResolver
+	t.Cleanup(func() {
+		R.ProxyServerHostResolver = oldProxyResolver
+		R.DirectHostResolver = oldDirectResolver
+	})
+
+	client := newOixHTTPClient()
+	t.Cleanup(client.CloseIdleConnections)
+	response, err := client.Get("http://oix.test:" + port)
+	if err != nil {
+		t.Fatalf("direct request failed: %v", err)
+	}
+	_ = response.Body.Close()
+	if proxyResolver.calls != 0 || directResolver.calls != 1 {
+		t.Fatalf("resolver calls: proxy=%d direct=%d", proxyResolver.calls, directResolver.calls)
+	}
 }
 
 func TestPlanDefaultParams(t *testing.T) {
@@ -136,7 +203,32 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 	}
 }
 
-func TestFetchFromDoesNotFallbackOnAuthenticationFailure(t *testing.T) {
+func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDir := t.TempDir()
+	oldHomeDir := C.Path.HomeDir()
+	C.SetHomeDir(homeDir)
+	oldAppSecret := AppSecret
+	oldSecretKey := ageSecretKey
+	oldPublicKey := agePublicKey
+	AppSecret = "test-secret"
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	t.Cleanup(func() {
+		C.SetHomeDir(oldHomeDir)
+		AppSecret = oldAppSecret
+		ageSecretKey = oldSecretKey
+		agePublicKey = oldPublicKey
+	})
+	providerPayload, err := A.EncryptBytes([]byte("proxies:\n  - name: simulated-node\n    type: direct\n"), publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	config := base64.StdEncoding.EncodeToString(providerPayload)
+
 	managedCalls := 0
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/information" {
@@ -144,18 +236,43 @@ func TestFetchFromDoesNotFallbackOnAuthenticationFailure(t *testing.T) {
 			return
 		}
 		managedCalls++
-		http.NotFound(w, r)
+		if got := r.Header.Get("X-Flclash-Age-Pubkey"); got != publicKey {
+			t.Errorf("age public key = %q, want generated key", got)
+		}
+		timestamp := r.Header.Get("X-Flclash-Timestamp")
+		w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
+		_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
 	}))
 	t.Cleanup(server.Close)
 
 	setOixHTTPClientForTest(t, server.Client())
 
-	_, err := fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
-	if !IsAuthError(err) {
-		t.Fatalf("fetchFrom() error = %v, want authentication failure", err)
+	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
+	if err != nil {
+		t.Fatalf("fetchFrom() error = %v", err)
 	}
-	if managedCalls != 0 {
-		t.Fatalf("managed endpoint calls = %d, want 0", managedCalls)
+	if managedCalls != 1 {
+		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
+	}
+	if !saveResult(defaultProviderDir, homeDir, result) {
+		t.Fatal("saveResult() failed")
+	}
+	provider, err := P.ParseProxyProvider("oixCloud", map[string]any{
+		"type":           "file",
+		"path":           filepath.Join(homeDir, defaultProviderDir, ProviderFile()),
+		"age-secret-key": secretKey,
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := provider.Update(); err != nil {
+		t.Fatal(err)
+	}
+	if closer, ok := provider.(interface{ Close() error }); ok {
+		t.Cleanup(func() { _ = closer.Close() })
+	}
+	if provider.Count() != 1 || provider.Proxies()[0].Name() != "simulated-node" {
+		t.Fatalf("parsed proxies = %v, want simulated-node", provider.Proxies())
 	}
 }
 
