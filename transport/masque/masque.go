@@ -48,8 +48,7 @@ func PrepareTlsConfig(privKey *ecdsa.PrivateKey, peerPubKey *ecdsa.PublicKey, sn
 			// reason is incorrect, but the best I could figure
 			// detail explains the actual reason
 
-			//10 is NoValidChains, but we support go1.22 where it's not defined
-			return x509.CertificateInvalidError{Cert: cert, Reason: 10, Detail: "remote endpoint has a different public key than what we trust"}
+			return x509.CertificateInvalidError{Cert: cert, Reason: x509.NoValidChains, Detail: "remote endpoint has a different public key than what we trust"}
 		}
 
 		return nil

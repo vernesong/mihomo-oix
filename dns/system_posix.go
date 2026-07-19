@@ -39,5 +39,8 @@ func dnsReadConfig() (servers []string, err error) {
 			}
 		}
 	}
+	if err = scanner.Err(); err != nil {
+		err = fmt.Errorf("failed to read %s: %w", resolvConf, err)
+	}
 	return
 }
