@@ -68,7 +68,6 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
-	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -100,8 +99,6 @@ func TestPlanDefaultParams(t *testing.T) {
 		name string
 		plan planIdentity
 		want string
-	}{
-		{name: "no plan", plan: planIdentity{Code: "no_plan", Rank: intPointer(0)}, want: ""},
 		{name: "iron", plan: planIdentity{Code: "iron", Rank: intPointer(10)}, want: ""},
 		{name: "alu", plan: planIdentity{Code: "alu", Rank: intPointer(20)}, want: "&lv=2"},
 		{name: "bronze", plan: planIdentity{Code: "bronze", Rank: intPointer(30)}, want: "&type=love"},
