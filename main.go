@@ -208,13 +208,13 @@ func main() {
 	if testConfig {
 		if len(configBytes) != 0 {
 			if _, err := executor.ParseWithBytes(configBytes); err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 				fmt.Println("configuration test failed")
 				os.Exit(1)
 			}
 		} else {
 			if _, err := executor.Parse(); err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 				fmt.Printf("configuration file %s test failed\n", C.Path.Config())
 				os.Exit(1)
 			}

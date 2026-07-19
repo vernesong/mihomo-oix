@@ -78,7 +78,7 @@ Documentation can be found in [mihomo Docs](https://wiki.metacubex.one/).
 ## For development
 
 Requirements:
-[Go 1.20 or newer](https://go.dev/dl/)
+[Go 1.26 or newer](https://go.dev/dl/)
 
 Build mihomo:
 
