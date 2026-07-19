@@ -26,6 +26,7 @@ import (
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
+	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
 )
@@ -501,8 +502,8 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 	if planErr == nil {
 		params, err = effectiveParamsForPlan(homeDir, plan)
 	} else {
-		if IsAuthError(planErr) || ctx.Err() != nil {
-			return nil, planErr
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 		log.Warnln("[oixCloud] account information unavailable, using current options: %s", planErr)
 		params, err = effectiveParamsWithoutPlan(homeDir)
@@ -736,7 +737,7 @@ func newOixHTTPClient() *http.Client {
 		Transport: &http.Transport{
 			Proxy: nil,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, addr)
+				return dialer.DialContext(ctx, network, addr, dialer.WithResolver(resolver.DirectHostResolver))
 			},
 			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 			ForceAttemptHTTP2:     true,
