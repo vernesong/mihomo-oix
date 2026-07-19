@@ -221,16 +221,9 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	paramsMu.Lock()
 	defer paramsMu.Unlock()
 
-	currentRaw, environmentOverride, err := environmentParams()
+	currentRaw, environmentOverride, hasCurrent, err := readCurrentParams(homeDir)
 	if err != nil {
 		return queryParams{}, err
-	}
-	hasCurrent := environmentOverride
-	if !environmentOverride {
-		currentRaw, hasCurrent, err = readParamsFile(paramsFilePath(homeDir))
-		if err != nil {
-			return queryParams{}, err
-		}
 	}
 	oldDefaultRaw, _, err := readParamsFile(defaultParamsFilePath(homeDir))
 	if err != nil {
@@ -241,7 +234,7 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	newDefault := defaultParamsForPlan(plan)
 	newDefaultRaw := newDefault.encode()
 	current := parseParams(currentRaw)
-	if !environmentOverride && (!hasCurrent || current.routeEncoding() == oldDefaultRaw && oldDefaultRaw != newDefaultRaw) {
+	if !environmentOverride && (!hasCurrent || (current.routeEncoding() == oldDefaultRaw && oldDefaultRaw != newDefaultRaw)) {
 		current = current.withTierDefaults(newDefault)
 	}
 	current = current.stripEmergencyIfUnsupported(tier).withDefaultTFO()
@@ -261,10 +254,21 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	return current, nil
 }
 
+func effectiveParamsWithoutPlan(homeDir string) (queryParams, error) {
+	paramsMu.Lock()
+	defer paramsMu.Unlock()
+
+	raw, _, _, err := readCurrentParams(homeDir)
+	if err != nil {
+		return queryParams{}, err
+	}
+	return parseParams(raw).withDefaultTFO(), nil
+}
+
 func GetParamsState(homeDir string) (ParamsState, error) {
 	paramsMu.Lock()
 	defer paramsMu.Unlock()
-	params, environmentOverride, err := environmentParams()
+	params, environmentOverride, exists, err := readCurrentParams(homeDir)
 	if err != nil {
 		return ParamsState{}, err
 	}
@@ -272,21 +276,26 @@ func GetParamsState(homeDir string) (ParamsState, error) {
 	if environmentOverride {
 		params = parseParams(params).withDefaultTFO().encode()
 		source = "environment"
-	} else {
-		var exists bool
-		params, exists, err = readParamsFile(paramsFilePath(homeDir))
-		if err != nil {
-			return ParamsState{}, err
-		}
-		if !exists {
-			source = "default"
-		}
+	} else if !exists {
+		source = "default"
 	}
 	defaults, _, err := readParamsFile(defaultParamsFilePath(homeDir))
 	if err != nil {
 		return ParamsState{}, err
 	}
 	return ParamsState{Params: params, DefaultParams: defaults, Source: source}, nil
+}
+
+func readCurrentParams(homeDir string) (params string, environmentOverride, exists bool, err error) {
+	params, environmentOverride, err = environmentParams()
+	if err != nil {
+		return "", false, false, err
+	}
+	if environmentOverride {
+		return params, true, true, nil
+	}
+	params, exists, err = readParamsFile(paramsFilePath(homeDir))
+	return params, false, exists, err
 }
 
 func SetParams(homeDir, raw string) error {
