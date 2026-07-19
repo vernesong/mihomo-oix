@@ -1668,7 +1668,7 @@ func (s *Store) RemoveNodesData(group, config string, hostFailLimit int, nodes [
 		}
 	}
 	if len(statsToDelete) > 0 {
-		if delErr := s.DBBatchDeletePrefix(statsToDelete, true); delErr != nil && firstErr == nil {
+		if delErr := s.DBBatchDeletePrefix(statsToDelete, true); delErr != nil {
 			firstErr = delErr
 		}
 	}

@@ -8,8 +8,6 @@ import (
 	"net"
 	"sync"
 	"time"
-
-	"github.com/metacubex/mihomo/common/contextutils"
 )
 
 type MultiplexBaseDialer func(context.Context) (net.Conn, error)
@@ -224,7 +222,7 @@ func (d *MultiplexDialer) createClient(ctx context.Context) (*MultiplexClient, e
 		return nil, err
 	}
 
-	stop := contextutils.AfterFunc(ctx, func() {
+	stop := context.AfterFunc(ctx, func() {
 		_ = baseConn.Close()
 	})
 	client, err := StartMultiplexClient(ctx, baseConn)
