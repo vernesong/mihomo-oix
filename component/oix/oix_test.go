@@ -1,10 +1,15 @@
 package oix
 
 import (
+	"context"
+	"encoding/base64"
+	"encoding/json"
 	"net/http"
+	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"sync"
 	"testing"
 
@@ -13,6 +18,14 @@ import (
 
 func intPointer(value int) *int {
 	return &value
+}
+
+func setOixHTTPClientForTest(t *testing.T, client *http.Client) {
+	previous := oixHTTPClient
+	oixHTTPClient = client
+	t.Cleanup(func() {
+		oixHTTPClient = previous
+	})
 }
 
 func TestPlanDefaultParams(t *testing.T) {
@@ -53,6 +66,122 @@ func TestPlanIdentityFromResponseRejectsMissingData(t *testing.T) {
 	_, err := planIdentityFromResponse(informationResponse{Ret: http.StatusOK})
 	if err == nil {
 		t.Fatal("expected missing information data to be rejected")
+	}
+}
+
+func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
+	t.Setenv("OIX_PARAMS", "")
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	homeDir := t.TempDir()
+	if err := SetParams(homeDir, "&lv=1&tfo=false&area=hk"); err != nil {
+		t.Fatal(err)
+	}
+
+	oldAppSecret := AppSecret
+	oldSecretKey := ageSecretKey
+	oldPublicKey := agePublicKey
+	AppSecret = "test-secret"
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	t.Cleanup(func() {
+		AppSecret = oldAppSecret
+		ageSecretKey = oldSecretKey
+		agePublicKey = oldPublicKey
+	})
+
+	managedCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/information":
+			http.NotFound(w, r)
+		case "/api/v1/managed/flclash/direct":
+			managedCalls++
+			if got := r.URL.Query().Get("lv"); got != "1" {
+				t.Errorf("lv = %q, want 1", got)
+			}
+			if got := r.URL.Query().Get("tfo"); got != "false" {
+				t.Errorf("tfo = %q, want false", got)
+			}
+			if got := r.URL.Query().Get("area"); got != "hk" {
+				t.Errorf("area = %q, want hk", got)
+			}
+			config := base64.StdEncoding.EncodeToString([]byte("proxies: []"))
+			timestamp := r.Header.Get("X-Flclash-Timestamp")
+			w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
+			_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+
+	setOixHTTPClientForTest(t, server.Client())
+
+	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
+	if err != nil {
+		t.Fatalf("fetchFrom() error = %v", err)
+	}
+	if managedCalls != 1 {
+		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
+	}
+	plaintext, err := A.DecryptBytes(result.Config, secretKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if strings.TrimSpace(string(plaintext)) != "proxies: []" {
+		t.Fatalf("provider = %q", plaintext)
+	}
+}
+
+func TestFetchFromDoesNotFallbackOnAuthenticationFailure(t *testing.T) {
+	managedCalls := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/information" {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		managedCalls++
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+
+	setOixHTTPClientForTest(t, server.Client())
+
+	_, err := fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
+	if !IsAuthError(err) {
+		t.Fatalf("fetchFrom() error = %v, want authentication failure", err)
+	}
+	if managedCalls != 0 {
+		t.Fatalf("managed endpoint calls = %d, want 0", managedCalls)
+	}
+}
+
+func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/information":
+			_ = json.NewEncoder(w).Encode(informationResponse{
+				Ret:  http.StatusOK,
+				Data: &informationData{PlanCode: "iron"},
+			})
+		case "/api/v1/managed/flclash/direct":
+			_ = json.NewEncoder(w).Encode(apiResponse{
+				Ret: http.StatusUnauthorized,
+				Msg: "denied",
+			})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	setOixHTTPClientForTest(t, server.Client())
+
+	_, err := fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
+	if !IsAuthError(err) {
+		t.Fatalf("fetchFrom() error = %v, want authentication failure", err)
 	}
 }
 
