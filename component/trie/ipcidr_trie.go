@@ -152,7 +152,7 @@ func addIpv4Cidr(trie *IpCidrTrie, ip net.IP, groupSize int) {
 		if !node.hasChild(groupValue) {
 			err := node.addChild(groupValue)
 			if err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 			}
 		}
 
@@ -197,7 +197,7 @@ func addIpv6Cidr(trie *IpCidrTrie, ip net.IP, groupSize int) {
 		if !node.hasChild(groupValue) {
 			err := node.addChild(groupValue)
 			if err != nil {
-				log.Errorln(err.Error())
+				log.Errorln("%s", err)
 			}
 		}
 
