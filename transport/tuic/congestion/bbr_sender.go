@@ -388,26 +388,9 @@ func (b *bbrSender) OnCongestionEventEx(priorInFlight congestion.ByteCount, even
 	b.CalculateRecoveryWindow(bytesAcked, bytesLost)
 }
 
-//func (b *bbrSender) SetNumEmulatedConnections(n int) {
-//
-//}
-
 func (b *bbrSender) OnRetransmissionTimeout(packetsRetransmitted bool) {
 
 }
-
-//func (b *bbrSender) OnConnectionMigration() {
-//
-//}
-
-//// Experiments
-//func (b *bbrSender) SetSlowStartLargeReduction(enabled bool) {
-//
-//}
-
-//func (b *bbrSender) BandwidthEstimate() Bandwidth {
-//	return Bandwidth(b.maxBandwidth.GetBest())
-//}
 
 // BandwidthEstimate returns the current bandwidth estimate
 func (b *bbrSender) BandwidthEstimate() Bandwidth {
@@ -422,18 +405,6 @@ func (b *bbrSender) BandwidthEstimate() Bandwidth {
 	return BandwidthFromDelta(b.GetCongestionWindow(), srtt)
 }
 
-//func (b *bbrSender) HybridSlowStart() *HybridSlowStart {
-//	return nil
-//}
-
-//func (b *bbrSender) SlowstartThreshold() congestion.ByteCount {
-//	return 0
-//}
-
-//func (b *bbrSender) RenoBeta() float32 {
-//	return 0.0
-//}
-
 func (b *bbrSender) InRecovery() bool {
 	return b.recoveryState != NOT_IN_RECOVERY
 }
@@ -441,40 +412,6 @@ func (b *bbrSender) InRecovery() bool {
 func (b *bbrSender) InSlowStart() bool {
 	return b.mode == STARTUP
 }
-
-//func (b *bbrSender) ShouldSendProbingPacket() bool {
-//	if b.pacingGain <= 1 {
-//		return false
-//	}
-//	// TODO(b/77975811): If the pipe is highly under-utilized, consider not
-//	// sending a probing transmission, because the extra bandwidth is not needed.
-//	// If flexible_app_limited is enabled, check if the pipe is sufficiently full.
-//	if b.flexibleAppLimited {
-//		return !b.IsPipeSufficientlyFull()
-//	} else {
-//		return true
-//	}
-//}
-
-//func (b *bbrSender) IsPipeSufficientlyFull() bool {
-//	// See if we need more bytes in flight to see more bandwidth.
-//	if b.mode == STARTUP {
-//		// STARTUP exits if it doesn't observe a 25% bandwidth increase, so the CWND
-//		// must be more than 25% above the target.
-//		return b.GetBytesInFlight() >= b.GetTargetCongestionWindow(1.5)
-//	}
-//	if b.pacingGain > 1 {
-//		// Super-unity PROBE_BW doesn't exit until 1.25 * BDP is achieved.
-//		return b.GetBytesInFlight() >= b.GetTargetCongestionWindow(b.pacingGain)
-//	}
-//	// If bytes_in_flight are above the target congestion window, it should be
-//	// possible to observe the same or more bandwidth if it's available.
-//	return b.GetBytesInFlight() >= b.GetTargetCongestionWindow(1.1)
-//}
-
-//func (b *bbrSender) SetFromConfig() {
-//	// TODO: not impl.
-//}
 
 func (b *bbrSender) UpdateRoundTripCounter(lastAckedPacket congestion.PacketNumber) bool {
 	if b.currentRoundTripEnd == 0 || lastAckedPacket > b.currentRoundTripEnd {
@@ -586,9 +523,6 @@ func (b *bbrSender) UpdateRecoveryState(hasLosses, isRoundStart bool) {
 			// Since the conservation phase is meant to be lasting for a whole
 			// round, extend the current round as if it were started right now.
 			b.currentRoundTripEnd = b.lastSendPacket
-			if false && b.lastSampleIsAppLimited {
-				b.isAppLimitedRecovery = true
-			}
 		}
 	case CONSERVATION:
 		if isRoundStart {

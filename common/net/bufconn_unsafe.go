@@ -7,7 +7,7 @@ import (
 )
 
 // bufioReader copy from stdlib bufio/bufio.go
-// This structure has remained unchanged from go1.5 to go1.26.
+// This structure matches Go 1.26's bufio.Reader layout.
 type bufioReader struct {
 	buf          []byte
 	rd           io.Reader // reader provided by the client

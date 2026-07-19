@@ -189,7 +189,6 @@ func (ss *DomainSet) keys(f func(key string) bool) {
 	}
 
 	traverse(0, 0)
-	return
 }
 
 func (ss *DomainSet) Foreach(f func(key string) bool) {

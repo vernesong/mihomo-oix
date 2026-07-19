@@ -1612,7 +1612,7 @@ func (s *Store) RemoveNodesData(group, config string, hostFailLimit int, nodes [
 		}
 	}
 	if len(statsToDelete) > 0 {
-		if delErr := s.DBBatchDeletePrefix(statsToDelete, true); delErr != nil && firstErr == nil {
+		if delErr := s.DBBatchDeletePrefix(statsToDelete, true); delErr != nil {
 			firstErr = delErr
 		}
 	}
@@ -1970,6 +1970,4 @@ func (s *Store) CleanupOldRecords(group, config string) {
 				deleted, keyType, group, totalRecords-deleted)
 		}
 	}
-
-	return
 }

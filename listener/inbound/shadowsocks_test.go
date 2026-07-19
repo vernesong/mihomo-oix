@@ -250,9 +250,6 @@ func TestInboundShadowSocks_SimpleObfs_Tls(t *testing.T) {
 }
 
 func TestInboundShadowSocks_KcpTun(t *testing.T) {
-	if winGo120 {
-		t.Skip("skip kcptun test on windows go1.20")
-	}
 	inboundOptions := inbound.ShadowSocksOption{
 		KcpTun: inbound.KcpTun{
 			Enable: true,
