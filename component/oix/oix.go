@@ -48,8 +48,7 @@ var (
 	periodicHome   string
 	periodicMu     sync.RWMutex
 
-	oixHTTPOnce   sync.Once
-	oixHTTPClient *http.Client
+	oixHTTPClient = newOixHTTPClient()
 )
 
 var (
@@ -102,6 +101,7 @@ const (
 const (
 	maxRetries   = 2
 	totalTimeout = 30 * time.Second
+	planTimeout  = 5 * time.Second
 	hedgeDelay   = 250 * time.Millisecond
 )
 
@@ -492,11 +492,21 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
-	plan, err := fetchPlanIdentity(ctx, token, baseURL)
-	if err != nil {
-		return nil, err
+	planCtx, planCancel := context.WithTimeout(ctx, planTimeout)
+	plan, planErr := fetchPlanIdentity(planCtx, token, baseURL)
+	planCancel()
+
+	var params queryParams
+	var err error
+	if planErr == nil {
+		params, err = effectiveParamsForPlan(homeDir, plan)
+	} else {
+		if IsAuthError(planErr) || ctx.Err() != nil {
+			return nil, planErr
+		}
+		log.Warnln("[oixCloud] account information unavailable, using current options: %s", planErr)
+		params, err = effectiveParamsWithoutPlan(homeDir)
 	}
-	params, err := effectiveParamsForPlan(homeDir, plan)
 	if err != nil {
 		return nil, fmt.Errorf("resolve account options: %w", err)
 	}
@@ -535,6 +545,9 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 	var apiResp apiResponse
 	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
+	}
+	if apiResp.Ret != 0 && apiResp.Ret != http.StatusOK {
+		return nil, apiResponseError("managed config", apiResp.Ret, apiResp.Msg)
 	}
 
 	if err := verifyResponseSignature(ts, apiResp.Config, resp.Header.Get("X-Flclash-Response-Signature")); err != nil {
@@ -593,11 +606,7 @@ func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity
 
 func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error) {
 	if apiResp.Ret != http.StatusOK {
-		err := fmt.Errorf("account rejected (ret=%d): %s", apiResp.Ret, apiResp.Msg)
-		if apiResp.Ret == http.StatusUnauthorized || apiResp.Ret == http.StatusForbidden {
-			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		return planIdentity{}, err
+		return planIdentity{}, apiResponseError("account", apiResp.Ret, apiResp.Msg)
 	}
 	if apiResp.Data == nil {
 		return planIdentity{}, errors.New("account response has no data")
@@ -608,6 +617,14 @@ func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error)
 		Rank: apiResp.Data.PlanRank,
 		Name: strings.TrimSpace(apiResp.Data.Plan),
 	}, nil
+}
+
+func apiResponseError(scope string, ret int, msg string) error {
+	err := fmt.Errorf("%s rejected (ret=%d): %s", scope, ret, msg)
+	if ret == http.StatusUnauthorized || ret == http.StatusForbidden {
+		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
+	}
+	return err
 }
 
 func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
@@ -713,25 +730,25 @@ func decryptFlClash(data []byte) ([]byte, error) {
 	return plaintext, nil
 }
 
-func oixHTTPDo(req *http.Request) (*http.Response, error) {
-	oixHTTPOnce.Do(func() {
-		oixHTTPClient = &http.Client{
-			Timeout: 15 * time.Second,
-			Transport: &http.Transport{
-				Proxy: nil,
-				DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-					return dialer.DialContext(ctx, network, addr)
-				},
-				TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
-				ForceAttemptHTTP2:     true,
-				MaxIdleConns:          100,
-				IdleConnTimeout:       30 * time.Second,
-				TLSHandshakeTimeout:   10 * time.Second,
-				ExpectContinueTimeout: 1 * time.Second,
+func newOixHTTPClient() *http.Client {
+	return &http.Client{
+		Timeout: 15 * time.Second,
+		Transport: &http.Transport{
+			Proxy: nil,
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				return dialer.DialContext(ctx, network, addr)
 			},
-		}
-	})
+			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
+			ForceAttemptHTTP2:     true,
+			MaxIdleConns:          100,
+			IdleConnTimeout:       30 * time.Second,
+			TLSHandshakeTimeout:   10 * time.Second,
+			ExpectContinueTimeout: 1 * time.Second,
+		},
+	}
+}
 
+func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	deadline := time.Now().Add(totalTimeout)
 	for i := 0; i <= maxRetries; i++ {
