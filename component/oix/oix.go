@@ -3,8 +3,6 @@ package oix
 import (
 	"bytes"
 	"context"
-	"crypto/aes"
-	"crypto/cipher"
 	"crypto/hmac"
 	"crypto/sha256"
 	"crypto/tls"
@@ -35,7 +33,6 @@ var (
 	AppSecret      string
 	ApiDomains     string
 	SpareApiDomain string
-	ProfileKey     string
 
 	ageSecretKey   string
 	agePublicKey   string
@@ -100,22 +97,21 @@ const (
 )
 
 const (
-	maxRetries   = 2
-	totalTimeout = 30 * time.Second
-	planTimeout  = 5 * time.Second
-	hedgeDelay   = 250 * time.Millisecond
+	maxRetries              = 2
+	totalTimeout            = 30 * time.Second
+	planTimeout             = 5 * time.Second
+	hedgeDelay              = 250 * time.Millisecond
+	maxManagedResponseBytes = 16 << 20
+	maxAccountResponseBytes = 1 << 20
+	maxErrorResponseBytes   = 1024
 )
 
-type Result struct {
-	Config   []byte
-	Provider []byte
-}
+const oixUserAgent = "OpenClash for oixCloud"
 
 type apiResponse struct {
-	Ret      int    `json:"ret"`
-	Msg      string `json:"msg"`
-	Config   string `json:"config"`
-	Provider string `json:"provider"`
+	Ret    int    `json:"ret"`
+	Msg    string `json:"msg"`
+	Config string `json:"config"`
 }
 
 type planIdentity struct {
@@ -155,7 +151,6 @@ func ageKeyPair() (secretKey, publicKey string) {
 			keyPath := ageKeyFilePath(homeDir)
 			if err := os.Chmod(keyPath, 0o600); err != nil && !os.IsNotExist(err) {
 				log.Warnln("[oixCloud] secure age key failed: %s", err)
-				return
 			}
 			if data, err := os.ReadFile(keyPath); err == nil {
 				sk := strings.TrimSpace(string(data))
@@ -178,9 +173,6 @@ func ageKeyPair() (secretKey, publicKey string) {
 				log.Warnln("[oixCloud] persist age key failed: %s", err)
 			} else if err := os.Chmod(ageKeyFilePath(homeDir), 0o600); err != nil {
 				log.Warnln("[oixCloud] secure age key failed: %s", err)
-				_ = os.Remove(ageKeyFilePath(homeDir))
-				ageSecretKey = ""
-				agePublicKey = ""
 			}
 		}
 	})
@@ -239,20 +231,20 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 
 	log.Infoln("[oixCloud] fetching provider...")
 
-	result, err := fetchBest(context.Background(), token, urls, homeDir)
+	config, err := fetchBest(context.Background(), token, urls, homeDir)
 	if err != nil {
 		if IsAuthError(err) {
-			log.Warnln("[oixCloud] auth failed, provider [%s] removed", ProviderFile())
+			log.Warnln("[oixCloud] auth failed for provider [%s]", ProviderFile())
 		} else {
 			log.Warnln("[oixCloud] config fetch failed: %s", err)
 		}
 		return false, err
 	}
-	if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
+	if len(config) == 0 {
 		log.Warnln("[oixCloud] ensure failed, no provider found for [%s]", ProviderFile())
 		return false, nil
 	}
-	ok := saveResult(dir, homeDir, result)
+	ok := saveResult(dir, homeDir, config)
 	if !ok {
 		return false, errors.New("save failed")
 	}
@@ -301,7 +293,7 @@ func StartPeriodicUpdate(dir, homeDir string) {
 				if len(urls) == 0 {
 					continue
 				}
-				result, err := fetchBest(ctx, token, urls, homeDir)
+				config, err := fetchBest(ctx, token, urls, homeDir)
 				if err != nil {
 					if ctx.Err() != nil {
 						return
@@ -309,13 +301,13 @@ func StartPeriodicUpdate(dir, homeDir string) {
 					log.Warnln("[oixCloud] periodic update failed: %s", err)
 					continue
 				}
-				if result == nil || (len(result.Config) == 0 && len(result.Provider) == 0) {
+				if len(config) == 0 {
 					continue
 				}
 				if ctx.Err() != nil {
 					return
 				}
-				ok := saveResult(dir, homeDir, result)
+				ok := saveResult(dir, homeDir, config)
 				if ok {
 					log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 				}
@@ -430,7 +422,7 @@ func IsOixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
-func fetchBest(parent context.Context, token string, urls []string, homeDir string) (*Result, error) {
+func fetchBest(parent context.Context, token string, urls []string, homeDir string) ([]byte, error) {
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
@@ -443,7 +435,7 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	defer cancel()
 
 	type outcome struct {
-		result *Result
+		config []byte
 		err    error
 	}
 	results := make(chan outcome, len(urls))
@@ -460,25 +452,31 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 					return
 				}
 			}
-			result, err := fetchFrom(ctx, token, baseURL, homeDir)
-			results <- outcome{result, err}
+			config, err := fetchFrom(ctx, token, baseURL, homeDir)
+			results <- outcome{config, err}
 		}(i, baseURL)
 	}
 
 	var lastErr error
 	var authErr error
+	hadEmpty := false
 	for range urls {
 		o := <-results
-		if o.err == nil && o.result != nil {
-			cancel()
-			return o.result, nil
-		}
-		if o.err != nil {
-			lastErr = o.err
-			if errors.Is(o.err, ErrAuthFailed) {
-				authErr = o.err
+		if o.err == nil {
+			if len(o.config) > 0 {
+				cancel()
+				return o.config, nil
 			}
+			hadEmpty = true
+			continue
 		}
+		lastErr = o.err
+		if errors.Is(o.err, ErrAuthFailed) {
+			authErr = o.err
+		}
+	}
+	if hadEmpty {
+		return nil, nil
 	}
 	if authErr != nil {
 		return nil, authErr
@@ -489,7 +487,14 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	return nil, lastErr
 }
 
-func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, error) {
+func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, error) {
+	if agePublicKey == "" {
+		return nil, errors.New("age key unavailable")
+	}
+	if AppSecret == "" {
+		return nil, errors.New("app secret unavailable")
+	}
+
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 
@@ -520,9 +525,9 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, errors.New("create request failed")
+		return nil, fmt.Errorf("create request: %w", err)
 	}
-	req.Header.Set("User-Agent", "OpenClash for oixCloud")
+	req.Header.Set("User-Agent", oixUserAgent)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
 	req.Header.Set("X-Flclash-Signature", sig)
@@ -530,24 +535,24 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 
 	resp, err := oixHTTPDo(req)
 	if err != nil {
-		return nil, errors.New("server request failed")
+		return nil, fmt.Errorf("server request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBytes))
 		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == 401 || resp.StatusCode == 403 {
+		if resp.StatusCode == 401 {
 			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
 		}
 		return nil, err
 	}
 
 	var apiResp apiResponse
-	if err := json.NewDecoder(resp.Body).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxManagedResponseBytes)).Decode(&apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
-	if apiResp.Ret != 0 && apiResp.Ret != http.StatusOK {
+	if apiResp.Ret != http.StatusOK {
 		return nil, apiResponseError("managed config", apiResp.Ret, apiResp.Msg)
 	}
 
@@ -555,51 +560,38 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*Result, er
 		return nil, err
 	}
 
-	result := &Result{}
-
-	if apiResp.Config != "" {
-		result.Config, err = decodeAndDecrypt(apiResp.Config, "config", agePublicKey)
-		if err != nil {
-			return nil, err
-		}
+	if apiResp.Config == "" {
+		return nil, nil
 	}
-
-	if apiResp.Provider != "" {
-		result.Provider, err = decodeAndDecrypt(apiResp.Provider, "provider", agePublicKey)
-		if err != nil {
-			return nil, err
-		}
-	}
-
-	return result, nil
+	return decodeArmoredConfig(apiResp.Config)
 }
 
 func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity, error) {
 	url := baseURL + "/api/v1/information"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return planIdentity{}, errors.New("create account request failed")
+		return planIdentity{}, fmt.Errorf("create account request: %w", err)
 	}
-	req.Header.Set("User-Agent", "OpenClash for oixCloud")
+	req.Header.Set("User-Agent", oixUserAgent)
 	req.Header.Set("Authorization", "Bearer "+token)
 
 	resp, err := oixHTTPDo(req)
 	if err != nil {
-		return planIdentity{}, errors.New("account request failed")
+		return planIdentity{}, fmt.Errorf("account request: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, 1024))
+		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBytes))
 		err := fmt.Errorf("account HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusUnauthorized || resp.StatusCode == http.StatusForbidden {
+		if resp.StatusCode == http.StatusUnauthorized {
 			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
 		}
 		return planIdentity{}, err
 	}
 
 	var apiResp informationResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&apiResp); err != nil {
+	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAccountResponseBytes)).Decode(&apiResp); err != nil {
 		return planIdentity{}, fmt.Errorf("decode account response: %w", err)
 	}
 	return planIdentityFromResponse(apiResp)
@@ -622,113 +614,45 @@ func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error)
 
 func apiResponseError(scope string, ret int, msg string) error {
 	err := fmt.Errorf("%s rejected (ret=%d): %s", scope, ret, msg)
-	if ret == http.StatusUnauthorized || ret == http.StatusForbidden {
+	if ret == http.StatusUnauthorized {
 		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
 	}
 	return err
 }
 
-func decodeAndDecrypt(encoded, label, agePublicKey string) ([]byte, error) {
+func decodeArmoredConfig(encoded string) ([]byte, error) {
 	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("decode %s: %w", label, err)
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
-	plaintext, err := decryptConfigPayload(raw, agePublicKey)
-	if err != nil {
-		return nil, fmt.Errorf("decrypt %s: %w", label, err)
+	if !isAgeArmored(raw) {
+		return nil, errors.New("config not encrypted")
 	}
-	return plaintext, nil
+	return raw, nil
 }
 
-func decryptConfigPayload(data []byte, agePublicKey string) ([]byte, error) {
-	if isAgeArmored(data) {
-		return data, nil
-	}
-	plaintext, err := decryptFlClashIfNeeded(data)
-	if err != nil {
-		return nil, err
-	}
-	return age.EncryptBytes(plaintext, agePublicKey)
-}
-
-func sign(timestamp string) string {
+func sign(message string) string {
 	if AppSecret == "" {
 		return ""
 	}
 	mac := hmac.New(sha256.New, []byte(AppSecret))
-	mac.Write([]byte(timestamp))
+	mac.Write([]byte(message))
 	return hex.EncodeToString(mac.Sum(nil))
 }
 
 func verifyResponseSignature(timestamp, configB64, headerSig string) error {
-	if headerSig != "" {
-		expected := sign(timestamp + "." + configB64)
-		if !hmac.Equal([]byte(expected), []byte(headerSig)) {
-			return errors.New("response signature mismatch")
-		}
-		return nil
-	}
-	raw, err := base64.StdEncoding.DecodeString(configB64)
-	if err != nil {
-		return nil
-	}
-	if isAgeArmored(raw) {
+	if headerSig == "" {
 		return errors.New("missing response signature")
+	}
+	expected := sign(timestamp + "." + configB64)
+	if !hmac.Equal([]byte(expected), []byte(headerSig)) {
+		return errors.New("response signature mismatch")
 	}
 	return nil
 }
 
 func isAgeArmored(data []byte) bool {
-	return bytes.HasPrefix(bytes.TrimLeft(data, " \t\r\n"), []byte("-----BEGIN AGE ENCRYPTED FILE-----"))
-}
-
-func isFlClashEncrypted(data []byte) bool {
-	return len(data) >= 5 && string(data[:4]) == "FLEN" && data[4] == 0x02
-}
-
-func decryptFlClashIfNeeded(data []byte) ([]byte, error) {
-	if !isFlClashEncrypted(data) {
-		return data, nil
-	}
-	return decryptFlClash(data)
-}
-
-func decryptFlClash(data []byte) ([]byte, error) {
-	if len(data) < 4+1+12+16 {
-		return nil, errors.New("invalid encrypted structure size")
-	}
-	if string(data[:4]) != "FLEN" || data[4] != 0x02 {
-		return nil, errors.New("magic or version mismatch")
-	}
-	iv := data[5 : 5+12]
-	ciphertext := data[5+12:]
-
-	if ProfileKey == "" {
-		return nil, errors.New("profile key is not injected")
-	}
-	hash := sha256.Sum256([]byte(ProfileKey))
-
-	block, err := aes.NewCipher(hash[:])
-	if err != nil {
-		return nil, err
-	}
-	aesgcm, err := cipher.NewGCM(block)
-	if err != nil {
-		return nil, err
-	}
-
-	plaintext, err := aesgcm.Open(nil, iv, ciphertext, nil)
-	if err != nil {
-		return nil, err
-	}
-
-	for i := 0; i < len(plaintext); i++ {
-		if plaintext[i] < 32 && plaintext[i] != '\n' && plaintext[i] != '\r' && plaintext[i] != '\t' {
-			return nil, errors.New("invalid character found in decrypted text")
-		}
-	}
-
-	return plaintext, nil
+	return bytes.HasPrefix(data, []byte(age.FileHeader))
 }
 
 func newOixHTTPClient() *http.Client {
@@ -781,14 +705,10 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	return nil, fmt.Errorf("request failed after %d retries", maxRetries+1)
 }
 
-func saveResult(dir, homeDir string, result *Result) bool {
+func saveResult(dir, homeDir string, raw []byte) bool {
 	p := filepath.Join(homeDir, dir, ProviderFile())
 
-	raw := result.Provider
-	if len(raw) == 0 {
-		raw = result.Config
-	}
-	if !bytes.HasPrefix(raw, []byte(age.FileHeader)) || ageSecretKey == "" {
+	if !isAgeArmored(raw) || ageSecretKey == "" {
 		log.Warnln("[oixCloud] refuse to write unencrypted provider")
 		return false
 	}

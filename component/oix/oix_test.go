@@ -175,7 +175,12 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 			if got := r.URL.Query().Get("area"); got != "hk" {
 				t.Errorf("area = %q, want hk", got)
 			}
-			config := base64.StdEncoding.EncodeToString([]byte("proxies: []"))
+			encrypted, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			config := base64.StdEncoding.EncodeToString(encrypted)
 			timestamp := r.Header.Get("X-Flclash-Timestamp")
 			w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
 			_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
@@ -194,7 +199,7 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 	if managedCalls != 1 {
 		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
 	}
-	plaintext, err := A.DecryptBytes(result.Config, secretKey)
+	plaintext, err := A.DecryptBytes(result, secretKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -277,6 +282,22 @@ func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
 }
 
 func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
+	oldAppSecret := AppSecret
+	oldSecretKey := ageSecretKey
+	oldPublicKey := agePublicKey
+	AppSecret = "test-secret"
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	t.Cleanup(func() {
+		AppSecret = oldAppSecret
+		ageSecretKey = oldSecretKey
+		agePublicKey = oldPublicKey
+	})
+
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/api/v1/information":
@@ -296,7 +317,7 @@ func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
 	t.Cleanup(server.Close)
 	setOixHTTPClientForTest(t, server.Client())
 
-	_, err := fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
+	_, err = fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
 	if !IsAuthError(err) {
 		t.Fatalf("fetchFrom() error = %v, want authentication failure", err)
 	}
@@ -345,7 +366,7 @@ func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 		ageSecretKey = oldSecretKey
 	})
 
-	if !saveResult("providers", homeDir, &Result{Provider: raw}) {
+	if !saveResult("providers", homeDir, raw) {
 		t.Fatal("saveResult failed")
 	}
 	info, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider"))
@@ -365,7 +386,7 @@ func TestSaveResultRejectsUnencryptedProvider(t *testing.T) {
 		oixProviderName = oldProviderName
 	})
 
-	if saveResult("providers", homeDir, &Result{Provider: []byte("proxies: []")}) {
+	if saveResult("providers", homeDir, []byte("proxies: []")) {
 		t.Fatal("saveResult accepted an unencrypted provider")
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider")); !os.IsNotExist(err) {
@@ -385,7 +406,7 @@ func TestSaveResultRejectsInvalidAgeProvider(t *testing.T) {
 	})
 
 	raw := []byte("-----BEGIN AGE ENCRYPTED FILE-----\nproxies: []")
-	if saveResult("providers", homeDir, &Result{Provider: raw}) {
+	if saveResult("providers", homeDir, raw) {
 		t.Fatal("saveResult accepted an invalid Age provider")
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider")); !os.IsNotExist(err) {
