@@ -21,10 +21,48 @@ var (
 	DNSAddr       string
 )
 
+type managedDNSConfig struct {
+	domain string
+	addr   string
+}
+
+var managedDNS atomic.Pointer[managedDNSConfig]
+
+func ConfigureManagedDNS(domain, addr string) {
+	domain = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(domain), "."))
+	addr = strings.TrimSpace(addr)
+	if domain == "" || addr == "" {
+		return
+	}
+	managedDNS.Store(&managedDNSConfig{domain: domain, addr: addr})
+}
+
+func ResetManagedDNS() {
+	managedDNS.Store(nil)
+}
+
+func ManagedDNSAddr() string {
+	if config := managedDNS.Load(); config != nil {
+		return config.addr
+	}
+	return DNSAddr
+}
+
+func ManagedNodesDomain() string {
+	if config := managedDNS.Load(); config != nil {
+		return config.domain
+	}
+	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(NodesDomains), "."))
+}
+
 var Ensured int32
 
 func SetEnsured() {
 	atomic.StoreInt32(&Ensured, 1)
+}
+
+func ClearEnsured() {
+	atomic.StoreInt32(&Ensured, 0)
 }
 
 func IsEnsured() bool {
@@ -82,14 +120,15 @@ func isCloudIP(host string) bool {
 }
 
 func ShouldObfuscate(domain string) bool {
-	if NodesDomains == "" {
+	nodesDomain := ManagedNodesDomain()
+	if nodesDomain == "" {
 		return false
 	}
 	d := strings.ToLower(strings.TrimSuffix(domain, "."))
-	if d == NodesDomains {
+	if d == nodesDomain {
 		return true
 	}
-	return strings.HasSuffix(d, "."+NodesDomains)
+	return strings.HasSuffix(d, "."+nodesDomain)
 }
 
 func Obfuscate(domain string) string {
@@ -108,15 +147,16 @@ func Obfuscate(domain string) string {
 }
 
 func MaskDomain(domain string) string {
+	nodesDomain := ManagedNodesDomain()
 	d := strings.ToLower(strings.TrimSuffix(domain, "."))
-	if d == NodesDomains {
-		return "***." + NodesDomains
+	if d == nodesDomain {
+		return "***." + nodesDomain
 	}
-	suffix := "." + NodesDomains
+	suffix := "." + nodesDomain
 	if strings.HasSuffix(d, suffix) {
 		return "***" + suffix
 	}
-	return "***." + NodesDomains
+	return "***." + nodesDomain
 }
 
 func ShouldMask(host string) bool {

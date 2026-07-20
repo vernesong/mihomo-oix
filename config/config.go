@@ -502,7 +502,7 @@ func DefaultRawConfig() *RawConfig {
 		LgbmAutoUpdate:     false,
 		LgbmUpdateInterval: 72,
 		LgbmUrl:            lightgbm.GetModelDownloadURL(),
-		UnifiedDelay:       false,
+		UnifiedDelay:       true,
 		Authentication:     []string{},
 		LogLevel:           log.INFO,
 		Hosts:              map[string]any{},
