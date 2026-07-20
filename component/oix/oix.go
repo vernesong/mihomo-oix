@@ -14,6 +14,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -27,6 +28,7 @@ import (
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"gopkg.in/yaml.v3"
 )
 
 var (
@@ -222,10 +224,12 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	token := getToken()
 	if token == "" {
+		oixdns.ClearEnsured()
 		return false, ErrNoToken
 	}
 	urls := apiBaseURLs()
 	if len(urls) == 0 {
+		oixdns.ClearEnsured()
 		return false, ErrNoDomains
 	}
 
@@ -234,14 +238,17 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	config, err := fetchBest(context.Background(), token, urls, homeDir)
 	if err != nil {
 		if IsAuthError(err) {
+			oixdns.ClearEnsured()
 			log.Warnln("[oixCloud] auth failed for provider [%s]", ProviderFile())
 		} else {
 			log.Warnln("[oixCloud] config fetch failed: %s", err)
+			ensureFromDisk(dir, homeDir)
 		}
 		return false, err
 	}
 	if len(config) == 0 {
 		log.Warnln("[oixCloud] ensure failed, no provider found for [%s]", ProviderFile())
+		ensureFromDisk(dir, homeDir)
 		return false, nil
 	}
 	ok := saveResult(dir, homeDir, config)
@@ -259,6 +266,19 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 
 func SetProviderName(name string) {
 	oixProviderName = name
+}
+
+func ensureFromDisk(dir, homeDir string) {
+	raw, err := os.ReadFile(filepath.Join(homeDir, dir, ProviderFile()))
+	if err != nil || !isAgeArmored(raw) || ageSecretKey == "" {
+		return
+	}
+	plain, err := age.DecryptBytes(raw, ageSecretKey)
+	if err != nil {
+		return
+	}
+	applyManagedDNSConfig(plain)
+	oixdns.SetEnsured()
 }
 
 func StartPeriodicUpdate(dir, homeDir string) {
@@ -407,6 +427,8 @@ func Login(token string) (bool, error) {
 
 func Logout() {
 	SetToken("")
+	oixdns.ClearEnsured()
+	oixdns.ResetManagedDNS()
 	StopPeriodicUpdate()
 	dir, homeDir := providerPaths()
 	if homeDir != "" {
@@ -426,7 +448,9 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
-	ageKeyPair()
+	if ageSecretKey == "" || agePublicKey == "" {
+		ageKeyPair()
+	}
 	if len(urls) == 1 {
 		return fetchFrom(parent, token, urls[0], homeDir)
 	}
@@ -712,7 +736,8 @@ func saveResult(dir, homeDir string, raw []byte) bool {
 		log.Warnln("[oixCloud] refuse to write unencrypted provider")
 		return false
 	}
-	if _, err := age.DecryptBytes(raw, ageSecretKey); err != nil {
+	plain, err := age.DecryptBytes(raw, ageSecretKey)
+	if err != nil {
 		log.Warnln("[oixCloud] refuse to write invalid encrypted provider")
 		return false
 	}
@@ -729,8 +754,75 @@ func saveResult(dir, homeDir string, raw []byte) bool {
 		log.Warnln("[oixCloud] secure file %s: %s", p, err)
 		return false
 	}
+	applyManagedDNSConfig(plain)
 
 	return true
+}
+
+type managedConfig struct {
+	DNS struct {
+		NameServerPolicy map[string]any `yaml:"nameserver-policy"`
+	} `yaml:"dns"`
+}
+
+func applyManagedDNSConfig(raw []byte) {
+	var config managedConfig
+	if err := yaml.Unmarshal(raw, &config); err != nil {
+		return
+	}
+	oixdns.ResetManagedDNS()
+	target := oixdns.ManagedNodesDomain()
+	for pattern, value := range config.DNS.NameServerPolicy {
+		domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(pattern), "+."))
+		domain = strings.TrimPrefix(strings.TrimSuffix(domain, "."), ".")
+		if domain != target {
+			continue
+		}
+		for _, nameserver := range managedNameServers(value) {
+			if addr, ok := managedDNSAddress(nameserver); ok {
+				oixdns.ConfigureManagedDNS(domain, addr)
+				return
+			}
+		}
+	}
+}
+
+func managedNameServers(value any) []string {
+	switch value := value.(type) {
+	case string:
+		return []string{value}
+	case []string:
+		return value
+	case []any:
+		servers := make([]string, 0, len(value))
+		for _, item := range value {
+			if server, ok := item.(string); ok {
+				servers = append(servers, server)
+			}
+		}
+		return servers
+	default:
+		return nil
+	}
+}
+
+func managedDNSAddress(nameserver string) (string, bool) {
+	nameserver = strings.TrimSpace(nameserver)
+	if parsed, err := url.Parse(nameserver); err == nil && parsed.Host != "" {
+		if parsed.Scheme != "udp" && parsed.Scheme != "tcp" {
+			return "", false
+		}
+		nameserver = parsed.Host
+	}
+	host, port, err := net.SplitHostPort(nameserver)
+	if err != nil || net.ParseIP(host) == nil {
+		return "", false
+	}
+	portNumber, err := strconv.Atoi(port)
+	if err != nil || portNumber < 1 || portNumber > 65535 {
+		return "", false
+	}
+	return net.JoinHostPort(host, port), true
 }
 
 func ProviderFile() string {

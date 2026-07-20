@@ -18,6 +18,7 @@ import (
 
 	P "github.com/metacubex/mihomo/adapter/provider"
 	A "github.com/metacubex/mihomo/component/age"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	R "github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
 	D "github.com/miekg/dns"
@@ -408,5 +409,140 @@ func TestSaveResultRejectsInvalidAgeProvider(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(homeDir, "providers", "test-provider")); !os.IsNotExist(err) {
 		t.Fatalf("invalid Age provider was written: %v", err)
+	}
+}
+
+type rewriteTransport struct {
+	host string
+}
+
+func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) {
+	clone := req.Clone(req.Context())
+	clone.URL.Scheme = "http"
+	clone.URL.Host = rt.host
+	return http.DefaultTransport.RoundTrip(clone)
+}
+
+func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
+	t.Helper()
+	homeDir = t.TempDir()
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAppSecret, oldSecretKey, oldPublicKey := AppSecret, ageSecretKey, agePublicKey
+	oldApiDomains, oldSpare := ApiDomains, SpareApiDomain
+	oldHomeDir := C.Path.HomeDir()
+	AppSecret = "test-secret"
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	SpareApiDomain = ""
+	C.SetHomeDir(homeDir)
+	SetToken("test-token")
+	oixdns.ClearEnsured()
+	t.Cleanup(func() {
+		AppSecret, ageSecretKey, agePublicKey = oldAppSecret, oldSecretKey, oldPublicKey
+		ApiDomains, SpareApiDomain = oldApiDomains, oldSpare
+		C.SetHomeDir(oldHomeDir)
+		SetToken("")
+		oixdns.ClearEnsured()
+	})
+
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(status)
+	}))
+	t.Cleanup(server.Close)
+	ApiDomains = "oix.test"
+	setOixHTTPClientForTest(t, &http.Client{Transport: rewriteTransport{host: server.Listener.Addr().String()}})
+
+	if err := os.MkdirAll(filepath.Join(homeDir, defaultProviderDir), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	provider, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+	providerPath := filepath.Join(homeDir, defaultProviderDir, ProviderFile())
+	if err := os.WriteFile(providerPath, provider, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	return homeDir
+}
+
+func TestEnsureKeepsManagedDNSWhenFetchFailsWithCachedProvider(t *testing.T) {
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+
+	if _, err := Ensure(defaultProviderDir, homeDir, true); err == nil {
+		t.Fatal("Ensure() expected fetch error")
+	}
+	if !oixdns.IsEnsured() {
+		t.Fatal("managed DNS not enabled despite cached provider on disk")
+	}
+}
+
+func TestEnsureRejectsInvalidCachedProvider(t *testing.T) {
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+	providerPath := filepath.Join(homeDir, defaultProviderDir, ProviderFile())
+	if err := os.WriteFile(providerPath, []byte("invalid"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, err := Ensure(defaultProviderDir, homeDir, true); err == nil {
+		t.Fatal("Ensure() expected fetch error")
+	}
+	if oixdns.IsEnsured() {
+		t.Fatal("managed DNS enabled with invalid cached provider")
+	}
+}
+
+func TestEnsureSkipsManagedDNSOnAuthFailure(t *testing.T) {
+	homeDir := setupEnsureFetchFailure(t, http.StatusUnauthorized)
+
+	_, err := Ensure(defaultProviderDir, homeDir, true)
+	if !IsAuthError(err) {
+		t.Fatalf("Ensure() error = %v, want auth error", err)
+	}
+	if oixdns.IsEnsured() {
+		t.Fatal("managed DNS enabled after auth failure")
+	}
+}
+
+func TestApplyManagedDNSConfig(t *testing.T) {
+	oldDomain, oldAddr := oixdns.NodesDomains, oixdns.DNSAddr
+	oixdns.NodesDomains = "cloud-nodes.example"
+	oixdns.DNSAddr = "127.0.0.1:53"
+	oixdns.ResetManagedDNS()
+	t.Cleanup(func() {
+		oixdns.NodesDomains, oixdns.DNSAddr = oldDomain, oldAddr
+		oixdns.ResetManagedDNS()
+	})
+
+	applyManagedDNSConfig([]byte(`
+dns:
+  nameserver-policy:
+    +.cloud-nodes.example:
+      - udp://127.0.0.1:1053
+      - tcp://127.0.0.1:1053
+`))
+	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.1:1053" {
+		t.Fatalf("managed DNS address = %q, want 127.0.0.1:1053", got)
+	}
+
+	applyManagedDNSConfig([]byte(`
+dns:
+  nameserver-policy:
+    +.cloud-nodes.example: tcp://127.0.0.2:2053
+`))
+	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.2:2053" {
+		t.Fatalf("updated managed DNS address = %q, want 127.0.0.2:2053", got)
+	}
+
+	applyManagedDNSConfig([]byte(`
+dns:
+  nameserver-policy:
+    +.other.example: udp://127.0.0.3:3053
+`))
+	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.1:53" {
+		t.Fatalf("managed DNS address = %q after policy removal, want fallback", got)
 	}
 }
