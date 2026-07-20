@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"net/netip"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/arc"
@@ -49,7 +50,6 @@ type Resolver struct {
 	cache                 dnsCache
 	policy                []dnsPolicy
 	defaultResolver       *Resolver
-	oixClient             dnsClient
 }
 
 func (r *Resolver) LookupIPPrimaryIPv4(ctx context.Context, host string) (ips []netip.Addr, err error) {
@@ -194,9 +194,13 @@ func (r *Resolver) ExchangeContext(ctx context.Context, m *D.Msg) (msg *D.Msg, e
 func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.Msg, err error) {
 	domain := msgToDomain(m)
 	q := m.Question[0]
-	if r.oixClient != nil && oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain) {
+	if oixdns.IsEnsured() && oixdns.ShouldObfuscate(domain) {
+		oc := oixSharedClient()
+		if oc == nil {
+			return nil, errors.New("oix DNS unavailable")
+		}
 		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
-		msg, err = r.oixClient.ExchangeContext(ctx, m)
+		msg, err = oc.ExchangeContext(ctx, m)
 		m.Question[0] = q
 		if err == nil && msg != nil {
 			markCloudIPsFromMsg(msg)
@@ -543,14 +547,6 @@ func NewResolverFromClient(client dnsClient) *Resolver {
 }
 
 func NewResolver(config Config) (rs Resolvers) {
-	var oixClient dnsClient
-	if oixdns.DNSAddr != "" {
-		oixClient = &oixDNSClient{
-			udp: newClient(oixdns.DNSAddr, nil, "udp", nil, nil, ""),
-			tcp: newClient(oixdns.DNSAddr, nil, "tcp", nil, nil, ""),
-		}
-	}
-
 	defaultResolver := &Resolver{
 		main:        transform(config.Default, nil),
 		cache:       config.newCache(),
@@ -627,7 +623,6 @@ func NewResolver(config Config) (rs Resolvers) {
 		cache:       config.newCache(),
 		ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
 		policy:      makePolicy(config.Policy),
-		oixClient:   oixClient,
 	}
 	r.defaultResolver = defaultResolver
 	rs.Resolver = r
@@ -639,7 +634,6 @@ func NewResolver(config Config) (rs Resolvers) {
 			cache:       config.newCache(),
 			ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
 			policy:      makePolicy(config.ProxyServerPolicy),
-			oixClient:   oixClient,
 		}
 	}
 
@@ -649,7 +643,6 @@ func NewResolver(config Config) (rs Resolvers) {
 			main:        cacheTransform(config.DirectServer),
 			cache:       config.newCache(),
 			ipv6Timeout: time.Duration(config.IPv6Timeout) * time.Millisecond,
-			oixClient:   oixClient,
 		}
 		if config.DirectFollowPolicy {
 			rs.DirectResolver.policy = r.policy
@@ -696,6 +689,29 @@ const oixUDPTimeout = 3 * time.Second
 type oixDNSClient struct {
 	udp dnsClient
 	tcp dnsClient
+}
+
+var oixClientCache struct {
+	sync.Mutex
+	addr   string
+	client dnsClient
+}
+
+func oixSharedClient() dnsClient {
+	addr := oixdns.ManagedDNSAddr()
+	if addr == "" {
+		return nil
+	}
+	oixClientCache.Lock()
+	defer oixClientCache.Unlock()
+	if oixClientCache.addr != addr {
+		oixClientCache.addr = addr
+		oixClientCache.client = &oixDNSClient{
+			udp: newClient(addr, nil, "udp", nil, nil, ""),
+			tcp: newClient(addr, nil, "tcp", nil, nil, ""),
+		}
+	}
+	return oixClientCache.client
 }
 
 func (c *oixDNSClient) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
