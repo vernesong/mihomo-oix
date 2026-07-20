@@ -70,7 +70,6 @@ func TestBuildWorkflowFailsFastForRequiredOIXSecrets(t *testing.T) {
 		"OIX_DOMAINS",
 		"OIX_DNS_ADDR",
 		"OIX_API_DOMAINS",
-		"OIX_PROFILE_KEY",
 	}
 	if !strings.Contains(body, "required=(") {
 		t.Fatal("workflow does not declare required OIX secrets")

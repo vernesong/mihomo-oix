@@ -166,7 +166,6 @@ jobs:
         OIX_DNS_ADDR: ${{ secrets.OIX_DNS_ADDR }}
         OIX_API_DOMAINS: ${{ secrets.OIX_API_DOMAINS }}
         OIX_SPARE_API_DOMAIN: ${{ secrets.OIX_SPARE_API_DOMAIN }}
-        OIX_PROFILE_KEY: ${{ secrets.OIX_PROFILE_KEY }}
       run: |
         required=(
           OIX_APP_SECRET
@@ -174,7 +173,6 @@ jobs:
           OIX_DOMAINS
           OIX_DNS_ADDR
           OIX_API_DOMAINS
-          OIX_PROFILE_KEY
         )
         missing=0
         for name in "${required[@]}"; do
@@ -200,7 +198,6 @@ jobs:
         echo "ENC_DNS_ADDR=$(v2enc OIX_DNS_ADDR)"              >> $GITHUB_ENV
         echo "ENC_API_DOMAINS=$(v2enc OIX_API_DOMAINS)"        >> $GITHUB_ENV
         echo "ENC_SPARE_API_DOMAIN=$(v2enc OIX_SPARE_API_DOMAIN)" >> $GITHUB_ENV
-        echo "ENC_PROFILE_KEY=$(v2enc OIX_PROFILE_KEY)"        >> $GITHUB_ENV
 
     - name: Build core
       env:
@@ -222,7 +219,6 @@ jobs:
           -X 'github.com/metacubex/mihomo/component/oix/oixdns.DNSAddr=${ENC_DNS_ADDR}' \
           -X 'github.com/metacubex/mihomo/component/oix.ApiDomains=${ENC_API_DOMAINS}' \
           -X 'github.com/metacubex/mihomo/component/oix.SpareApiDomain=${ENC_SPARE_API_DOMAIN}' \
-          -X 'github.com/metacubex/mihomo/component/oix.ProfileKey=${ENC_PROFILE_KEY}' \
           -w -s -buildid="
         if [ "${{matrix.jobs.goos}}" = "windows" ]; then
           cp mihomo.exe mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe

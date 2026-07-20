@@ -17,7 +17,6 @@ func init() {
 	oixdns.DNSAddr = decodeSecret(oixdns.DNSAddr, 0xF2)
 	ApiDomains = decodeSecret(ApiDomains, 0x5E)
 	SpareApiDomain = decodeSecret(SpareApiDomain, 0x6D)
-	ProfileKey = decodeSecret(ProfileKey, 0x7F)
 }
 
 // decodeSecret decodes an injected secret. "v2:" values use the runtime-derived
