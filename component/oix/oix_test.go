@@ -15,6 +15,7 @@ import (
 	"strings"
 	"sync"
 	"testing"
+	"time"
 
 	P "github.com/metacubex/mihomo/adapter/provider"
 	A "github.com/metacubex/mihomo/component/age"
@@ -338,6 +339,12 @@ func TestPeriodicLifecycleConcurrent(t *testing.T) {
 		}()
 	}
 	waitGroup.Wait()
+}
+
+func TestDefaultUpdateInterval(t *testing.T) {
+	if defaultUpdateInterval != 24*time.Hour {
+		t.Fatalf("defaultUpdateInterval = %s, want 24h", defaultUpdateInterval)
+	}
 }
 
 func TestSaveResultUsesPrivatePermissions(t *testing.T) {
