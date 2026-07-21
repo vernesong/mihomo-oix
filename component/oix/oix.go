@@ -281,8 +281,10 @@ func ensureFromDisk(dir, homeDir string) {
 	oixdns.SetEnsured()
 }
 
+const defaultUpdateInterval = 24 * time.Hour
+
 func StartPeriodicUpdate(dir, homeDir string) {
-	interval := 3600 * time.Second
+	interval := defaultUpdateInterval
 	if s := os.Getenv("OIX_UPDATE_INTERVAL"); s != "" {
 		if d, err := strconv.Atoi(s); err == nil && d > 0 {
 			interval = time.Duration(d) * time.Second
