@@ -373,7 +373,10 @@ func writeParamsFile(path, value string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	return os.WriteFile(path, []byte(value), 0o600)
+	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func isReservedParamKey(key string) bool {
