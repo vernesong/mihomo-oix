@@ -180,6 +180,26 @@ func TestParamsFilesUsePrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestWriteParamsFileTightensExistingPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not portable on Windows")
+	}
+	path := filepath.Join(t.TempDir(), paramsFileName)
+	if err := os.WriteFile(path, []byte("old"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeParamsFile(path, "&tfo=true"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("params permissions = %o, want 600", got)
+	}
+}
+
 func TestEnvironmentParamsRejectMutations(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("OIX_PARAMS", "&type=love")

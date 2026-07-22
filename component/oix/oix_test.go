@@ -5,6 +5,7 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -26,13 +27,28 @@ import (
 )
 
 type staticResolver struct {
-	addresses []netip.Addr
-	err       error
-	calls     int
+	addresses           []netip.Addr
+	err                 error
+	calls               int
+	delay               time.Duration
+	waitForCancellation bool
 }
 
-func (r *staticResolver) LookupIP(context.Context, string) ([]netip.Addr, error) {
+func (r *staticResolver) LookupIP(ctx context.Context, _ string) ([]netip.Addr, error) {
 	r.calls++
+	if r.delay > 0 {
+		timer := time.NewTimer(r.delay)
+		defer timer.Stop()
+		select {
+		case <-timer.C:
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+	}
+	if r.waitForCancellation {
+		<-ctx.Done()
+		return nil, ctx.Err()
+	}
 	return r.addresses, r.err
 }
 
@@ -75,13 +91,17 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 
 	proxyResolver := &staticResolver{err: errors.New("proxy DNS unavailable")}
 	directResolver := &staticResolver{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+	bootstrapResolver := &staticResolver{err: errors.New("bootstrap DNS should not be used")}
 	oldProxyResolver := R.ProxyServerHostResolver
 	oldDirectResolver := R.DirectHostResolver
+	oldBootstrapResolver := oixBootstrapHostResolver
 	R.ProxyServerHostResolver = proxyResolver
 	R.DirectHostResolver = directResolver
+	oixBootstrapHostResolver = bootstrapResolver
 	t.Cleanup(func() {
 		R.ProxyServerHostResolver = oldProxyResolver
 		R.DirectHostResolver = oldDirectResolver
+		oixBootstrapHostResolver = oldBootstrapResolver
 	})
 
 	client := newOixHTTPClient()
@@ -91,9 +111,230 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 		t.Fatalf("direct request failed: %v", err)
 	}
 	_ = response.Body.Close()
-	if proxyResolver.calls != 0 || directResolver.calls != 1 {
-		t.Fatalf("resolver calls: proxy=%d direct=%d", proxyResolver.calls, directResolver.calls)
+	if proxyResolver.calls != 0 || directResolver.calls != 1 || bootstrapResolver.calls != 0 {
+		t.Fatalf("resolver calls: proxy=%d direct=%d bootstrap=%d", proxyResolver.calls, directResolver.calls, bootstrapResolver.calls)
 	}
+}
+
+func TestOixHTTPClientHedgesWithBootstrapResolver(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	t.Cleanup(server.Close)
+	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	proxyResolver := &staticResolver{err: errors.New("proxy DNS unavailable")}
+	directResolver := &staticResolver{waitForCancellation: true}
+	bootstrapResolver := &staticResolver{addresses: []netip.Addr{netip.MustParseAddr("127.0.0.1")}}
+	oldProxyResolver := R.ProxyServerHostResolver
+	oldDirectResolver := R.DirectHostResolver
+	oldBootstrapResolver := oixBootstrapHostResolver
+	R.ProxyServerHostResolver = proxyResolver
+	R.DirectHostResolver = directResolver
+	oixBootstrapHostResolver = bootstrapResolver
+	t.Cleanup(func() {
+		R.ProxyServerHostResolver = oldProxyResolver
+		R.DirectHostResolver = oldDirectResolver
+		oixBootstrapHostResolver = oldBootstrapResolver
+	})
+
+	client := newOixHTTPClient()
+	t.Cleanup(client.CloseIdleConnections)
+	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	request, err := http.NewRequestWithContext(requestCtx, http.MethodGet, "http://oix.test:"+port, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := client.Do(request)
+	if err != nil {
+		t.Fatalf("bootstrap request failed: %v", err)
+	}
+	_ = response.Body.Close()
+	if proxyResolver.calls != 0 || bootstrapResolver.calls != 1 {
+		t.Fatalf("resolver calls: proxy=%d bootstrap=%d", proxyResolver.calls, bootstrapResolver.calls)
+	}
+}
+
+func TestOixFallbackResolverRespectsManagedDomain(t *testing.T) {
+	oldNodesDomain, oldDNSAddr := oixdns.NodesDomains, oixdns.DNSAddr
+	oixdns.NodesDomains = "fallback-nodes.example"
+	oixdns.DNSAddr = "127.0.0.1:53"
+	oixdns.ConfigureManagedDNS("cloud-nodes.example", "127.0.0.1:1053")
+	t.Cleanup(func() {
+		oixdns.NodesDomains, oixdns.DNSAddr = oldNodesDomain, oldDNSAddr
+		oixdns.ResetManagedDNS()
+	})
+
+	privateAddress := netip.MustParseAddr("192.0.2.1")
+	bootstrapAddress := netip.MustParseAddr("192.0.2.2")
+	privateError := errors.New("private DNS unavailable")
+	tests := []struct {
+		name               string
+		host               string
+		primary            *staticResolver
+		wantAddress        netip.Addr
+		wantError          error
+		wantBootstrapCalls int
+	}{
+		{
+			name:        "slow private DNS wins",
+			host:        "node.cloud-nodes.example",
+			primary:     &staticResolver{addresses: []netip.Addr{privateAddress}, delay: 2 * hedgeDelay},
+			wantAddress: privateAddress,
+		},
+		{
+			name:      "private DNS failure stays private",
+			host:      "node.cloud-nodes.example",
+			primary:   &staticResolver{err: privateError},
+			wantError: privateError,
+		},
+		{
+			name:               "similar unmanaged domain can fall back",
+			host:               "node.notcloud-nodes.example",
+			primary:            &staticResolver{waitForCancellation: true},
+			wantAddress:        bootstrapAddress,
+			wantBootstrapCalls: 1,
+		},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			bootstrapResolver := &staticResolver{addresses: []netip.Addr{bootstrapAddress}}
+			hostResolver := oixFallbackResolver{Resolver: test.primary, fallback: bootstrapResolver}
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+
+			addresses, err := hostResolver.LookupIPv4(ctx, test.host)
+			if !errors.Is(err, test.wantError) {
+				t.Fatalf("lookup error = %v, want %v", err, test.wantError)
+			}
+			if test.wantError == nil && (len(addresses) != 1 || addresses[0] != test.wantAddress) {
+				t.Fatalf("lookup addresses = %v, want [%s]", addresses, test.wantAddress)
+			}
+			if test.primary.calls != 1 || bootstrapResolver.calls != test.wantBootstrapCalls {
+				t.Fatalf("resolver calls: primary=%d bootstrap=%d", test.primary.calls, bootstrapResolver.calls)
+			}
+		})
+	}
+}
+
+func TestOixBootstrapResolverQueriesConfiguredServer(t *testing.T) {
+	packetConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	server := &D.Server{
+		PacketConn: packetConn,
+		Handler: D.HandlerFunc(func(w D.ResponseWriter, request *D.Msg) {
+			response := new(D.Msg)
+			response.SetReply(request)
+			response.Answer = append(response.Answer, &D.A{
+				Hdr: D.RR_Header{Name: request.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+				A:   net.IPv4(192, 0, 2, 10),
+			})
+			_ = w.WriteMsg(response)
+		}),
+	}
+	go func() { _ = server.ActivateAndServe() }()
+	t.Cleanup(func() { _ = server.Shutdown() })
+
+	bootstrapResolver := &oixBootstrapResolver{servers: []string{packetConn.LocalAddr().String()}}
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+	addresses, err := bootstrapResolver.LookupIPv4(ctx, "api.oix.test")
+	if err != nil {
+		t.Fatalf("bootstrap lookup failed: %v", err)
+	}
+	want := netip.MustParseAddr("192.0.2.10")
+	if len(addresses) != 1 || addresses[0] != want {
+		t.Fatalf("bootstrap lookup addresses = %v, want [%s]", addresses, want)
+	}
+}
+
+func TestOixBootstrapResolverRejectsEmptyServerList(t *testing.T) {
+	_, err := (&oixBootstrapResolver{}).LookupIPv4(context.Background(), "api.oix.test")
+	if !errors.Is(err, R.ErrIPNotFound) {
+		t.Fatalf("empty bootstrap lookup error = %v, want ErrIPNotFound", err)
+	}
+}
+
+func TestOixHTTPDoReplaysRequestBody(t *testing.T) {
+	var calls int
+	var bodies []string
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		body, err := io.ReadAll(request.Body)
+		if err != nil {
+			return nil, err
+		}
+		calls++
+		bodies = append(bodies, string(body))
+		status := http.StatusNoContent
+		if calls == 1 {
+			status = http.StatusInternalServerError
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    request,
+		}, nil
+	})
+	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", strings.NewReader("payload"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	response, err := oixHTTPDo(request)
+	if err != nil {
+		t.Fatalf("oixHTTPDo() error = %v", err)
+	}
+	_ = response.Body.Close()
+	if calls != 2 {
+		t.Fatalf("request calls = %d, want 2", calls)
+	}
+	for index, body := range bodies {
+		if body != "payload" {
+			t.Fatalf("request body %d = %q, want payload", index, body)
+		}
+	}
+}
+
+func TestOixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
+	var calls int
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		_, _ = io.Copy(io.Discard, request.Body)
+		calls++
+		return &http.Response{
+			StatusCode: http.StatusInternalServerError,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    request,
+		}, nil
+	})
+	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", io.NopCloser(strings.NewReader("payload")))
+	if err != nil {
+		t.Fatal(err)
+	}
+	_, err = oixHTTPDo(request)
+	if err == nil || !strings.Contains(err.Error(), "not replayable") {
+		t.Fatalf("oixHTTPDo() error = %v, want not replayable", err)
+	}
+	if calls != 1 {
+		t.Fatalf("request calls = %d, want 1", calls)
+	}
+}
+
+type roundTripFunc func(*http.Request) (*http.Response, error)
+
+func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
+	return f(request)
 }
 
 func TestPlanDefaultParams(t *testing.T) {
@@ -347,6 +588,54 @@ func TestDefaultUpdateInterval(t *testing.T) {
 	}
 }
 
+func TestPersistTokenTightensExistingPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not portable on Windows")
+	}
+	homeDir := t.TempDir()
+	path := tokenFilePath(homeDir)
+	if err := os.WriteFile(path, []byte("old-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := persistToken(homeDir, "new-token"); err != nil {
+		t.Fatal(err)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("token permissions = %o, want 600", got)
+	}
+}
+
+func TestLoadPersistedTokenTightensExistingPermissions(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("file permission bits are not portable on Windows")
+	}
+	t.Setenv("OIX_TOKEN", "")
+	previousToken := CurrentToken()
+	SetToken("")
+	t.Cleanup(func() { SetToken(previousToken) })
+
+	homeDir := t.TempDir()
+	path := tokenFilePath(homeDir)
+	if err := os.WriteFile(path, []byte("persisted-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	LoadPersistedToken(homeDir)
+	if got := CurrentToken(); got != "persisted-token" {
+		t.Fatalf("loaded token = %q, want persisted-token", got)
+	}
+	info, err := os.Stat(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o600 {
+		t.Fatalf("token permissions = %o, want 600", got)
+	}
+}
+
 func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file permission bits are not portable on Windows")
@@ -547,9 +836,42 @@ dns:
 	applyManagedDNSConfig([]byte(`
 dns:
   nameserver-policy:
+    +.cloud-nodes.example: https://invalid.example/dns-query
+`))
+	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.2:2053" {
+		t.Fatalf("managed DNS address = %q after invalid matching policy, want previous address", got)
+	}
+
+	applyManagedDNSConfig([]byte(`
+dns:
+  nameserver-policy:
     +.other.example: udp://127.0.0.3:3053
 `))
 	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.1:53" {
 		t.Fatalf("managed DNS address = %q after policy removal, want fallback", got)
+	}
+}
+
+func TestApplyManagedDNSConfigPrefersExactDomain(t *testing.T) {
+	oldDomain, oldAddr := oixdns.NodesDomains, oixdns.DNSAddr
+	oixdns.NodesDomains = "cloud-nodes.example"
+	oixdns.DNSAddr = "127.0.0.1:53"
+	oixdns.ResetManagedDNS()
+	t.Cleanup(func() {
+		oixdns.NodesDomains, oixdns.DNSAddr = oldDomain, oldAddr
+		oixdns.ResetManagedDNS()
+	})
+
+	config := []byte(`
+dns:
+  nameserver-policy:
+    +.cloud-nodes.example: udp://127.0.0.2:1053
+    cloud-nodes.example: udp://127.0.0.3:1053
+`)
+	for range 20 {
+		applyManagedDNSConfig(config)
+		if got := oixdns.ManagedDNSAddr(); got != "127.0.0.3:1053" {
+			t.Fatalf("managed DNS address = %q, want exact-domain server", got)
+		}
 	}
 }
