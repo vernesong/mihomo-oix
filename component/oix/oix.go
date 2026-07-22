@@ -14,9 +14,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"net/url"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -388,7 +390,11 @@ func LoadPersistedToken(homeDir string) {
 	if homeDir == "" || getToken() != "" {
 		return
 	}
-	data, err := os.ReadFile(tokenFilePath(homeDir))
+	path := tokenFilePath(homeDir)
+	if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
+		log.Warnln("[oixCloud] secure persisted token failed: %s", err)
+	}
+	data, err := os.ReadFile(path)
 	if err != nil {
 		return
 	}
@@ -401,7 +407,11 @@ func persistToken(homeDir, token string) error {
 	if homeDir == "" {
 		return errors.New("home dir not set")
 	}
-	return os.WriteFile(tokenFilePath(homeDir), []byte(token), 0o600)
+	path := tokenFilePath(homeDir)
+	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0o600)
 }
 
 func Login(token string) (bool, error) {
@@ -568,7 +578,7 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, err
 	if resp.StatusCode != 200 {
 		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBytes))
 		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == 401 {
+		if resp.StatusCode == http.StatusUnauthorized {
 			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
 		}
 		return nil, err
@@ -681,13 +691,180 @@ func isAgeArmored(data []byte) bool {
 	return bytes.HasPrefix(data, []byte(age.FileHeader))
 }
 
+type oixFallbackResolver struct {
+	resolver.Resolver
+	fallback oixHostResolver
+}
+
+func (r oixFallbackResolver) LookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+		return current.LookupIP(lookupCtx, host)
+	})
+}
+
+func (r oixFallbackResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
+	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+		return current.LookupIPv4(lookupCtx, host)
+	})
+}
+
+func (r oixFallbackResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
+	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+		return current.LookupIPv6(lookupCtx, host)
+	})
+}
+
+func (r oixFallbackResolver) fallbackForHost(host string) oixHostResolver {
+	if oixdns.ShouldObfuscate(host) {
+		return nil
+	}
+	return r.fallback
+}
+
+func (r oixFallbackResolver) Invalid() bool {
+	return true
+}
+
+type oixHostResolver interface {
+	LookupIP(context.Context, string) ([]netip.Addr, error)
+	LookupIPv4(context.Context, string) ([]netip.Addr, error)
+	LookupIPv6(context.Context, string) ([]netip.Addr, error)
+}
+
+type oixBootstrapResolver struct {
+	servers []string
+}
+
+var oixBootstrapHostResolver oixHostResolver = &oixBootstrapResolver{
+	servers: []string{"223.5.5.5:53", "119.29.29.29:53"},
+}
+
+func (r *oixBootstrapResolver) LookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
+	return r.lookup(ctx, "ip", host)
+}
+
+func (r *oixBootstrapResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
+	return r.lookup(ctx, "ip4", host)
+}
+
+func (r *oixBootstrapResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
+	return r.lookup(ctx, "ip6", host)
+}
+
+func (r *oixBootstrapResolver) lookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	if len(r.servers) == 0 {
+		return nil, resolver.ErrIPNotFound
+	}
+	lookupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		addresses []netip.Addr
+		err       error
+	}
+	results := make(chan result, len(r.servers))
+	for _, server := range r.servers {
+		go func() {
+			netResolver := &net.Resolver{
+				PreferGo: true,
+				Dial: func(dialCtx context.Context, dnsNetwork, _ string) (net.Conn, error) {
+					return dialer.DialContext(dialCtx, dnsNetwork, server)
+				},
+			}
+			addresses, err := netResolver.LookupNetIP(lookupCtx, network, host)
+			results <- result{addresses: addresses, err: err}
+		}()
+	}
+
+	var errs []error
+	for range r.servers {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case result := <-results:
+			if result.err == nil && len(result.addresses) > 0 {
+				return result.addresses, nil
+			}
+			if result.err == nil {
+				result.err = resolver.ErrIPNotFound
+			}
+			errs = append(errs, result.err)
+		}
+	}
+	return nil, errors.Join(errs...)
+}
+
+func lookupOixHost(ctx context.Context, primary, fallback oixHostResolver, lookup func(context.Context, oixHostResolver) ([]netip.Addr, error)) ([]netip.Addr, error) {
+	lookupCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	type result struct {
+		addresses []netip.Addr
+		err       error
+	}
+	results := make(chan result, 2)
+	pending := 0
+	start := func(current oixHostResolver) {
+		if current == nil {
+			return
+		}
+		pending++
+		go func() {
+			addresses, err := lookup(lookupCtx, current)
+			results <- result{addresses: addresses, err: err}
+		}()
+	}
+
+	start(primary)
+	fallbackStarted := primary == nil
+	if fallbackStarted {
+		start(fallback)
+	}
+	var hedgeTimer *time.Timer
+	var hedge <-chan time.Time
+	if primary != nil && fallback != nil {
+		hedgeTimer = time.NewTimer(hedgeDelay)
+		hedge = hedgeTimer.C
+		defer hedgeTimer.Stop()
+	}
+
+	var errs []error
+	for pending > 0 || !fallbackStarted {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(append(errs, ctx.Err())...)
+		case <-hedge:
+			fallbackStarted = true
+			hedge = nil
+			start(fallback)
+		case result := <-results:
+			pending--
+			if result.err == nil && len(result.addresses) > 0 {
+				return result.addresses, nil
+			}
+			if result.err == nil {
+				result.err = resolver.ErrIPNotFound
+			}
+			errs = append(errs, result.err)
+			if !fallbackStarted {
+				fallbackStarted = true
+				hedge = nil
+				start(fallback)
+			}
+		}
+	}
+	if len(errs) == 0 {
+		return nil, resolver.ErrIPNotFound
+	}
+	return nil, errors.Join(errs...)
+}
+
 func newOixHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{
 			Proxy: nil,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-				return dialer.DialContext(ctx, network, addr, dialer.WithResolver(resolver.DirectHostResolver))
+				hostResolver := oixFallbackResolver{Resolver: resolver.DirectHostResolver, fallback: oixBootstrapHostResolver}
+				return dialer.DialContext(ctx, network, addr, dialer.WithResolver(hostResolver))
 			},
 			TLSClientConfig:       &tls.Config{MinVersion: tls.VersionTLS12},
 			ForceAttemptHTTP2:     true,
@@ -702,12 +879,19 @@ func newOixHTTPClient() *http.Client {
 func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	deadline := time.Now().Add(totalTimeout)
+	var lastErr error
 	for i := 0; i <= maxRetries; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
 		if time.Now().After(deadline) {
+			if lastErr != nil {
+				return nil, fmt.Errorf("retry timeout: %w", lastErr)
+			}
 			return nil, errors.New("retry timeout")
+		}
+		if i > 0 && req.Body != nil && req.GetBody == nil {
+			return nil, errors.New("request body is not replayable")
 		}
 		if i > 0 {
 			timer := time.NewTimer(time.Duration(i) * time.Second)
@@ -718,17 +902,30 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 				return nil, ctx.Err()
 			}
 		}
-		resp, err := oixHTTPClient.Do(req)
+		attempt := req.Clone(ctx)
+		if i > 0 && req.Body != nil {
+			body, err := req.GetBody()
+			if err != nil {
+				return nil, fmt.Errorf("replay request body: %w", err)
+			}
+			attempt.Body = body
+		}
+		resp, err := oixHTTPClient.Do(attempt)
 		if err != nil {
+			lastErr = err
 			continue
 		}
 		if resp.StatusCode >= 500 {
+			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			resp.Body.Close()
 			continue
 		}
 		return resp, nil
 	}
-	return nil, fmt.Errorf("request failed after %d retries", maxRetries+1)
+	if lastErr == nil {
+		lastErr = errors.New("request failed")
+	}
+	return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries+1, lastErr)
 }
 
 func saveResult(dir, homeDir string, raw []byte) bool {
@@ -772,21 +969,46 @@ func applyManagedDNSConfig(raw []byte) {
 	if err := yaml.Unmarshal(raw, &config); err != nil {
 		return
 	}
-	oixdns.ResetManagedDNS()
 	target := oixdns.ManagedNodesDomain()
-	for pattern, value := range config.DNS.NameServerPolicy {
-		domain := strings.ToLower(strings.TrimPrefix(strings.TrimSpace(pattern), "+."))
-		domain = strings.TrimPrefix(strings.TrimSuffix(domain, "."), ".")
+	patterns := make([]string, 0, len(config.DNS.NameServerPolicy))
+	for pattern := range config.DNS.NameServerPolicy {
+		patterns = append(patterns, pattern)
+	}
+	sort.Slice(patterns, func(i, j int) bool {
+		domainI, exactI := normalizeManagedDNSPattern(patterns[i])
+		domainJ, exactJ := normalizeManagedDNSPattern(patterns[j])
+		if exactI != exactJ {
+			return exactI
+		}
+		if domainI != domainJ {
+			return domainI < domainJ
+		}
+		return strings.ToLower(strings.TrimSpace(patterns[i])) < strings.ToLower(strings.TrimSpace(patterns[j]))
+	})
+	matched := false
+	for _, pattern := range patterns {
+		domain, _ := normalizeManagedDNSPattern(pattern)
 		if domain != target {
 			continue
 		}
-		for _, nameserver := range managedNameServers(value) {
+		matched = true
+		for _, nameserver := range managedNameServers(config.DNS.NameServerPolicy[pattern]) {
 			if addr, ok := managedDNSAddress(nameserver); ok {
 				oixdns.ConfigureManagedDNS(domain, addr)
 				return
 			}
 		}
 	}
+	if !matched {
+		oixdns.ResetManagedDNS()
+	}
+}
+
+func normalizeManagedDNSPattern(pattern string) (domain string, exact bool) {
+	pattern = strings.ToLower(strings.TrimSuffix(strings.TrimSpace(pattern), "."))
+	exact = !strings.HasPrefix(pattern, "+.") && !strings.HasPrefix(pattern, ".")
+	domain = strings.TrimPrefix(strings.TrimPrefix(pattern, "+."), ".")
+	return domain, exact
 }
 
 func managedNameServers(value any) []string {
