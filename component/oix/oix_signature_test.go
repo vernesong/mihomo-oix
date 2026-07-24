@@ -12,6 +12,28 @@ import (
 	A "github.com/metacubex/mihomo/component/age"
 )
 
+func setupSignedFetchTest(t *testing.T) string {
+	t.Helper()
+	t.Setenv("OIX_PARAMS", "lv=1")
+
+	oldAppSecret := AppSecret
+	oldSecretKey := ageSecretKey
+	oldPublicKey := agePublicKey
+	AppSecret = "test-secret"
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	t.Cleanup(func() {
+		AppSecret = oldAppSecret
+		ageSecretKey = oldSecretKey
+		agePublicKey = oldPublicKey
+	})
+	return publicKey
+}
+
 func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 	t.Run("empty pubkey fails fast without request", func(t *testing.T) {
 		t.Setenv("OIX_PARAMS", "lv=1")
@@ -51,24 +73,8 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 	})
 
 	t.Run("pubkey signs timestamp dot pubkey", func(t *testing.T) {
-		t.Setenv("OIX_PARAMS", "lv=1")
 		homeDir := t.TempDir()
-
-		oldAppSecret := AppSecret
-		oldSecretKey := ageSecretKey
-		oldPublicKey := agePublicKey
-		AppSecret = "test-secret"
-		secretKey, publicKey, err := A.GenX25519KeyPair()
-		if err != nil {
-			t.Fatal(err)
-		}
-		ageSecretKey = secretKey
-		agePublicKey = publicKey
-		t.Cleanup(func() {
-			AppSecret = oldAppSecret
-			ageSecretKey = oldSecretKey
-			agePublicKey = oldPublicKey
-		})
+		setupSignedFetchTest(t)
 
 		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			switch r.URL.Path {
@@ -115,24 +121,8 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 }
 
 func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
-	t.Setenv("OIX_PARAMS", "lv=1")
 	homeDir := t.TempDir()
-
-	oldAppSecret := AppSecret
-	oldSecretKey := ageSecretKey
-	oldPublicKey := agePublicKey
-	AppSecret = "test-secret"
-	secretKey, publicKey, err := A.GenX25519KeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ageSecretKey = secretKey
-	agePublicKey = publicKey
-	t.Cleanup(func() {
-		AppSecret = oldAppSecret
-		ageSecretKey = oldSecretKey
-		agePublicKey = oldPublicKey
-	})
+	setupSignedFetchTest(t)
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
@@ -147,7 +137,7 @@ func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
 
 	setOixHTTPClientForTest(t, server.Client())
 
-	_, err = fetchFrom(context.Background(), "token", server.URL, homeDir)
+	_, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 	if err == nil {
 		t.Fatal("expected error")
 	}
@@ -164,23 +154,7 @@ func TestAPIResponseForbiddenIsNotAuthError(t *testing.T) {
 }
 
 func TestFetchBestWaitsForNonEmptyConfig(t *testing.T) {
-	t.Setenv("OIX_PARAMS", "lv=1")
-
-	oldAppSecret := AppSecret
-	oldSecretKey := ageSecretKey
-	oldPublicKey := agePublicKey
-	AppSecret = "test-secret"
-	secretKey, publicKey, err := A.GenX25519KeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	ageSecretKey = secretKey
-	agePublicKey = publicKey
-	t.Cleanup(func() {
-		AppSecret = oldAppSecret
-		ageSecretKey = oldSecretKey
-		agePublicKey = oldPublicKey
-	})
+	publicKey := setupSignedFetchTest(t)
 
 	emptyServer := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path == "/api/v1/information" {
@@ -217,5 +191,35 @@ func TestFetchBestWaitsForNonEmptyConfig(t *testing.T) {
 	}
 	if len(config) == 0 {
 		t.Fatal("empty response won over valid fallback response")
+	}
+}
+
+func TestFetchBestRequiresAllEndpointsToRejectAuthentication(t *testing.T) {
+	setupSignedFetchTest(t)
+
+	newServer := func(status int) *httptest.Server {
+		server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			if r.URL.Path == "/api/v1/information" {
+				http.NotFound(w, r)
+				return
+			}
+			w.WriteHeader(status)
+		}))
+		t.Cleanup(server.Close)
+		return server
+	}
+	authServer := newServer(http.StatusUnauthorized)
+	authServer2 := newServer(http.StatusUnauthorized)
+	nonAuthServer := newServer(http.StatusForbidden)
+
+	setOixHTTPClientForTest(t, &http.Client{})
+	_, err := fetchBest(context.Background(), "token", []string{authServer.URL, nonAuthServer.URL}, t.TempDir())
+	if err == nil || IsAuthError(err) {
+		t.Fatalf("mixed endpoint errors = %v, want non-auth failure", err)
+	}
+
+	_, err = fetchBest(context.Background(), "token", []string{authServer.URL, authServer2.URL}, t.TempDir())
+	if !IsAuthError(err) {
+		t.Fatalf("unanimous endpoint errors = %v, want auth failure", err)
 	}
 }

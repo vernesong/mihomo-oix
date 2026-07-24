@@ -493,8 +493,8 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 		}(i, baseURL)
 	}
 
-	var lastErr error
-	var authErr error
+	var authErrs []error
+	var nonAuthErrs []error
 	hadEmpty := false
 	for range urls {
 		o := <-results
@@ -506,21 +506,22 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 			hadEmpty = true
 			continue
 		}
-		lastErr = o.err
 		if errors.Is(o.err, ErrAuthFailed) {
-			authErr = o.err
+			authErrs = append(authErrs, o.err)
+		} else {
+			nonAuthErrs = append(nonAuthErrs, o.err)
 		}
 	}
 	if hadEmpty {
 		return nil, nil
 	}
-	if authErr != nil {
-		return nil, authErr
+	if len(nonAuthErrs) > 0 {
+		return nil, errors.Join(nonAuthErrs...)
 	}
-	if lastErr == nil {
-		lastErr = ErrNoDomains
+	if len(authErrs) > 0 {
+		return nil, errors.Join(authErrs...)
 	}
-	return nil, lastErr
+	return nil, ErrNoDomains
 }
 
 func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, error) {
