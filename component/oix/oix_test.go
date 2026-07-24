@@ -86,6 +86,7 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 	_, port, err := net.SplitHostPort(server.Listener.Addr().String())
+	if err != nil {
 		t.Fatal(err)
 	}
 
@@ -342,6 +343,8 @@ func TestPlanDefaultParams(t *testing.T) {
 		name string
 		plan planIdentity
 		want string
+	}{
+		{name: "no plan", plan: planIdentity{Code: "no_plan", Rank: intPointer(0)}, want: ""},
 		{name: "iron", plan: planIdentity{Code: "iron", Rank: intPointer(10)}, want: ""},
 		{name: "alu", plan: planIdentity{Code: "alu", Rank: intPointer(20)}, want: "&lv=2"},
 		{name: "bronze", plan: planIdentity{Code: "bronze", Rank: intPointer(30)}, want: "&type=love"},
@@ -729,6 +732,8 @@ func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
 	oldAppSecret, oldSecretKey, oldPublicKey := AppSecret, ageSecretKey, agePublicKey
 	oldApiDomains, oldSpare := ApiDomains, SpareApiDomain
 	oldHomeDir := C.Path.HomeDir()
+	oldToken := CurrentToken()
+	oldEnsured := oixdns.IsEnsured()
 	AppSecret = "test-secret"
 	ageSecretKey = secretKey
 	agePublicKey = publicKey
@@ -740,8 +745,12 @@ func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
 		AppSecret, ageSecretKey, agePublicKey = oldAppSecret, oldSecretKey, oldPublicKey
 		ApiDomains, SpareApiDomain = oldApiDomains, oldSpare
 		C.SetHomeDir(oldHomeDir)
-		SetToken("")
-		oixdns.ClearEnsured()
+		SetToken(oldToken)
+		if oldEnsured {
+			oixdns.SetEnsured()
+		} else {
+			oixdns.ClearEnsured()
+		}
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
@@ -770,6 +779,36 @@ func TestEnsureKeepsManagedDNSWhenFetchFailsWithCachedProvider(t *testing.T) {
 
 	if _, err := Ensure(defaultProviderDir, homeDir, true); err == nil {
 		t.Fatal("Ensure() expected fetch error")
+	}
+	if !oixdns.IsEnsured() {
+		t.Fatal("managed DNS not enabled despite cached provider on disk")
+	}
+}
+
+func TestEnsureKeepsManagedDNSWhenAuthFailureIsNotUnanimous(t *testing.T) {
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+	ApiDomains = "auth.oix.test,unavailable.oix.test"
+	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
+		status := http.StatusNotFound
+		if request.URL.Path != "/api/v1/information" {
+			if request.URL.Host == "auth.oix.test" {
+				status = http.StatusUnauthorized
+			} else {
+				status = http.StatusForbidden
+			}
+		}
+		return &http.Response{
+			StatusCode: status,
+			Header:     make(http.Header),
+			Body:       http.NoBody,
+			Request:    request,
+		}, nil
+	})
+	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+
+	_, err := Ensure(defaultProviderDir, homeDir, true)
+	if err == nil || IsAuthError(err) {
+		t.Fatalf("Ensure() error = %v, want non-auth failure", err)
 	}
 	if !oixdns.IsEnsured() {
 		t.Fatal("managed DNS not enabled despite cached provider on disk")
