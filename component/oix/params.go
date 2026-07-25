@@ -356,12 +356,15 @@ func environmentParams() (string, bool, error) {
 }
 
 func readParamsFile(path string) (string, bool, error) {
-	data, err := os.ReadFile(path)
+	data, err := readPrivateFile(path)
 	if os.IsNotExist(err) {
 		return "", false, nil
 	}
 	if err != nil {
 		return "", false, err
+	}
+	if len(data) > maxParamsLength {
+		return "", false, ErrParamsTooLong
 	}
 	return strings.TrimSpace(string(data)), true, nil
 }
@@ -373,10 +376,7 @@ func writeParamsFile(path, value string) error {
 	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
 		return err
 	}
-	if err := os.WriteFile(path, []byte(value), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return writePrivateFile(path, []byte(value))
 }
 
 func isReservedParamKey(key string) bool {

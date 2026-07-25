@@ -7,6 +7,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	A "github.com/metacubex/mihomo/component/age"
@@ -143,6 +144,83 @@ func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
 	}
 	if IsAuthError(err) {
 		t.Fatalf("HTTP 403 must not be treated as auth error, got %v", err)
+	}
+}
+
+func TestFetchBestAcceptsAPIBaseURLTrailingSlash(t *testing.T) {
+	publicKey := setupSignedFetchTest(t)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/information":
+			http.NotFound(w, r)
+		case "/api/v1/managed/flclash/direct":
+			encrypted, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+			if err != nil {
+				t.Error(err)
+				return
+			}
+			config := base64.StdEncoding.EncodeToString(encrypted)
+			timestamp := r.Header.Get("X-Flclash-Timestamp")
+			w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
+			_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	setOixHTTPClientForTest(t, server.Client())
+
+	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
+	ApiDomains = server.URL + "/"
+	SpareApiDomain = ""
+	t.Cleanup(func() {
+		ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain
+	})
+
+	config, err := fetchBest(context.Background(), "token", apiBaseURLs(), t.TempDir())
+	if err != nil {
+		t.Fatalf("fetchBest() error = %v", err)
+	}
+	if len(config) == 0 {
+		t.Fatal("config is empty")
+	}
+}
+
+func TestFetchFromRejectsTrailingJSONValue(t *testing.T) {
+	publicKey := setupSignedFetchTest(t)
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/information" {
+			http.NotFound(w, r)
+			return
+		}
+		encrypted, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+		if err != nil {
+			t.Error(err)
+			return
+		}
+		config := base64.StdEncoding.EncodeToString(encrypted)
+		timestamp := r.Header.Get("X-Flclash-Timestamp")
+		w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
+		_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
+		_, _ = w.Write([]byte("{}"))
+	}))
+	t.Cleanup(server.Close)
+	setOixHTTPClientForTest(t, server.Client())
+
+	if _, err := fetchFrom(context.Background(), "token", server.URL, t.TempDir()); err == nil {
+		t.Fatal("fetchFrom() accepted a trailing JSON value")
+	}
+}
+
+func TestDecodeJSONResponseEnforcesSizeLimit(t *testing.T) {
+	payload := `{"ret":200}`
+	var response apiResponse
+	if err := decodeJSONResponse(strings.NewReader(payload), int64(len(payload)), &response); err != nil {
+		t.Fatalf("exact-limit response failed: %v", err)
+	}
+	oversized := payload + strings.Repeat(" ", 2)
+	if err := decodeJSONResponse(strings.NewReader(oversized), int64(len(payload)+1), &response); err == nil {
+		t.Fatal("oversized response was accepted")
 	}
 }
 
