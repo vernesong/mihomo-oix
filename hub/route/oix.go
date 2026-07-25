@@ -53,7 +53,7 @@ func oixSetOptions(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, newError(err.Error()))
 		return
 	}
-	if err := reloadOixOptions(); err != nil {
+	if err := reloadoixOptions(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return
@@ -67,7 +67,7 @@ func oixResetOptions(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, newError(err.Error()))
 		return
 	}
-	if err := reloadOixOptions(); err != nil {
+	if err := reloadoixOptions(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return
@@ -86,7 +86,7 @@ func oixOptionsErrorStatus(err error) int {
 	}
 }
 
-func reloadOixOptions() error {
+func reloadoixOptions() error {
 	if !oix.HasToken() {
 		return nil
 	}
