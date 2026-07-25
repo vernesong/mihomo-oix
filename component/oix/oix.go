@@ -43,12 +43,14 @@ var (
 	ageKeyInitOnce sync.Once
 
 	oixProviderName string
+	providerNameMu  sync.RWMutex
 
-	periodicCancel context.CancelFunc
-	periodicDone   chan struct{}
-	periodicDir    string
-	periodicHome   string
-	periodicMu     sync.RWMutex
+	periodicCancel   context.CancelFunc
+	periodicDone     chan struct{}
+	periodicDir      string
+	periodicHome     string
+	periodicMu       sync.RWMutex
+	providerUpdateMu sync.Mutex
 
 	oixHTTPClient = newOixHTTPClient()
 )
@@ -88,7 +90,7 @@ func getToken() string {
 	if t := CurrentToken(); t != "" {
 		return t
 	}
-	return os.Getenv("OIX_TOKEN")
+	return normalizeToken(os.Getenv("OIX_TOKEN"))
 }
 
 func HasToken() bool {
@@ -153,10 +155,7 @@ func ageKeyPair() (secretKey, publicKey string) {
 		homeDir := C.Path.HomeDir()
 		if homeDir != "" {
 			keyPath := ageKeyFilePath(homeDir)
-			if err := os.Chmod(keyPath, 0o600); err != nil && !os.IsNotExist(err) {
-				log.Warnln("[oixCloud] secure age key failed: %s", err)
-			}
-			if data, err := os.ReadFile(keyPath); err == nil {
+			if data, err := readPrivateFile(keyPath); err == nil {
 				sk := strings.TrimSpace(string(data))
 				if pks, err := age.ToPublicKeys(sk); err == nil && len(pks) > 0 {
 					ageSecretKey = sk
@@ -173,10 +172,8 @@ func ageKeyPair() (secretKey, publicKey string) {
 		ageSecretKey = sk
 		agePublicKey = pk
 		if homeDir != "" {
-			if err := os.WriteFile(ageKeyFilePath(homeDir), []byte(sk), 0o600); err != nil {
+			if err := writePrivateFile(ageKeyFilePath(homeDir), []byte(sk)); err != nil {
 				log.Warnln("[oixCloud] persist age key failed: %s", err)
-			} else if err := os.Chmod(ageKeyFilePath(homeDir), 0o600); err != nil {
-				log.Warnln("[oixCloud] secure age key failed: %s", err)
 			}
 		}
 	})
@@ -223,7 +220,36 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 	return oixCfg
 }
 
+func ProviderDirectory(homeDir, preferredPath string, providerPaths []string) string {
+	if dir, ok := relativeProviderDirectory(homeDir, preferredPath); ok {
+		return dir
+	}
+	directories := make(map[string]struct{})
+	for _, providerPath := range providerPaths {
+		if dir, ok := relativeProviderDirectory(homeDir, providerPath); ok {
+			directories[dir] = struct{}{}
+		}
+	}
+	if len(directories) == 1 {
+		for dir := range directories {
+			return dir
+		}
+	}
+	return defaultProviderDir
+}
+
+func relativeProviderDirectory(homeDir, providerPath string) (string, bool) {
+	if providerPath == "" {
+		return "", false
+	}
+	dir, err := filepath.Rel(homeDir, filepath.Dir(providerPath))
+	return dir, err == nil
+}
+
 func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
+	providerUpdateMu.Lock()
+	defer providerUpdateMu.Unlock()
+
 	token := getToken()
 	if token == "" {
 		oixdns.ClearEnsured()
@@ -267,7 +293,9 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 }
 
 func SetProviderName(name string) {
-	oixProviderName = name
+	providerNameMu.Lock()
+	defer providerNameMu.Unlock()
+	oixProviderName = validProviderName(name)
 }
 
 func ensureFromDisk(dir, homeDir string) {
@@ -288,8 +316,9 @@ const defaultUpdateInterval = 24 * time.Hour
 func StartPeriodicUpdate(dir, homeDir string) {
 	interval := defaultUpdateInterval
 	if s := os.Getenv("OIX_UPDATE_INTERVAL"); s != "" {
-		if d, err := strconv.Atoi(s); err == nil && d > 0 {
-			interval = time.Duration(d) * time.Second
+		const maxIntervalSeconds = int64(^uint64(0)>>1) / int64(time.Second)
+		if seconds, err := strconv.ParseInt(s, 10, 64); err == nil && seconds > 0 && seconds <= maxIntervalSeconds {
+			interval = time.Duration(seconds) * time.Second
 		}
 	}
 
@@ -309,31 +338,11 @@ func StartPeriodicUpdate(dir, homeDir string) {
 		for {
 			select {
 			case <-ticker.C:
-				token := getToken()
-				if token == "" {
-					continue
-				}
-				urls := apiBaseURLs()
-				if len(urls) == 0 {
-					continue
-				}
-				config, err := fetchBest(ctx, token, urls, homeDir)
-				if err != nil {
+				if err := runPeriodicUpdate(ctx, dir, homeDir); err != nil {
 					if ctx.Err() != nil {
 						return
 					}
 					log.Warnln("[oixCloud] periodic update failed: %s", err)
-					continue
-				}
-				if len(config) == 0 {
-					continue
-				}
-				if ctx.Err() != nil {
-					return
-				}
-				ok := saveResult(dir, homeDir, config)
-				if ok {
-					log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 				}
 			case <-ctx.Done():
 				return
@@ -341,6 +350,36 @@ func StartPeriodicUpdate(dir, homeDir string) {
 		}
 	}()
 	periodicMu.Unlock()
+}
+
+func runPeriodicUpdate(ctx context.Context, dir, homeDir string) error {
+	providerUpdateMu.Lock()
+	defer providerUpdateMu.Unlock()
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	token := getToken()
+	if token == "" {
+		return nil
+	}
+	urls := apiBaseURLs()
+	if len(urls) == 0 {
+		return nil
+	}
+	config, err := fetchBest(ctx, token, urls, homeDir)
+	if err != nil {
+		return err
+	}
+	if len(config) == 0 {
+		return nil
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	if saveResult(dir, homeDir, config) {
+		log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
+	}
+	return nil
 }
 
 func StopPeriodicUpdate() {
@@ -391,10 +430,7 @@ func LoadPersistedToken(homeDir string) {
 		return
 	}
 	path := tokenFilePath(homeDir)
-	if err := os.Chmod(path, 0o600); err != nil && !os.IsNotExist(err) {
-		log.Warnln("[oixCloud] secure persisted token failed: %s", err)
-	}
-	data, err := os.ReadFile(path)
+	data, err := readPrivateFile(path)
 	if err != nil {
 		return
 	}
@@ -407,11 +443,7 @@ func persistToken(homeDir, token string) error {
 	if homeDir == "" {
 		return errors.New("home dir not set")
 	}
-	path := tokenFilePath(homeDir)
-	if err := os.WriteFile(path, []byte(token), 0o600); err != nil {
-		return err
-	}
-	return os.Chmod(path, 0o600)
+	return writePrivateFile(tokenFilePath(homeDir), []byte(token))
 }
 
 func Login(token string) (bool, error) {
@@ -439,9 +471,11 @@ func Login(token string) (bool, error) {
 
 func Logout() {
 	SetToken("")
+	StopPeriodicUpdate()
+	providerUpdateMu.Lock()
+	defer providerUpdateMu.Unlock()
 	oixdns.ClearEnsured()
 	oixdns.ResetManagedDNS()
-	StopPeriodicUpdate()
 	dir, homeDir := providerPaths()
 	if homeDir != "" {
 		_ = os.Remove(tokenFilePath(homeDir))
@@ -586,7 +620,7 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, err
 	}
 
 	var apiResp apiResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxManagedResponseBytes)).Decode(&apiResp); err != nil {
+	if err := decodeJSONResponse(resp.Body, maxManagedResponseBytes, &apiResp); err != nil {
 		return nil, fmt.Errorf("decode response: %w", err)
 	}
 	if apiResp.Ret != http.StatusOK {
@@ -628,10 +662,35 @@ func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity
 	}
 
 	var apiResp informationResponse
-	if err := json.NewDecoder(io.LimitReader(resp.Body, maxAccountResponseBytes)).Decode(&apiResp); err != nil {
+	if err := decodeJSONResponse(resp.Body, maxAccountResponseBytes, &apiResp); err != nil {
 		return planIdentity{}, fmt.Errorf("decode account response: %w", err)
 	}
 	return planIdentityFromResponse(apiResp)
+}
+
+func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
+	limited := &io.LimitedReader{R: reader, N: maxBytes + 1}
+	decoder := json.NewDecoder(limited)
+	if err := decoder.Decode(target); err != nil {
+		if limited.N == 0 {
+			return fmt.Errorf("response exceeds %d bytes", maxBytes)
+		}
+		return err
+	}
+	var extra struct{}
+	if err := decoder.Decode(&extra); err != io.EOF {
+		if limited.N == 0 {
+			return fmt.Errorf("response exceeds %d bytes", maxBytes)
+		}
+		if err == nil {
+			return errors.New("response contains multiple JSON values")
+		}
+		return fmt.Errorf("invalid trailing response data: %w", err)
+	}
+	if limited.N == 0 {
+		return fmt.Errorf("response exceeds %d bytes", maxBytes)
+	}
+	return nil
 }
 
 func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error) {
@@ -946,17 +1005,67 @@ func saveResult(dir, homeDir string, raw []byte) bool {
 		log.Warnln("[oixCloud] create provider directory %s: %s", filepath.Dir(p), err)
 		return false
 	}
-	if err := os.WriteFile(p, raw, 0o600); err != nil {
+	if err := writePrivateFile(p, raw); err != nil {
 		log.Warnln("[oixCloud] write file %s: %s", p, err)
-		return false
-	}
-	if err := os.Chmod(p, 0o600); err != nil {
-		log.Warnln("[oixCloud] secure file %s: %s", p, err)
 		return false
 	}
 	applyManagedDNSConfig(plain)
 
 	return true
+}
+
+func writePrivateFile(path string, data []byte) error {
+	temp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tempPath := temp.Name()
+	closed := false
+	defer func() {
+		if !closed {
+			_ = temp.Close()
+		}
+		_ = os.Remove(tempPath)
+	}()
+
+	if _, err := temp.Write(data); err != nil {
+		return err
+	}
+	if err := temp.Sync(); err != nil {
+		return err
+	}
+	err = temp.Close()
+	closed = true
+	if err != nil {
+		return err
+	}
+	return os.Rename(tempPath, path)
+}
+
+func readPrivateFile(path string) ([]byte, error) {
+	pathInfo, err := os.Lstat(path)
+	if err != nil {
+		return nil, err
+	}
+	if !pathInfo.Mode().IsRegular() {
+		return nil, errors.New("private file is not a regular file")
+	}
+	file, err := os.Open(path)
+	if err != nil {
+		return nil, err
+	}
+	defer file.Close()
+	fileInfo, err := file.Stat()
+	if err != nil {
+		return nil, err
+	}
+	if !os.SameFile(pathInfo, fileInfo) {
+		return nil, errors.New("private file changed while opening")
+	}
+	if err := file.Chmod(0o600); err != nil {
+		log.Warnln("[oixCloud] secure private file failed: %s", err)
+	}
+	return io.ReadAll(file)
 }
 
 type managedConfig struct {
@@ -1051,13 +1160,24 @@ func managedDNSAddress(nameserver string) (string, bool) {
 }
 
 func ProviderFile() string {
-	if oixProviderName != "" {
-		return oixProviderName
+	providerNameMu.RLock()
+	name := oixProviderName
+	providerNameMu.RUnlock()
+	if name = validProviderName(name); name != "" {
+		return name
 	}
-	if name := os.Getenv("OIX_PROVIDER_NAME"); name != "" {
+	if name := validProviderName(os.Getenv("OIX_PROVIDER_NAME")); name != "" {
 		return name
 	}
 	return defaultProviderFile
+}
+
+func validProviderName(name string) string {
+	name = strings.TrimSpace(name)
+	if name == "" || name == "." || name == ".." || strings.ContainsAny(name, `/\`) || !filepath.IsLocal(name) || filepath.Base(name) != name {
+		return ""
+	}
+	return name
 }
 
 func apiBaseURLs() []string {
@@ -1065,21 +1185,37 @@ func apiBaseURLs() []string {
 	domains = append(domains, strings.Split(SpareApiDomain, ",")...)
 	urls := make([]string, 0, len(domains))
 	seen := make(map[string]struct{}, len(domains))
-	for _, d := range domains {
-		d = strings.TrimSpace(d)
-		if d == "" {
+	for _, domain := range domains {
+		baseURL, ok := normalizeAPIBaseURL(domain)
+		if !ok {
 			continue
 		}
-		if strings.HasPrefix(d, "http://") {
-			d = "https://" + strings.TrimPrefix(d, "http://")
-		} else if !strings.HasPrefix(d, "https://") {
-			d = "https://" + d
-		}
-		if _, ok := seen[d]; ok {
+		if _, ok := seen[baseURL]; ok {
 			continue
 		}
-		seen[d] = struct{}{}
-		urls = append(urls, d)
+		seen[baseURL] = struct{}{}
+		urls = append(urls, baseURL)
 	}
 	return urls
+}
+
+func normalizeAPIBaseURL(value string) (string, bool) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return "", false
+	}
+	if !strings.Contains(value, "://") {
+		value = "https://" + value
+	}
+	parsed, err := url.Parse(value)
+	if err != nil || parsed.Host == "" || parsed.User != nil || parsed.RawQuery != "" || parsed.Fragment != "" {
+		return "", false
+	}
+	if !strings.EqualFold(parsed.Scheme, "http") && !strings.EqualFold(parsed.Scheme, "https") {
+		return "", false
+	}
+	parsed.Scheme = "https"
+	parsed.Path = strings.TrimRight(parsed.Path, "/")
+	parsed.RawPath = strings.TrimRight(parsed.RawPath, "/")
+	return parsed.String(), true
 }

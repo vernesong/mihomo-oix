@@ -1,16 +1,33 @@
+version: "2"
 linters:
-  disable-all: true
+  default: none
   enable:
-    - gofumpt
     - govet
-    - gci
     - staticcheck
-
-linters-settings:
-  gci:
-    sections:
-      - standard
-      - prefix(github.com/metacubex/mihomo)
-      - default
-  staticcheck:
-    go: '1.19'
+  exclusions:
+    generated: lax
+    presets:
+      - comments
+      - common-false-positives
+      - legacy
+      - std-error-handling
+    paths:
+      - third_party$
+      - builtin$
+      - examples$
+formatters:
+  enable:
+    - gci
+    - gofumpt
+  settings:
+    gci:
+      sections:
+        - standard
+        - prefix(github.com/metacubex/mihomo)
+        - default
+  exclusions:
+    generated: lax
+    paths:
+      - third_party$
+      - builtin$
+      - examples$

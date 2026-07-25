@@ -200,6 +200,75 @@ func TestWriteParamsFileTightensExistingPermissions(t *testing.T) {
 	}
 }
 
+func TestWriteParamsFileDoesNotFollowSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	homeDir := t.TempDir()
+	victimPath := filepath.Join(homeDir, "victim")
+	if err := os.WriteFile(victimPath, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	paramsPath := filepath.Join(homeDir, paramsFileName)
+	if err := os.Symlink(victimPath, paramsPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := writeParamsFile(paramsPath, "&tfo=true"); err != nil {
+		t.Fatal(err)
+	}
+	victim, err := os.ReadFile(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(victim) != "keep" {
+		t.Fatalf("symlink target was overwritten: %q", victim)
+	}
+	info, err := os.Lstat(paramsPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("params path remained a symlink")
+	}
+}
+
+func TestReadParamsFileRejectsSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	homeDir := t.TempDir()
+	victimPath := filepath.Join(homeDir, "victim")
+	if err := os.WriteFile(victimPath, []byte("&secret=linked"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	paramsPath := filepath.Join(homeDir, paramsFileName)
+	if err := os.Symlink(victimPath, paramsPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if _, _, err := readParamsFile(paramsPath); err == nil {
+		t.Fatal("readParamsFile accepted a symlink")
+	}
+	info, err := os.Stat(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("symlink target permissions = %o, want 644", got)
+	}
+}
+
+func TestReadParamsFileRejectsOversizedValue(t *testing.T) {
+	path := filepath.Join(t.TempDir(), paramsFileName)
+	if err := os.WriteFile(path, []byte(strings.Repeat("x", maxParamsLength+1)), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if _, _, err := readParamsFile(path); !errors.Is(err, ErrParamsTooLong) {
+		t.Fatalf("readParamsFile error = %v, want ErrParamsTooLong", err)
+	}
+}
+
 func TestEnvironmentParamsRejectMutations(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("OIX_PARAMS", "&type=love")
