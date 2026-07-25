@@ -52,7 +52,7 @@ var (
 	periodicMu       sync.RWMutex
 	providerUpdateMu sync.Mutex
 
-	oixHTTPClient = newOixHTTPClient()
+	oixHTTPClient = newoixHTTPClient()
 )
 
 var (
@@ -486,7 +486,7 @@ func Logout() {
 	}
 }
 
-func IsOixProvider(name string) bool {
+func IsoixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
@@ -757,19 +757,19 @@ type oixFallbackResolver struct {
 }
 
 func (r oixFallbackResolver) LookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
-	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+	return lookupoixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
 		return current.LookupIP(lookupCtx, host)
 	})
 }
 
 func (r oixFallbackResolver) LookupIPv4(ctx context.Context, host string) ([]netip.Addr, error) {
-	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+	return lookupoixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
 		return current.LookupIPv4(lookupCtx, host)
 	})
 }
 
 func (r oixFallbackResolver) LookupIPv6(ctx context.Context, host string) ([]netip.Addr, error) {
-	return lookupOixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
+	return lookupoixHost(ctx, r.Resolver, r.fallbackForHost(host), func(lookupCtx context.Context, current oixHostResolver) ([]netip.Addr, error) {
 		return current.LookupIPv6(lookupCtx, host)
 	})
 }
@@ -853,7 +853,7 @@ func (r *oixBootstrapResolver) lookup(ctx context.Context, network, host string)
 	return nil, errors.Join(errs...)
 }
 
-func lookupOixHost(ctx context.Context, primary, fallback oixHostResolver, lookup func(context.Context, oixHostResolver) ([]netip.Addr, error)) ([]netip.Addr, error) {
+func lookupoixHost(ctx context.Context, primary, fallback oixHostResolver, lookup func(context.Context, oixHostResolver) ([]netip.Addr, error)) ([]netip.Addr, error) {
 	lookupCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
 	type result struct {
@@ -917,7 +917,7 @@ func lookupOixHost(ctx context.Context, primary, fallback oixHostResolver, looku
 	return nil, errors.Join(errs...)
 }
 
-func newOixHTTPClient() *http.Client {
+func newoixHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
 		Transport: &http.Transport{

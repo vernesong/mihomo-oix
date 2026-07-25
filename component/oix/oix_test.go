@@ -153,7 +153,7 @@ func TestEnvironmentTokenIsNormalized(t *testing.T) {
 	}
 }
 
-func setOixHTTPClientForTest(t *testing.T, client *http.Client) {
+func setoixHTTPClientForTest(t *testing.T, client *http.Client) {
 	previous := oixHTTPClient
 	oixHTTPClient = client
 	t.Cleanup(func() {
@@ -161,7 +161,7 @@ func setOixHTTPClientForTest(t *testing.T, client *http.Client) {
 	})
 }
 
-func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
+func Test_oixHTTPClientUsesDirectResolver(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -186,7 +186,7 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 		oixBootstrapHostResolver = oldBootstrapResolver
 	})
 
-	client := newOixHTTPClient()
+	client := newoixHTTPClient()
 	t.Cleanup(client.CloseIdleConnections)
 	response, err := client.Get("http://oix.test:" + port)
 	if err != nil {
@@ -198,7 +198,7 @@ func TestOixHTTPClientUsesDirectResolver(t *testing.T) {
 	}
 }
 
-func TestOixHTTPClientHedgesWithBootstrapResolver(t *testing.T) {
+func Test_oixHTTPClientHedgesWithBootstrapResolver(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		w.WriteHeader(http.StatusNoContent)
 	}))
@@ -223,7 +223,7 @@ func TestOixHTTPClientHedgesWithBootstrapResolver(t *testing.T) {
 		oixBootstrapHostResolver = oldBootstrapResolver
 	})
 
-	client := newOixHTTPClient()
+	client := newoixHTTPClient()
 	t.Cleanup(client.CloseIdleConnections)
 	requestCtx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -241,7 +241,7 @@ func TestOixHTTPClientHedgesWithBootstrapResolver(t *testing.T) {
 	}
 }
 
-func TestOixFallbackResolverRespectsManagedDomain(t *testing.T) {
+func Test_oixFallbackResolverRespectsManagedDomain(t *testing.T) {
 	oldNodesDomain, oldDNSAddr := oixdns.NodesDomains, oixdns.DNSAddr
 	oixdns.NodesDomains = "fallback-nodes.example"
 	oixdns.DNSAddr = "127.0.0.1:53"
@@ -304,7 +304,7 @@ func TestOixFallbackResolverRespectsManagedDomain(t *testing.T) {
 	}
 }
 
-func TestOixBootstrapResolverQueriesConfiguredServer(t *testing.T) {
+func Test_oixBootstrapResolverQueriesConfiguredServer(t *testing.T) {
 	packetConn, err := net.ListenPacket("udp4", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
@@ -337,14 +337,14 @@ func TestOixBootstrapResolverQueriesConfiguredServer(t *testing.T) {
 	}
 }
 
-func TestOixBootstrapResolverRejectsEmptyServerList(t *testing.T) {
+func Test_oixBootstrapResolverRejectsEmptyServerList(t *testing.T) {
 	_, err := (&oixBootstrapResolver{}).LookupIPv4(context.Background(), "api.oix.test")
 	if !errors.Is(err, R.ErrIPNotFound) {
 		t.Fatalf("empty bootstrap lookup error = %v, want ErrIPNotFound", err)
 	}
 }
 
-func TestOixHTTPDoReplaysRequestBody(t *testing.T) {
+func Test_oixHTTPDoReplaysRequestBody(t *testing.T) {
 	var calls int
 	var bodies []string
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -365,7 +365,7 @@ func TestOixHTTPDoReplaysRequestBody(t *testing.T) {
 			Request:    request,
 		}, nil
 	})
-	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", strings.NewReader("payload"))
 	if err != nil {
@@ -386,7 +386,7 @@ func TestOixHTTPDoReplaysRequestBody(t *testing.T) {
 	}
 }
 
-func TestOixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
+func Test_oixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
 	var calls int
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		_, _ = io.Copy(io.Discard, request.Body)
@@ -398,7 +398,7 @@ func TestOixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
 			Request:    request,
 		}, nil
 	})
-	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
 	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", io.NopCloser(strings.NewReader("payload")))
 	if err != nil {
@@ -514,7 +514,7 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 	if err != nil {
@@ -574,7 +574,7 @@ func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 	if err != nil {
@@ -639,7 +639,7 @@ func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	_, err = fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
 	if !IsAuthError(err) {
@@ -704,7 +704,7 @@ func TestPeriodicUpdateUsesProviderUpdateLock(t *testing.T) {
 		http.NotFound(w, r)
 	}))
 	t.Cleanup(server.Close)
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 	ApiDomains = server.URL
 	SpareApiDomain = ""
 
@@ -813,7 +813,7 @@ func TestLogoutWinsOverConcurrentForceUpdate(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 	ApiDomains = server.URL
 	SpareApiDomain = ""
 
@@ -1190,7 +1190,7 @@ func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
 	}))
 	t.Cleanup(server.Close)
 	ApiDomains = "oix.test"
-	setOixHTTPClientForTest(t, &http.Client{Transport: rewriteTransport{host: server.Listener.Addr().String()}})
+	setoixHTTPClientForTest(t, &http.Client{Transport: rewriteTransport{host: server.Listener.Addr().String()}})
 
 	if err := os.MkdirAll(filepath.Join(homeDir, defaultProviderDir), 0o755); err != nil {
 		t.Fatal(err)
@@ -1236,7 +1236,7 @@ func TestEnsureKeepsManagedDNSWhenAuthFailureIsNotUnanimous(t *testing.T) {
 			Request:    request,
 		}, nil
 	})
-	setOixHTTPClientForTest(t, &http.Client{Transport: transport})
+	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
 	_, err := Ensure(defaultProviderDir, homeDir, true)
 	if err == nil || IsAuthError(err) {

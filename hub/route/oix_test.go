@@ -11,16 +11,16 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 )
 
-func TestOixOptionsLifecycle(t *testing.T) {
-	restore := isolateOixOptionsTest(t)
+func Test_oixOptionsLifecycle(t *testing.T) {
+	restore := isolateoixOptionsTest(t)
 	defer restore()
 
 	handler := oixRouter()
-	if status, _ := requestOixOptions(t, handler, http.MethodPut, `{}`); status != http.StatusBadRequest {
+	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{}`); status != http.StatusBadRequest {
 		t.Fatalf("missing params status = %d, want %d", status, http.StatusBadRequest)
 	}
 
-	status, state := requestOixOptions(t, handler, http.MethodPut, `{"params":"&lv=1&tfo=false&area=hk&provider=clash"}`)
+	status, state := requestoixOptions(t, handler, http.MethodPut, `{"params":"&lv=1&tfo=false&area=hk&provider=clash"}`)
 	if status != http.StatusOK {
 		t.Fatalf("update status = %d, want %d", status, http.StatusOK)
 	}
@@ -28,7 +28,7 @@ func TestOixOptionsLifecycle(t *testing.T) {
 		t.Fatalf("updated state = %+v", state)
 	}
 
-	status, state = requestOixOptions(t, handler, http.MethodDelete, "")
+	status, state = requestoixOptions(t, handler, http.MethodDelete, "")
 	if status != http.StatusOK {
 		t.Fatalf("reset status = %d, want %d", status, http.StatusOK)
 	}
@@ -37,21 +37,21 @@ func TestOixOptionsLifecycle(t *testing.T) {
 	}
 }
 
-func TestOixOptionsRejectEnvironmentOverride(t *testing.T) {
-	restore := isolateOixOptionsTest(t)
+func Test_oixOptionsRejectEnvironmentOverride(t *testing.T) {
+	restore := isolateoixOptionsTest(t)
 	defer restore()
 	t.Setenv("OIX_PARAMS", "&type=love")
 
 	handler := oixRouter()
-	if status, _ := requestOixOptions(t, handler, http.MethodPut, `{"params":"&lv=1"}`); status != http.StatusConflict {
+	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{"params":"&lv=1"}`); status != http.StatusConflict {
 		t.Fatalf("update status = %d, want %d", status, http.StatusConflict)
 	}
-	if status, _ := requestOixOptions(t, handler, http.MethodDelete, ""); status != http.StatusConflict {
+	if status, _ := requestoixOptions(t, handler, http.MethodDelete, ""); status != http.StatusConflict {
 		t.Fatalf("reset status = %d, want %d", status, http.StatusConflict)
 	}
 }
 
-func isolateOixOptionsTest(t *testing.T) func() {
+func isolateoixOptionsTest(t *testing.T) func() {
 	t.Helper()
 	oldHomeDir := C.Path.HomeDir()
 	oldToken := oix.CurrentToken()
@@ -64,7 +64,7 @@ func isolateOixOptionsTest(t *testing.T) func() {
 	}
 }
 
-func requestOixOptions(t *testing.T, handler http.Handler, method, body string) (int, oix.ParamsState) {
+func requestoixOptions(t *testing.T, handler http.Handler, method, body string) (int, oix.ParamsState) {
 	t.Helper()
 	request := httptest.NewRequest(method, "/options", strings.NewReader(body))
 	if body != "" {
