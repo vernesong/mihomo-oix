@@ -13,6 +13,7 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strconv"
 	"strings"
 	"sync"
 	"testing"
@@ -70,6 +71,86 @@ func (r *staticResolver) ResetConnection() {}
 
 func intPointer(value int) *int {
 	return &value
+}
+
+func TestProviderDirectory(t *testing.T) {
+	homeDir := t.TempDir()
+	preferredDir := filepath.Join(homeDir, "preferred")
+	sharedDir := filepath.Join(homeDir, "shared")
+	tests := []struct {
+		name          string
+		preferredPath string
+		providerPaths []string
+		want          string
+	}{
+		{
+			name:          "preferred path wins",
+			preferredPath: filepath.Join(preferredDir, "oixCloud"),
+			providerPaths: []string{filepath.Join(sharedDir, "one.yaml")},
+			want:          "preferred",
+		},
+		{
+			name: "shared directory",
+			providerPaths: []string{
+				filepath.Join(sharedDir, "one.yaml"),
+				filepath.Join(sharedDir, "two.yaml"),
+			},
+			want: "shared",
+		},
+		{
+			name: "mixed directories",
+			providerPaths: []string{
+				filepath.Join(homeDir, "one", "one.yaml"),
+				filepath.Join(homeDir, "two", "two.yaml"),
+			},
+			want: defaultProviderDir,
+		},
+		{name: "no paths", want: defaultProviderDir},
+	}
+
+	for _, test := range tests {
+		t.Run(test.name, func(t *testing.T) {
+			if got := ProviderDirectory(homeDir, test.preferredPath, test.providerPaths); got != test.want {
+				t.Fatalf("ProviderDirectory() = %q, want %q", got, test.want)
+			}
+		})
+	}
+}
+
+func TestProviderNameConcurrentAccess(t *testing.T) {
+	oldProviderName := oixProviderName
+	t.Setenv("OIX_PROVIDER_NAME", "")
+	t.Cleanup(func() { SetProviderName(oldProviderName) })
+
+	var waitGroup sync.WaitGroup
+	for range 20 {
+		waitGroup.Add(1)
+		go func() {
+			defer waitGroup.Done()
+			for range 100 {
+				SetProviderName("provider-a")
+				_ = ProviderFile()
+				SetProviderName("provider-b")
+			}
+		}()
+	}
+	waitGroup.Wait()
+}
+
+func TestEnvironmentTokenIsNormalized(t *testing.T) {
+	previousToken := CurrentToken()
+	SetToken("")
+	t.Cleanup(func() { SetToken(previousToken) })
+
+	t.Setenv("OIX_TOKEN", "  Bearer environment-token  ")
+	if got := getToken(); got != "environment-token" {
+		t.Fatalf("environment token = %q, want environment-token", got)
+	}
+
+	t.Setenv("OIX_TOKEN", "   ")
+	if HasToken() {
+		t.Fatal("whitespace-only environment token was accepted")
+	}
 }
 
 func setOixHTTPClientForTest(t *testing.T, client *http.Client) {
@@ -585,10 +666,208 @@ func TestPeriodicLifecycleConcurrent(t *testing.T) {
 	waitGroup.Wait()
 }
 
+func TestPeriodicUpdateUsesProviderUpdateLock(t *testing.T) {
+	StopPeriodicUpdate()
+	t.Setenv("OIX_TOKEN", "")
+	t.Setenv("OIX_UPDATE_INTERVAL", "1")
+	oldDir, oldHomeDir := providerPaths()
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAppSecret, oldSecretKey, oldPublicKey := AppSecret, ageSecretKey, agePublicKey
+	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
+	oldToken := CurrentToken()
+	AppSecret = "test-secret"
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	SetToken("test-token")
+	t.Cleanup(func() {
+		StopPeriodicUpdate()
+		SetProviderPaths(oldDir, oldHomeDir)
+		AppSecret, ageSecretKey, agePublicKey = oldAppSecret, oldSecretKey, oldPublicKey
+		ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain
+		SetToken(oldToken)
+	})
+
+	lockObserved := make(chan bool, 1)
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/information" {
+			http.NotFound(w, r)
+			return
+		}
+		locked := !providerUpdateMu.TryLock()
+		if !locked {
+			providerUpdateMu.Unlock()
+		}
+		lockObserved <- locked
+		http.NotFound(w, r)
+	}))
+	t.Cleanup(server.Close)
+	setOixHTTPClientForTest(t, server.Client())
+	ApiDomains = server.URL
+	SpareApiDomain = ""
+
+	StartPeriodicUpdate("providers", t.TempDir())
+	locked := false
+	select {
+	case locked = <-lockObserved:
+	case <-time.After(3 * time.Second):
+		StopPeriodicUpdate()
+		t.Fatal("periodic update did not reach the managed endpoint")
+	}
+	StopPeriodicUpdate()
+	if !locked {
+		t.Fatal("periodic update did not hold providerUpdateMu")
+	}
+}
+
+func TestLogoutClearsManagedDNSAfterPeriodicUpdateStops(t *testing.T) {
+	StopPeriodicUpdate()
+	oldDir, oldHomeDir := providerPaths()
+	oldToken := CurrentToken()
+	oldNodesDomain, oldDNSAddr := oixdns.NodesDomains, oixdns.DNSAddr
+	oixdns.NodesDomains = "fallback.example"
+	oixdns.DNSAddr = "127.0.0.1:53"
+	oixdns.ConfigureManagedDNS("managed.example", "127.0.0.1:1053")
+	t.Cleanup(func() {
+		StopPeriodicUpdate()
+		SetProviderPaths(oldDir, oldHomeDir)
+		SetToken(oldToken)
+		oixdns.NodesDomains, oixdns.DNSAddr = oldNodesDomain, oldDNSAddr
+		oixdns.ResetManagedDNS()
+	})
+
+	ctx, cancel := context.WithCancel(context.Background())
+	done := make(chan struct{})
+	periodicMu.Lock()
+	periodicCancel = cancel
+	periodicDone = done
+	periodicDir = "providers"
+	periodicHome = t.TempDir()
+	periodicMu.Unlock()
+	go func() {
+		<-ctx.Done()
+		oixdns.ConfigureManagedDNS("stale.example", "127.0.0.1:2053")
+		close(done)
+	}()
+
+	Logout()
+	if got := oixdns.ManagedDNSAddr(); got != "127.0.0.1:53" {
+		t.Fatalf("managed DNS address after logout = %q, want fallback", got)
+	}
+}
+
+func TestLogoutWinsOverConcurrentForceUpdate(t *testing.T) {
+	StopPeriodicUpdate()
+	t.Setenv("OIX_TOKEN", "")
+	homeDir := t.TempDir()
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	oldAppSecret, oldSecretKey, oldPublicKey := AppSecret, ageSecretKey, agePublicKey
+	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
+	oldDir, oldHomeDir := providerPaths()
+	oldToken := CurrentToken()
+	oldEnsured := oixdns.IsEnsured()
+	AppSecret = "test-secret"
+	ageSecretKey = secretKey
+	agePublicKey = publicKey
+	SetToken("test-token")
+	SetProviderPaths("providers", homeDir)
+	oixdns.ClearEnsured()
+	t.Cleanup(func() {
+		StopPeriodicUpdate()
+		AppSecret, ageSecretKey, agePublicKey = oldAppSecret, oldSecretKey, oldPublicKey
+		ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain
+		SetProviderPaths(oldDir, oldHomeDir)
+		SetToken(oldToken)
+		if oldEnsured {
+			oixdns.SetEnsured()
+		} else {
+			oixdns.ClearEnsured()
+		}
+	})
+
+	managedStarted := make(chan struct{})
+	releaseManaged := make(chan struct{})
+	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/api/v1/information":
+			http.NotFound(w, r)
+		case "/api/v1/managed/flclash/direct":
+			close(managedStarted)
+			<-releaseManaged
+			encrypted, encryptErr := A.EncryptBytes([]byte("proxies: []"), publicKey)
+			if encryptErr != nil {
+				t.Error(encryptErr)
+				return
+			}
+			config := base64.StdEncoding.EncodeToString(encrypted)
+			timestamp := r.Header.Get("X-Flclash-Timestamp")
+			w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
+			_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	t.Cleanup(server.Close)
+	setOixHTTPClientForTest(t, server.Client())
+	ApiDomains = server.URL
+	SpareApiDomain = ""
+
+	updateDone := make(chan error, 1)
+	go func() {
+		updateDone <- ForceUpdate()
+	}()
+	<-managedStarted
+	logoutDone := make(chan struct{})
+	go func() {
+		Logout()
+		close(logoutDone)
+	}()
+	deadline := time.Now().Add(time.Second)
+	for CurrentToken() != "" && time.Now().Before(deadline) {
+		runtime.Gosched()
+	}
+	if CurrentToken() != "" {
+		t.Fatal("logout did not clear the token")
+	}
+	close(releaseManaged)
+	if err := <-updateDone; err != nil {
+		t.Fatalf("ForceUpdate() error = %v", err)
+	}
+	<-logoutDone
+
+	if oixdns.IsEnsured() {
+		t.Fatal("managed DNS was re-enabled after logout")
+	}
+	providerPath := filepath.Join(homeDir, "providers", ProviderFile())
+	if _, err := os.Stat(providerPath); !os.IsNotExist(err) {
+		t.Fatalf("provider remains after logout: %v", err)
+	}
+}
+
 func TestDefaultUpdateInterval(t *testing.T) {
 	if defaultUpdateInterval != 24*time.Hour {
 		t.Fatalf("defaultUpdateInterval = %s, want 24h", defaultUpdateInterval)
 	}
+}
+
+func TestStartPeriodicUpdateIgnoresOverflowingInterval(t *testing.T) {
+	if strconv.IntSize < 64 {
+		t.Skip("requires a 64-bit int")
+	}
+	t.Setenv("OIX_UPDATE_INTERVAL", "9223372037")
+	oldDir, oldHomeDir := providerPaths()
+	t.Cleanup(func() {
+		StopPeriodicUpdate()
+		SetProviderPaths(oldDir, oldHomeDir)
+	})
+
+	StartPeriodicUpdate("providers", t.TempDir())
+	StopPeriodicUpdate()
 }
 
 func TestPersistTokenTightensExistingPermissions(t *testing.T) {
@@ -609,6 +888,39 @@ func TestPersistTokenTightensExistingPermissions(t *testing.T) {
 	}
 	if got := info.Mode().Perm(); got != 0o600 {
 		t.Fatalf("token permissions = %o, want 600", got)
+	}
+}
+
+func TestPersistTokenDoesNotFollowSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	homeDir := t.TempDir()
+	victimPath := filepath.Join(homeDir, "victim")
+	if err := os.WriteFile(victimPath, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	tokenPath := tokenFilePath(homeDir)
+	if err := os.Symlink(victimPath, tokenPath); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := persistToken(homeDir, "new-token"); err != nil {
+		t.Fatal(err)
+	}
+	victim, err := os.ReadFile(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(victim) != "keep" {
+		t.Fatalf("symlink target was overwritten: %q", victim)
+	}
+	info, err := os.Lstat(tokenPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("token path remained a symlink")
 	}
 }
 
@@ -639,15 +951,46 @@ func TestLoadPersistedTokenTightensExistingPermissions(t *testing.T) {
 	}
 }
 
+func TestLoadPersistedTokenIgnoresSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	t.Setenv("OIX_TOKEN", "")
+	previousToken := CurrentToken()
+	SetToken("")
+	t.Cleanup(func() { SetToken(previousToken) })
+
+	homeDir := t.TempDir()
+	victimPath := filepath.Join(homeDir, "victim")
+	if err := os.WriteFile(victimPath, []byte("linked-token"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(victimPath, tokenFilePath(homeDir)); err != nil {
+		t.Fatal(err)
+	}
+
+	LoadPersistedToken(homeDir)
+	if got := CurrentToken(); got != "" {
+		t.Fatalf("loaded token through symlink = %q", got)
+	}
+	info, err := os.Stat(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got := info.Mode().Perm(); got != 0o644 {
+		t.Fatalf("symlink target permissions = %o, want 644", got)
+	}
+}
+
 func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 	if runtime.GOOS == "windows" {
 		t.Skip("file permission bits are not portable on Windows")
 	}
 	homeDir := t.TempDir()
 	oldProviderName := oixProviderName
-	oixProviderName = "test-provider"
+	SetProviderName("test-provider")
 	t.Cleanup(func() {
-		oixProviderName = oldProviderName
+		SetProviderName(oldProviderName)
 	})
 	secretKey, publicKey, err := A.GenX25519KeyPair()
 	if err != nil {
@@ -675,12 +1018,101 @@ func TestSaveResultUsesPrivatePermissions(t *testing.T) {
 	}
 }
 
+func TestSaveResultDoesNotFollowProviderSymlink(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink creation may require elevated privileges on Windows")
+	}
+	homeDir := t.TempDir()
+	providerDir := filepath.Join(homeDir, "providers")
+	if err := os.MkdirAll(providerDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	victimPath := filepath.Join(homeDir, "victim")
+	if err := os.WriteFile(victimPath, []byte("keep"), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	providerPath := filepath.Join(providerDir, "test-provider")
+	if err := os.Symlink(victimPath, providerPath); err != nil {
+		t.Fatal(err)
+	}
+
+	oldProviderName := oixProviderName
+	oldSecretKey := ageSecretKey
+	SetProviderName("test-provider")
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSecretKey = secretKey
+	t.Cleanup(func() {
+		SetProviderName(oldProviderName)
+		ageSecretKey = oldSecretKey
+	})
+	raw, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !saveResult("providers", homeDir, raw) {
+		t.Fatal("saveResult failed")
+	}
+	victim, err := os.ReadFile(victimPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if string(victim) != "keep" {
+		t.Fatalf("symlink target was overwritten: %q", victim)
+	}
+	info, err := os.Lstat(providerPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if info.Mode()&os.ModeSymlink != 0 {
+		t.Fatal("provider path remained a symlink")
+	}
+}
+
+func TestSaveResultKeepsProviderInsideDirectory(t *testing.T) {
+	rootDir := t.TempDir()
+	homeDir := filepath.Join(rootDir, "home")
+	if err := os.Mkdir(homeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+
+	oldProviderName := oixProviderName
+	oldSecretKey := ageSecretKey
+	SetProviderName("../../escaped-provider")
+	secretKey, publicKey, err := A.GenX25519KeyPair()
+	if err != nil {
+		t.Fatal(err)
+	}
+	ageSecretKey = secretKey
+	t.Cleanup(func() {
+		SetProviderName(oldProviderName)
+		ageSecretKey = oldSecretKey
+	})
+	raw, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	if !saveResult("providers", homeDir, raw) {
+		t.Fatal("saveResult failed")
+	}
+	if _, err := os.Stat(filepath.Join(rootDir, "escaped-provider")); !os.IsNotExist(err) {
+		t.Fatalf("provider escaped its directory: %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(homeDir, "providers", defaultProviderFile)); err != nil {
+		t.Fatalf("default provider was not written: %v", err)
+	}
+}
+
 func TestSaveResultRejectsUnencryptedProvider(t *testing.T) {
 	homeDir := t.TempDir()
 	oldProviderName := oixProviderName
-	oixProviderName = "test-provider"
+	SetProviderName("test-provider")
 	t.Cleanup(func() {
-		oixProviderName = oldProviderName
+		SetProviderName(oldProviderName)
 	})
 
 	if saveResult("providers", homeDir, []byte("proxies: []")) {
@@ -695,10 +1127,10 @@ func TestSaveResultRejectsInvalidAgeProvider(t *testing.T) {
 	homeDir := t.TempDir()
 	oldProviderName := oixProviderName
 	oldSecretKey := ageSecretKey
-	oixProviderName = "test-provider"
+	SetProviderName("test-provider")
 	ageSecretKey, _, _ = A.GenX25519KeyPair()
 	t.Cleanup(func() {
-		oixProviderName = oldProviderName
+		SetProviderName(oldProviderName)
 		ageSecretKey = oldSecretKey
 	})
 

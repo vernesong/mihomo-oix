@@ -5,7 +5,6 @@ import (
 	"net"
 	"net/netip"
 	"os"
-	"path/filepath"
 	"runtime"
 	"strconv"
 	"sync"
@@ -322,15 +321,17 @@ func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvi
 func updateOixProvider(cfg *config.Config) {
 	name := oix.ProviderFile()
 
-	dir := "proxy_providers"
+	preferredPath := ""
+	if provider, exists := cfg.Providers[name]; exists {
+		preferredPath = provider.Path()
+	}
+	providerPaths := make([]string, 0, len(cfg.Providers))
 	for _, pv := range cfg.Providers {
 		if p := pv.Path(); p != "" {
-			if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
-				dir = rel
-				break
-			}
+			providerPaths = append(providerPaths, p)
 		}
 	}
+	dir := oix.ProviderDirectory(C.Path.HomeDir(), preferredPath, providerPaths)
 
 	oix.SetProviderPaths(dir, C.Path.HomeDir())
 

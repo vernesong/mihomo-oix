@@ -966,15 +966,17 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	if oix.HasToken() {
 		oixName := oix.ProviderFile()
 
-		dir := "proxy_providers"
+		preferredPath := ""
+		if provider, exists := providersMap[oixName]; exists {
+			preferredPath = provider.Path()
+		}
+		providerPaths := make([]string, 0, len(providersMap))
 		for _, pv := range providersMap {
 			if p := pv.Path(); p != "" {
-				if rel, err := filepath.Rel(C.Path.HomeDir(), filepath.Dir(p)); err == nil {
-					dir = rel
-					break
-				}
+				providerPaths = append(providerPaths, p)
 			}
 		}
+		dir := oix.ProviderDirectory(C.Path.HomeDir(), preferredPath, providerPaths)
 		providerPath := filepath.Join(C.Path.HomeDir(), dir, oixName)
 		relPath, _ := filepath.Rel(C.Path.HomeDir(), providerPath)
 
