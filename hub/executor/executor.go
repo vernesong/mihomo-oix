@@ -107,7 +107,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateGeneral(cfg.General, true)
 	updateDNS(cfg.DNS, cfg.General.IPv6)
 	updateNTP(cfg.NTP) // initialize NTP after DNS because an NTP server may be a hostname.
-	updateOixProvider(cfg)
+	updateoixProvider(cfg)
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
 	updateIPTables(cfg)
@@ -318,7 +318,7 @@ func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvi
 	tunnel.UpdateProxies(proxies, providers)
 }
 
-func updateOixProvider(cfg *config.Config) {
+func updateoixProvider(cfg *config.Config) {
 	name := oix.ProviderFile()
 
 	preferredPath := ""

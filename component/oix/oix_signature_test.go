@@ -59,7 +59,7 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 		}))
 		t.Cleanup(server.Close)
 
-		setOixHTTPClientForTest(t, server.Client())
+		setoixHTTPClientForTest(t, server.Client())
 
 		_, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 		if err == nil {
@@ -109,7 +109,7 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 		}))
 		t.Cleanup(server.Close)
 
-		setOixHTTPClientForTest(t, server.Client())
+		setoixHTTPClientForTest(t, server.Client())
 
 		result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 		if err != nil {
@@ -136,7 +136,7 @@ func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
 	}))
 	t.Cleanup(server.Close)
 
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	_, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
 	if err == nil {
@@ -168,7 +168,7 @@ func TestFetchBestAcceptsAPIBaseURLTrailingSlash(t *testing.T) {
 		}
 	}))
 	t.Cleanup(server.Close)
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
 	ApiDomains = server.URL + "/"
@@ -205,7 +205,7 @@ func TestFetchFromRejectsTrailingJSONValue(t *testing.T) {
 		_, _ = w.Write([]byte("{}"))
 	}))
 	t.Cleanup(server.Close)
-	setOixHTTPClientForTest(t, server.Client())
+	setoixHTTPClientForTest(t, server.Client())
 
 	if _, err := fetchFrom(context.Background(), "token", server.URL, t.TempDir()); err == nil {
 		t.Fatal("fetchFrom() accepted a trailing JSON value")
@@ -262,7 +262,7 @@ func TestFetchBestWaitsForNonEmptyConfig(t *testing.T) {
 	}))
 	t.Cleanup(validServer.Close)
 
-	setOixHTTPClientForTest(t, &http.Client{})
+	setoixHTTPClientForTest(t, &http.Client{})
 	config, err := fetchBest(context.Background(), "token", []string{emptyServer.URL, validServer.URL}, t.TempDir())
 	if err != nil {
 		t.Fatalf("fetchBest() error = %v", err)
@@ -290,7 +290,7 @@ func TestFetchBestRequiresAllEndpointsToRejectAuthentication(t *testing.T) {
 	authServer2 := newServer(http.StatusUnauthorized)
 	nonAuthServer := newServer(http.StatusForbidden)
 
-	setOixHTTPClientForTest(t, &http.Client{})
+	setoixHTTPClientForTest(t, &http.Client{})
 	_, err := fetchBest(context.Background(), "token", []string{authServer.URL, nonAuthServer.URL}, t.TempDir())
 	if err == nil || IsAuthError(err) {
 		t.Fatalf("mixed endpoint errors = %v, want non-auth failure", err)

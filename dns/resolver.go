@@ -204,7 +204,7 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 		m.Question[0] = q
 		if err == nil && msg != nil {
 			markCloudIPsFromMsg(msg)
-			putOixMsgToCache(r.cache, q, msg)
+			putoixMsgToCache(r.cache, q, msg)
 		}
 		return msg, err
 	}
@@ -666,7 +666,7 @@ func markCloudIPsFromMsg(msg *D.Msg) {
 	}
 }
 
-func putOixMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
+func putoixMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 	if msg.Rcode != D.RcodeSuccess || len(msg.Answer) == 0 {
 		return
 	}
