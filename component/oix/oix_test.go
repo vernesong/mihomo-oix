@@ -427,20 +427,23 @@ func TestPlanDefaultParams(t *testing.T) {
 	}{
 		{name: "no plan", plan: planIdentity{Code: "no_plan", Rank: intPointer(0)}, want: ""},
 		{name: "iron", plan: planIdentity{Code: "iron", Rank: intPointer(10)}, want: ""},
-		{name: "alu", plan: planIdentity{Code: "alu", Rank: intPointer(20)}, want: "&lv=2"},
-		{name: "bronze", plan: planIdentity{Code: "bronze", Rank: intPointer(30)}, want: "&type=love"},
+		{name: "alu", plan: planIdentity{Code: "alu", Rank: intPointer(20)}, want: "&mode=emergency"},
+		{name: "bronze", plan: planIdentity{Code: "bronze", Rank: intPointer(30)}, want: "&mode=emergency"},
 		{name: "silver", plan: planIdentity{Code: "silver", Rank: intPointer(40)}, want: "&type=love"},
 		{name: "gold", plan: planIdentity{Code: "gold", Rank: intPointer(50)}, want: "&type=love"},
-		{name: "stable rank wins", plan: planIdentity{Code: "iron", Rank: intPointer(30)}, want: "&type=love"},
+		{name: "stable rank wins", plan: planIdentity{Code: "iron", Rank: intPointer(30)}, want: "&mode=emergency"},
 		{name: "explicit zero rank wins", plan: planIdentity{Code: "iron", Rank: intPointer(0)}, want: ""},
 		{name: "code fallback iron", plan: planIdentity{Code: "iron"}, want: ""},
-		{name: "code fallback alu", plan: planIdentity{Code: "alu"}, want: "&lv=2"},
+		{name: "code fallback alu", plan: planIdentity{Code: "alu"}, want: "&mode=emergency"},
 		{name: "code fallback silver", plan: planIdentity{Code: "silver"}, want: "&type=love"},
 		{name: "code fallback gold", plan: planIdentity{Code: "gold"}, want: "&type=love"},
 		{name: "legacy no plan", plan: planIdentity{Name: "no plan"}, want: ""},
 		{name: "legacy iron", plan: planIdentity{Name: "Pass Iron"}, want: ""},
-		{name: "legacy alu", plan: planIdentity{Name: "Pass Alu"}, want: "&lv=2"},
-		{name: "legacy bronze", plan: planIdentity{Name: "Pass Bronze"}, want: "&lv=2"},
+		{name: "legacy alu", plan: planIdentity{Name: "Pass Alu"}, want: "&mode=emergency"},
+		{name: "legacy bronze", plan: planIdentity{Name: "Pass Bronze"}, want: "&mode=emergency"},
+		{name: "node access overrides rank", plan: planIdentity{Code: "silver", Rank: intPointer(40), NodeAccess: []string{"edge", "cia", "ixp"}}, want: "&mode=emergency"},
+		{name: "fusion access overrides rank", plan: planIdentity{Code: "bronze", Rank: intPointer(30), NodeAccess: []string{"edge", "fusion"}}, want: "&type=love"},
+		{name: "edge access overrides rank", plan: planIdentity{Code: "silver", Rank: intPointer(40), NodeAccess: []string{"edge"}}, want: ""},
 		{name: "legacy silver", plan: planIdentity{Name: "Pass Silver"}, want: "&type=love"},
 	}
 
@@ -490,8 +493,8 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 			http.NotFound(w, r)
 		case "/api/v1/managed/flclash/direct":
 			managedCalls++
-			if got := r.URL.Query().Get("lv"); got != "1" {
-				t.Errorf("lv = %q, want 1", got)
+			if got := r.URL.Query().Get("mode"); got != "overseas" {
+				t.Errorf("mode = %q, want overseas", got)
 			}
 			if got := r.URL.Query().Get("tfo"); got != "false" {
 				t.Errorf("tfo = %q, want false", got)

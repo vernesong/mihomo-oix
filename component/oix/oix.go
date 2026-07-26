@@ -121,15 +121,17 @@ type apiResponse struct {
 }
 
 type planIdentity struct {
-	Code string
-	Rank *int
-	Name string
+	Code       string
+	Rank       *int
+	Name       string
+	NodeAccess []string
 }
 
 type informationData struct {
-	Plan     string `json:"plan"`
-	PlanCode string `json:"plan_code"`
-	PlanRank *int   `json:"plan_rank"`
+	Plan       string   `json:"plan"`
+	PlanCode   string   `json:"plan_code"`
+	PlanRank   *int     `json:"plan_rank"`
+	NodeAccess []string `json:"node_access"`
 }
 
 type informationResponse struct {
@@ -702,9 +704,10 @@ func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error)
 	}
 
 	return planIdentity{
-		Code: strings.ToLower(strings.TrimSpace(apiResp.Data.PlanCode)),
-		Rank: apiResp.Data.PlanRank,
-		Name: strings.TrimSpace(apiResp.Data.Plan),
+		Code:       strings.ToLower(strings.TrimSpace(apiResp.Data.PlanCode)),
+		Rank:       apiResp.Data.PlanRank,
+		Name:       strings.TrimSpace(apiResp.Data.Plan),
+		NodeAccess: apiResp.Data.NodeAccess,
 	}, nil
 }
 
