@@ -679,13 +679,9 @@ func putoixMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 	c.SetWithExpire(q.String(), cached, time.Now().Add(time.Duration(ttl)*time.Second))
 }
 
-// oixUDPTimeout bounds the UDP attempt so a blocked or black-holed UDP path
-// still leaves time to fall back to TCP within the caller's deadline.
-const oixUDPTimeout = 3 * time.Second
+const oixTCPHedgeDelay = 250 * time.Millisecond
 
-// oixDNSClient queries the managed DNS server over UDP first and falls back to
-// TCP when the UDP attempt errors (blocked, dropped, or times out). Truncated
-// UDP replies are already retried over TCP inside the udp client.
+// oixDNSClient queries over UDP first and hedges with TCP when UDP is slow.
 type oixDNSClient struct {
 	udp dnsClient
 	tcp dnsClient
@@ -715,12 +711,61 @@ func oixSharedClient() dnsClient {
 }
 
 func (c *oixDNSClient) ExchangeContext(ctx context.Context, m *D.Msg) (*D.Msg, error) {
-	udpCtx, cancel := context.WithTimeout(ctx, oixUDPTimeout)
+	ctx, cancel := context.WithCancel(ctx)
 	defer cancel()
-	if msg, err := c.udp.ExchangeContext(udpCtx, m); err == nil && msg != nil {
-		return msg, nil
+
+	type exchangeResult struct {
+		msg *D.Msg
+		err error
 	}
-	return c.tcp.ExchangeContext(ctx, m)
+	results := make(chan exchangeResult, 2)
+	exchange := func(client dnsClient, request *D.Msg) {
+		msg, err := client.ExchangeContext(ctx, request)
+		if err == nil && msg == nil {
+			err = errors.New("empty DNS response")
+		}
+		results <- exchangeResult{msg: msg, err: err}
+	}
+
+	udpRequest := m.Copy()
+	tcpRequest := m.Copy()
+	pending := 1
+	tcpStarted := false
+	go exchange(c.udp, udpRequest)
+	timer := time.NewTimer(oixTCPHedgeDelay)
+	defer timer.Stop()
+	timerC := timer.C
+	startTCP := func() {
+		if tcpStarted {
+			return
+		}
+		tcpStarted = true
+		pending++
+		go exchange(c.tcp, tcpRequest)
+	}
+
+	var errs []error
+	for pending > 0 {
+		select {
+		case <-ctx.Done():
+			return nil, errors.Join(append(errs, ctx.Err())...)
+		case <-timerC:
+			timerC = nil
+			startTCP()
+		case result := <-results:
+			pending--
+			if result.err == nil {
+				return result.msg, nil
+			}
+			errs = append(errs, result.err)
+			if !tcpStarted {
+				timer.Stop()
+				timerC = nil
+				startTCP()
+			}
+		}
+	}
+	return nil, errors.Join(errs...)
 }
 
 func (c *oixDNSClient) Address() string { return c.udp.Address() }
