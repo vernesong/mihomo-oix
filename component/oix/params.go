@@ -2,6 +2,7 @@ package oix
 
 import (
 	"errors"
+	"fmt"
 	"net/url"
 	"os"
 	"path/filepath"
@@ -14,6 +15,7 @@ import (
 const (
 	modeOverseas          = "overseas"
 	modeEmergency         = "emergency"
+	modePremium           = "premium"
 	maxParamsLength       = 8192
 	paramsFileName        = ".oix_params"
 	defaultParamsFileName = ".oix_default_params"
@@ -29,7 +31,6 @@ const (
 
 type queryParams struct {
 	Mode        string
-	Type        string
 	TFO         *bool
 	SimpleRules bool
 	Extras      map[string]string
@@ -46,16 +47,18 @@ var paramsMu sync.Mutex
 var (
 	ErrParamsTooLong             = errors.New("oix params are too long")
 	ErrParamsEnvironmentOverride = errors.New("oix params are controlled by OIX_PARAMS")
+	ErrParamsInvalid             = errors.New("oix params contain an invalid routing parameter")
 )
 
 func parseParams(raw string) queryParams {
-	raw = strings.TrimPrefix(strings.TrimSpace(raw), "?")
-	raw = strings.TrimPrefix(raw, "&")
+	raw = strings.TrimLeft(strings.TrimSpace(raw), "?&")
 	if raw == "" {
 		return queryParams{}
 	}
 
 	params := queryParams{Extras: map[string]string{}}
+	var explicitMode, legacyMode string
+	legacyPremium := false
 	for _, pair := range strings.Split(raw, "&") {
 		if pair == "" {
 			continue
@@ -74,22 +77,19 @@ func parseParams(raw string) queryParams {
 		value := decodeQueryComponent(valueRaw)
 		switch keyLower {
 		case "mode":
-			if value == modeOverseas || value == modeEmergency {
-				params.Mode = value
+			normalized := strings.ToLower(strings.TrimSpace(value))
+			if normalized == modeOverseas || normalized == modeEmergency || normalized == modePremium {
+				explicitMode = normalized
 			}
 		case "lv":
-			if params.Mode == "" {
-				switch value {
-				case "1":
-					params.Mode = modeOverseas
-				case "2":
-					params.Mode = modeEmergency
-				}
+			switch value {
+			case "1":
+				legacyMode = modeOverseas
+			case "2":
+				legacyMode = modeEmergency
 			}
 		case "type":
-			if isPremiumType(value) {
-				params.Type = "love"
-			}
+			legacyPremium = isLegacyPremiumType(value) || legacyPremium
 		case "tfo":
 			switch value {
 			case "true":
@@ -108,8 +108,12 @@ func parseParams(raw string) queryParams {
 		}
 	}
 
-	if params.Mode != "" {
-		params.Type = ""
+	params.Mode = explicitMode
+	if params.Mode == "" {
+		params.Mode = legacyMode
+	}
+	if params.Mode == "" && legacyPremium {
+		params.Mode = modePremium
 	}
 
 	if len(params.Extras) == 0 {
@@ -120,11 +124,8 @@ func parseParams(raw string) queryParams {
 
 func (p queryParams) encode() string {
 	segments := make([]string, 0, 4+len(p.Extras))
-	if p.Mode == modeOverseas || p.Mode == modeEmergency {
+	if p.Mode == modeOverseas || p.Mode == modeEmergency || p.Mode == modePremium {
 		segments = append(segments, "mode="+p.Mode)
-	}
-	if p.Mode == "" && isPremiumType(p.Type) {
-		segments = append(segments, "type=love")
 	}
 	if p.TFO != nil {
 		segments = append(segments, "tfo="+strconv.FormatBool(*p.TFO))
@@ -166,7 +167,6 @@ func (p queryParams) query() string {
 
 func (p queryParams) withTierDefaults(defaults queryParams) queryParams {
 	p.Mode = defaults.Mode
-	p.Type = defaults.Type
 	return p
 }
 
@@ -177,15 +177,28 @@ func (p queryParams) withDefaultTFO() queryParams {
 	return p
 }
 
-func (p queryParams) stripEmergencyIfUnsupported(tier subscriptionTier) queryParams {
-	if p.Mode == modeEmergency && tier == tierNone {
-		p.Mode = ""
+func (p queryParams) adjustedForTier(tier subscriptionTier) queryParams {
+	if !tierSupportsMode(tier, p.Mode) {
+		p.Mode = defaultParamsForTier(tier).Mode
 	}
 	return p
 }
 
+func tierSupportsMode(tier subscriptionTier, mode string) bool {
+	switch mode {
+	case "", modeOverseas:
+		return true
+	case modeEmergency:
+		return tier != tierNone
+	case modePremium:
+		return tier == tierPremium
+	default:
+		return false
+	}
+}
+
 func (p queryParams) routeEncoding() string {
-	return queryParams{Mode: p.Mode, Type: p.Type}.encode()
+	return queryParams{Mode: p.Mode}.encode()
 }
 
 func tierForPlan(plan planIdentity) subscriptionTier {
@@ -243,15 +256,19 @@ func tierForPlan(plan planIdentity) subscriptionTier {
 	}
 }
 
-func defaultParamsForPlan(plan planIdentity) queryParams {
-	switch tierForPlan(plan) {
+func defaultParamsForTier(tier subscriptionTier) queryParams {
+	switch tier {
 	case tierAlu:
 		return queryParams{Mode: modeEmergency}
 	case tierPremium:
-		return queryParams{Type: "love"}
+		return queryParams{Mode: modePremium}
 	default:
 		return queryParams{}
 	}
+}
+
+func defaultParamsForPlan(plan planIdentity) queryParams {
+	return defaultParamsForTier(tierForPlan(plan))
 }
 
 func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, error) {
@@ -266,15 +283,16 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	if err != nil {
 		return queryParams{}, err
 	}
+	oldDefaultRoute := parseParams(oldDefaultRaw).routeEncoding()
 
 	tier := tierForPlan(plan)
 	newDefault := defaultParamsForPlan(plan)
 	newDefaultRaw := newDefault.encode()
 	current := parseParams(currentRaw)
-	if !environmentOverride && (!hasCurrent || (current.routeEncoding() == oldDefaultRaw && oldDefaultRaw != newDefaultRaw)) {
+	if !environmentOverride && (!hasCurrent || (current.routeEncoding() == oldDefaultRoute && oldDefaultRoute != newDefaultRaw)) {
 		current = current.withTierDefaults(newDefault)
 	}
-	current = current.stripEmergencyIfUnsupported(tier).withDefaultTFO()
+	current = current.adjustedForTier(tier).withDefaultTFO()
 
 	currentEncoded := current.encode()
 	if !environmentOverride && (!hasCurrent || currentRaw != currentEncoded) {
@@ -346,6 +364,9 @@ func SetParams(homeDir, raw string) error {
 		return err
 	} else if override {
 		return ErrParamsEnvironmentOverride
+	}
+	if err := validateEditableParams(raw); err != nil {
+		return err
 	}
 	params := parseParams(raw).withDefaultTFO()
 	return writeParamsFile(paramsFilePath(homeDir), params.encode())
@@ -425,7 +446,38 @@ func isReservedParamKey(key string) bool {
 	}
 }
 
-func isPremiumType(value string) bool {
+func validateEditableParams(raw string) error {
+	raw = strings.TrimLeft(strings.TrimSpace(raw), "?&")
+	for _, pair := range strings.Split(raw, "&") {
+		if pair == "" {
+			continue
+		}
+		keyRaw, valueRaw, hasValue := strings.Cut(pair, "=")
+		key := strings.ToLower(decodeQueryComponent(keyRaw))
+		switch key {
+		case "mode", "lv", "type", "nolv":
+			if !hasValue {
+				return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
+			}
+			value := strings.ToLower(strings.TrimSpace(decodeQueryComponent(valueRaw)))
+			valid := false
+			switch key {
+			case "mode":
+				valid = value == modeOverseas || value == modeEmergency || value == modePremium
+			case "lv":
+				valid = value == "1" || value == "2"
+			case "type":
+				valid = isLegacyPremiumType(value)
+			}
+			if !valid {
+				return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
+			}
+		}
+	}
+	return nil
+}
+
+func isLegacyPremiumType(value string) bool {
 	switch strings.ToLower(strings.TrimSpace(value)) {
 	case "love", "latest", "extreme":
 		return true
