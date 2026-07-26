@@ -12,8 +12,8 @@ import (
 )
 
 const (
-	levelOverseas         = "1"
-	levelEmergency        = "2"
+	modeOverseas          = "overseas"
+	modeEmergency         = "emergency"
 	maxParamsLength       = 8192
 	paramsFileName        = ".oix_params"
 	defaultParamsFileName = ".oix_default_params"
@@ -28,7 +28,7 @@ const (
 )
 
 type queryParams struct {
-	Level       string
+	Mode        string
 	Type        string
 	TFO         *bool
 	SimpleRules bool
@@ -73,14 +73,23 @@ func parseParams(raw string) queryParams {
 
 		value := decodeQueryComponent(valueRaw)
 		switch keyLower {
+		case "mode":
+			if value == modeOverseas || value == modeEmergency {
+				params.Mode = value
+			}
 		case "lv":
-			if value == levelOverseas || value == levelEmergency {
-				params.Level = value
-			} else {
-				params.Level = ""
+			if params.Mode == "" {
+				switch value {
+				case "1":
+					params.Mode = modeOverseas
+				case "2":
+					params.Mode = modeEmergency
+				}
 			}
 		case "type":
-			params.Type = value
+			if isPremiumType(value) {
+				params.Type = "love"
+			}
 		case "tfo":
 			switch value {
 			case "true":
@@ -99,6 +108,10 @@ func parseParams(raw string) queryParams {
 		}
 	}
 
+	if params.Mode != "" {
+		params.Type = ""
+	}
+
 	if len(params.Extras) == 0 {
 		params.Extras = nil
 	}
@@ -107,11 +120,11 @@ func parseParams(raw string) queryParams {
 
 func (p queryParams) encode() string {
 	segments := make([]string, 0, 4+len(p.Extras))
-	if p.Level == levelOverseas || p.Level == levelEmergency {
-		segments = append(segments, "lv="+p.Level)
+	if p.Mode == modeOverseas || p.Mode == modeEmergency {
+		segments = append(segments, "mode="+p.Mode)
 	}
-	if p.Type != "" {
-		segments = append(segments, "type="+encodeQueryComponent(p.Type))
+	if p.Mode == "" && isPremiumType(p.Type) {
+		segments = append(segments, "type=love")
 	}
 	if p.TFO != nil {
 		segments = append(segments, "tfo="+strconv.FormatBool(*p.TFO))
@@ -152,7 +165,7 @@ func (p queryParams) query() string {
 }
 
 func (p queryParams) withTierDefaults(defaults queryParams) queryParams {
-	p.Level = defaults.Level
+	p.Mode = defaults.Mode
 	p.Type = defaults.Type
 	return p
 }
@@ -165,20 +178,44 @@ func (p queryParams) withDefaultTFO() queryParams {
 }
 
 func (p queryParams) stripEmergencyIfUnsupported(tier subscriptionTier) queryParams {
-	if p.Level == levelEmergency && tier == tierNone {
-		p.Level = ""
+	if p.Mode == modeEmergency && tier == tierNone {
+		p.Mode = ""
 	}
 	return p
 }
 
 func (p queryParams) routeEncoding() string {
-	return queryParams{Level: p.Level, Type: p.Type}.encode()
+	return queryParams{Mode: p.Mode, Type: p.Type}.encode()
 }
 
 func tierForPlan(plan planIdentity) subscriptionTier {
+	if len(plan.NodeAccess) > 0 {
+		hasDefinedAccess := false
+		hasOptimized := false
+		for _, rawTag := range plan.NodeAccess {
+			tag := strings.ToLower(strings.TrimSpace(rawTag))
+			if tag == "" {
+				continue
+			}
+			hasDefinedAccess = true
+			switch tag {
+			case "fusion", "fusion_advanced", "fusion_premium", "gia":
+				return tierPremium
+			case "cia", "ixp":
+				hasOptimized = true
+			}
+		}
+		if hasDefinedAccess {
+			if hasOptimized {
+				return tierAlu
+			}
+			return tierNone
+		}
+	}
+
 	if plan.Rank != nil {
 		switch {
-		case *plan.Rank >= 30:
+		case *plan.Rank >= 40:
 			return tierPremium
 		case *plan.Rank >= 20:
 			return tierAlu
@@ -188,9 +225,9 @@ func tierForPlan(plan planIdentity) subscriptionTier {
 	}
 
 	switch strings.ToLower(strings.TrimSpace(plan.Code)) {
-	case "alu":
+	case "alu", "bronze":
 		return tierAlu
-	case "bronze", "silver", "gold", "platinum", "diamond", "developer", "team", "enterprise", "realtime", "titanium":
+	case "silver", "gold", "platinum", "diamond", "developer", "team", "enterprise", "realtime", "titanium":
 		return tierPremium
 	case "no_plan", "iron":
 		return tierNone
@@ -209,7 +246,7 @@ func tierForPlan(plan planIdentity) subscriptionTier {
 func defaultParamsForPlan(plan planIdentity) queryParams {
 	switch tierForPlan(plan) {
 	case tierAlu:
-		return queryParams{Level: levelEmergency}
+		return queryParams{Mode: modeEmergency}
 	case tierPremium:
 		return queryParams{Type: "love"}
 	default:
@@ -381,7 +418,16 @@ func writeParamsFile(path, value string) error {
 
 func isReservedParamKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "lv", "type", "tfo", "simplerules", "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
+	case "mode", "lv", "nolv", "type", "tfo", "simplerules", "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
+		return true
+	default:
+		return false
+	}
+}
+
+func isPremiumType(value string) bool {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "love", "latest", "extreme":
 		return true
 	default:
 		return false

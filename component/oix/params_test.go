@@ -13,7 +13,7 @@ import (
 func TestParamsEditableOptions(t *testing.T) {
 	params := parseParams("&lv=2&type=love&tfo=false&simplerules=true&area=hk&custom=1")
 
-	if params.Level != levelEmergency || params.Type != "love" {
+	if params.Mode != modeEmergency || params.Type != "" {
 		t.Fatalf("unexpected routing params: %+v", params)
 	}
 	if params.TFO == nil || *params.TFO {
@@ -26,13 +26,24 @@ func TestParamsEditableOptions(t *testing.T) {
 	if !reflect.DeepEqual(params.Extras, wantExtras) {
 		t.Fatalf("extras = %#v, want %#v", params.Extras, wantExtras)
 	}
-	if got, want := params.encode(), "&lv=2&type=love&tfo=false&simplerules=true&area=hk&custom=1"; got != want {
+	if got, want := params.encode(), "&mode=emergency&tfo=false&simplerules=true&area=hk&custom=1"; got != want {
 		t.Fatalf("Encode() = %q, want %q", got, want)
 	}
 }
 
+func TestValidModeWinsOverPremiumTypeAndInvalidRepeatedMode(t *testing.T) {
+	params := parseParams("&mode=overseas&type=love&mode=bad&lv=2&area=hk")
+
+	if params.Mode != modeOverseas || params.Type != "" {
+		t.Fatalf("unexpected routing params: %+v", params)
+	}
+	if got, want := params.encode(), "&mode=overseas&area=hk"; got != want {
+		t.Fatalf("encode() = %q, want %q", got, want)
+	}
+}
+
 func TestParamsRoundTripEncoding(t *testing.T) {
-	params := parseParams("&space=a%20b&plus=a+b&ampersand=a%26b")
+	params := parseParams("&type=relay&space=a%20b&plus=a+b&ampersand=a%26b")
 	encoded := params.encode()
 
 	if got := parseParams(encoded); !reflect.DeepEqual(got, params) {
@@ -44,12 +55,28 @@ func TestParamsRoundTripEncoding(t *testing.T) {
 	if !strings.Contains(encoded, "ampersand=a%26b") {
 		t.Fatalf("ampersand was not encoded: %q", encoded)
 	}
+	if strings.Contains(encoded, "type=") {
+		t.Fatalf("unsupported type was retained: %q", encoded)
+	}
+}
+
+func TestLegacyPremiumAliasesNormalizeAndOldTypeFiltersAreDropped(t *testing.T) {
+	for _, alias := range []string{"love", "latest", "extreme"} {
+		if got, want := parseParams("&type="+alias).encode(), "&type=love"; got != want {
+			t.Fatalf("type %q = %q, want %q", alias, got, want)
+		}
+	}
+	for _, obsolete := range []string{"relay", "cusrelay", "gamer", "back", "all", "default"} {
+		if got := parseParams("&type=" + obsolete).encode(); got != "" {
+			t.Fatalf("obsolete type %q retained as %q", obsolete, got)
+		}
+	}
 }
 
 func TestParamsRejectInvalidAndInternalKeys(t *testing.T) {
-	params := parseParams("&lv=bad&LV=bad&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
+	params := parseParams("&lv=bad&LV=bad&nolv=2&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
 
-	if params.Level != "" || params.Type != "love" || params.TFO != nil || params.SimpleRules {
+	if params.Mode != "" || params.Type != "love" || params.TFO != nil || params.SimpleRules {
 		t.Fatalf("invalid reserved values were retained: %+v", params)
 	}
 	if !reflect.DeepEqual(params.Extras, map[string]string{"area": "hk"}) {
@@ -64,7 +91,7 @@ func TestParamsTierMigrationPreservesIndependentOptions(t *testing.T) {
 	params := parseParams("&lv=1&tfo=false&simplerules=true&area=hk")
 	migrated := params.withTierDefaults(queryParams{Type: "love"})
 
-	if migrated.Level != "" || migrated.Type != "love" {
+	if migrated.Mode != "" || migrated.Type != "love" {
 		t.Fatalf("routing defaults were not applied: %+v", migrated)
 	}
 	if migrated.TFO == nil || *migrated.TFO || !migrated.SimpleRules {
@@ -83,7 +110,7 @@ func TestEffectiveParamsFollowTierDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := alu.encode(), "&lv=2&tfo=true"; got != want {
+	if got, want := alu.encode(), "&mode=emergency&tfo=true"; got != want {
 		t.Fatalf("alu params = %q, want %q", got, want)
 	}
 
@@ -113,7 +140,7 @@ func TestEffectiveParamsPreserveCustomRouting(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := premium.encode(), "&lv=1&tfo=false&area=hk"; got != want {
+	if got, want := premium.encode(), "&mode=overseas&tfo=false&area=hk"; got != want {
 		t.Fatalf("custom params = %q, want %q", got, want)
 	}
 }
@@ -129,14 +156,14 @@ func TestEnvironmentParamsOverrideStoredOptions(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := params.encode(), "&lv=1&tfo=false&area=hk"; got != want {
+	if got, want := params.encode(), "&mode=overseas&tfo=false&area=hk"; got != want {
 		t.Fatalf("environment params = %q, want %q", got, want)
 	}
 	state, err := GetParamsState(homeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if state.Source != "environment" || state.Params != "&lv=1&tfo=false&area=hk" {
+	if state.Source != "environment" || state.Params != "&mode=overseas&tfo=false&area=hk" {
 		t.Fatalf("state = %+v", state)
 	}
 }

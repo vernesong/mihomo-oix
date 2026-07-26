@@ -20,11 +20,11 @@ func Test_oixOptionsLifecycle(t *testing.T) {
 		t.Fatalf("missing params status = %d, want %d", status, http.StatusBadRequest)
 	}
 
-	status, state := requestoixOptions(t, handler, http.MethodPut, `{"params":"&lv=1&tfo=false&area=hk&provider=clash"}`)
+	status, state := requestoixOptions(t, handler, http.MethodPut, `{"params":"&mode=overseas&tfo=false&area=hk&provider=clash"}`)
 	if status != http.StatusOK {
 		t.Fatalf("update status = %d, want %d", status, http.StatusOK)
 	}
-	if state.Params != "&lv=1&tfo=false&area=hk" || state.Source != "file" {
+	if state.Params != "&mode=overseas&tfo=false&area=hk" || state.Source != "file" {
 		t.Fatalf("updated state = %+v", state)
 	}
 
@@ -43,7 +43,7 @@ func Test_oixOptionsRejectEnvironmentOverride(t *testing.T) {
 	t.Setenv("OIX_PARAMS", "&type=love")
 
 	handler := oixRouter()
-	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{"params":"&lv=1"}`); status != http.StatusConflict {
+	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{"params":"&mode=overseas"}`); status != http.StatusConflict {
 		t.Fatalf("update status = %d, want %d", status, http.StatusConflict)
 	}
 	if status, _ := requestoixOptions(t, handler, http.MethodDelete, ""); status != http.StatusConflict {
