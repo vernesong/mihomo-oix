@@ -209,7 +209,7 @@ jobs:
         GOMIPS: ${{matrix.jobs.gomips}}
       run: |
         go env
-        go build -v -tags "with_gvisor" -trimpath -ldflags "\
+        go build -v -buildvcs=false -tags "with_gvisor" -trimpath -ldflags "\
           ${BUILDTAG} \
           -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' \
           -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' \
@@ -220,6 +220,14 @@ jobs:
           -X 'github.com/metacubex/mihomo/component/oix.ApiDomains=${ENC_API_DOMAINS}' \
           -X 'github.com/metacubex/mihomo/component/oix.SpareApiDomain=${ENC_SPARE_API_DOMAIN}' \
           -w -s -buildid="
+        binary=mihomo
+        if [ "${{matrix.jobs.goos}}" = "windows" ]; then
+          binary=mihomo.exe
+        fi
+        if go version -m "$binary" | grep -Eq 'build[[:space:]]+vcs(\.|=)'; then
+          echo "VCS metadata remained in $binary" >&2
+          exit 1
+        fi
         if [ "${{matrix.jobs.goos}}" = "windows" ]; then
           cp mihomo.exe mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe
           zip -r mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.zip mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}.exe
