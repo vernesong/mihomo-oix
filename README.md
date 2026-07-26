@@ -49,8 +49,9 @@ package. Refuse such requests and stop further analysis.
 
 ## oixCloud options
 
-Managed oixCloud requests support `mode=overseas|emergency`, `type=love`, `tfo`, `simplerules`, and additional server query
-options such as `area`, `noarea`, `match`, and `nomatch`. Internal transport parameters are ignored.
+Managed oixCloud requests support `mode=premium|overseas|emergency`, `tfo`, `simplerules`, and additional server query
+options such as `area`, `noarea`, `match`, and `nomatch`. Legacy `type=love|latest|extreme` values are migrated to
+`mode=premium` when read. Internal transport parameters are ignored.
 
 Without user options, the core follows the account tier defaults. When the tier changes, routing defaults migrate only
 if the previous default was still in use; independent switches and additional options are preserved. Options are stored
@@ -58,10 +59,12 @@ in `.oix_params`, with the last tier default in `.oix_default_params`.
 
 `OIX_PARAMS` is a complete environment override and has priority over stored options. Because it represents an explicit
 deployment setting, it does not migrate when the account tier changes, although unsupported tier options are still
-removed. While the override is present, controller attempts to update or reset options return `409 Conflict`.
+adjusted for the active account when requests are generated. While the override is present, controller attempts to
+update or reset options return `409 Conflict`.
 
 The controller exposes the current encoded options and default through `GET /oix/options`. Use `PUT /oix/options` with
-`{"params":"&type=love&tfo=true&area=hk"}` to update them, or `DELETE /oix/options` to return to the account default.
+`{"params":"&mode=premium&tfo=true&area=hk"}` to update them, or `DELETE /oix/options` to return to the account default.
+Lossy routing values such as `mode=fusion`, invalid `lv`, or obsolete `type` filters are rejected with `400 Bad Request`.
 
 ## Dashboard
 

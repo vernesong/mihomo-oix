@@ -19,6 +19,9 @@ func Test_oixOptionsLifecycle(t *testing.T) {
 	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{}`); status != http.StatusBadRequest {
 		t.Fatalf("missing params status = %d, want %d", status, http.StatusBadRequest)
 	}
+	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{"params":"&mode=fusion"}`); status != http.StatusBadRequest {
+		t.Fatalf("invalid mode status = %d, want %d", status, http.StatusBadRequest)
+	}
 
 	status, state := requestoixOptions(t, handler, http.MethodPut, `{"params":"&mode=overseas&tfo=false&area=hk&provider=clash"}`)
 	if status != http.StatusOK {
