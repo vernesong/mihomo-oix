@@ -77,7 +77,7 @@ func oixResetOptions(w http.ResponseWriter, r *http.Request) {
 
 func oixOptionsErrorStatus(err error) int {
 	switch {
-	case errors.Is(err, oix.ErrParamsTooLong):
+	case errors.Is(err, oix.ErrParamsTooLong), errors.Is(err, oix.ErrParamsInvalid):
 		return http.StatusBadRequest
 	case errors.Is(err, oix.ErrParamsEnvironmentOverride):
 		return http.StatusConflict

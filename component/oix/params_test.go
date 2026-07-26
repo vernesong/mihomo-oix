@@ -13,7 +13,7 @@ import (
 func TestParamsEditableOptions(t *testing.T) {
 	params := parseParams("&lv=2&type=love&tfo=false&simplerules=true&area=hk&custom=1")
 
-	if params.Mode != modeEmergency || params.Type != "" {
+	if params.Mode != modeEmergency {
 		t.Fatalf("unexpected routing params: %+v", params)
 	}
 	if params.TFO == nil || *params.TFO {
@@ -34,7 +34,7 @@ func TestParamsEditableOptions(t *testing.T) {
 func TestValidModeWinsOverPremiumTypeAndInvalidRepeatedMode(t *testing.T) {
 	params := parseParams("&mode=overseas&type=love&mode=bad&lv=2&area=hk")
 
-	if params.Mode != modeOverseas || params.Type != "" {
+	if params.Mode != modeOverseas {
 		t.Fatalf("unexpected routing params: %+v", params)
 	}
 	if got, want := params.encode(), "&mode=overseas&area=hk"; got != want {
@@ -62,9 +62,12 @@ func TestParamsRoundTripEncoding(t *testing.T) {
 
 func TestLegacyPremiumAliasesNormalizeAndOldTypeFiltersAreDropped(t *testing.T) {
 	for _, alias := range []string{"love", "latest", "extreme"} {
-		if got, want := parseParams("&type="+alias).encode(), "&type=love"; got != want {
+		if got, want := parseParams("&type="+alias).encode(), "&mode=premium"; got != want {
 			t.Fatalf("type %q = %q, want %q", alias, got, want)
 		}
+	}
+	if got := parseParams("&mode=fusion").encode(); got != "" {
+		t.Fatalf("unsupported fusion mode retained as %q", got)
 	}
 	for _, obsolete := range []string{"relay", "cusrelay", "gamer", "back", "all", "default"} {
 		if got := parseParams("&type=" + obsolete).encode(); got != "" {
@@ -76,22 +79,22 @@ func TestLegacyPremiumAliasesNormalizeAndOldTypeFiltersAreDropped(t *testing.T) 
 func TestParamsRejectInvalidAndInternalKeys(t *testing.T) {
 	params := parseParams("&lv=bad&LV=bad&nolv=2&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
 
-	if params.Mode != "" || params.Type != "love" || params.TFO != nil || params.SimpleRules {
+	if params.Mode != modePremium || params.TFO != nil || params.SimpleRules {
 		t.Fatalf("invalid reserved values were retained: %+v", params)
 	}
 	if !reflect.DeepEqual(params.Extras, map[string]string{"area": "hk"}) {
 		t.Fatalf("extras = %#v", params.Extras)
 	}
-	if got, want := params.encode(), "&type=love&area=hk"; got != want {
+	if got, want := params.encode(), "&mode=premium&area=hk"; got != want {
 		t.Fatalf("Encode() = %q, want %q", got, want)
 	}
 }
 
 func TestParamsTierMigrationPreservesIndependentOptions(t *testing.T) {
 	params := parseParams("&lv=1&tfo=false&simplerules=true&area=hk")
-	migrated := params.withTierDefaults(queryParams{Type: "love"})
+	migrated := params.withTierDefaults(queryParams{Mode: modePremium})
 
-	if migrated.Mode != "" || migrated.Type != "love" {
+	if migrated.Mode != modePremium {
 		t.Fatalf("routing defaults were not applied: %+v", migrated)
 	}
 	if migrated.TFO == nil || *migrated.TFO || !migrated.SimpleRules {
@@ -121,8 +124,33 @@ func TestEffectiveParamsFollowTierDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := premium.encode(), "&type=love&tfo=false&simplerules=true&area=hk"; got != want {
+	if got, want := premium.encode(), "&mode=premium&tfo=false&simplerules=true&area=hk"; got != want {
 		t.Fatalf("migrated params = %q, want %q", got, want)
+	}
+}
+
+func TestEffectiveParamsMigrateLegacyPremiumDefault(t *testing.T) {
+	t.Setenv("OIX_PARAMS", "")
+	homeDir := t.TempDir()
+	if err := writeParamsFile(paramsFilePath(homeDir), "&type=love&tfo=false&area=hk"); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeParamsFile(defaultParamsFilePath(homeDir), "&type=love"); err != nil {
+		t.Fatal(err)
+	}
+
+	params, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "alu", Rank: intPointer(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := params.encode(), "&mode=emergency&tfo=false&area=hk"; got != want {
+		t.Fatalf("migrated params = %q, want %q", got, want)
+	}
+	if raw, _, err := readParamsFile(paramsFilePath(homeDir)); err != nil || raw != "&mode=emergency&tfo=false&area=hk" {
+		t.Fatalf("stored params = %q, err = %v", raw, err)
+	}
+	if raw, _, err := readParamsFile(defaultParamsFilePath(homeDir)); err != nil || raw != "&mode=emergency" {
+		t.Fatalf("stored default = %q, err = %v", raw, err)
 	}
 }
 
@@ -183,6 +211,22 @@ func TestSetParamsRejectsOversizedValue(t *testing.T) {
 	err := SetParams(t.TempDir(), strings.Repeat("x", maxParamsLength+1))
 	if !errors.Is(err, ErrParamsTooLong) {
 		t.Fatalf("error = %v, want ErrParamsTooLong", err)
+	}
+}
+
+func TestSetParamsRejectsLossyRoutingValues(t *testing.T) {
+	t.Setenv("OIX_PARAMS", "")
+	for _, raw := range []string{"&mode=fusion", "&lv=3", "&type=relay", "&nolv=1", "&mode"} {
+		if err := SetParams(t.TempDir(), raw); !errors.Is(err, ErrParamsInvalid) {
+			t.Fatalf("SetParams(%q) error = %v, want ErrParamsInvalid", raw, err)
+		}
+	}
+	homeDir := t.TempDir()
+	if err := SetParams(homeDir, "??&MODE=Premium"); err != nil {
+		t.Fatalf("case-insensitive valid mode rejected: %v", err)
+	}
+	if raw, _, err := readParamsFile(paramsFilePath(homeDir)); err != nil || raw != "&mode=premium&tfo=true" {
+		t.Fatalf("stored normalized params = %q, err = %v", raw, err)
 	}
 }
 
@@ -308,7 +352,7 @@ func TestEnvironmentParamsRejectMutations(t *testing.T) {
 	}
 }
 
-func TestEffectiveParamsStripUnsupportedEmergencyLevel(t *testing.T) {
+func TestEffectiveParamsAdjustUnsupportedRoutingMode(t *testing.T) {
 	t.Setenv("OIX_PARAMS", "")
 	homeDir := t.TempDir()
 	if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "platinum", Rank: intPointer(60)}); err != nil {
@@ -324,5 +368,16 @@ func TestEffectiveParamsStripUnsupportedEmergencyLevel(t *testing.T) {
 	}
 	if got, want := params.encode(), "&tfo=false&area=hk"; got != want {
 		t.Fatalf("downgraded params = %q, want %q", got, want)
+	}
+
+	if err := SetParams(homeDir, "&mode=premium&tfo=false&area=hk"); err != nil {
+		t.Fatal(err)
+	}
+	params, err = effectiveParamsForPlan(homeDir, planIdentity{Code: "alu", Rank: intPointer(20)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got, want := params.encode(), "&mode=emergency&tfo=false&area=hk"; got != want {
+		t.Fatalf("alu-adjusted params = %q, want %q", got, want)
 	}
 }
