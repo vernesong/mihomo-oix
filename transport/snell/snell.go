@@ -102,6 +102,20 @@ func (s *Snell) ReadReply() error {
 	return fmt.Errorf("server reported code: %d, message: %s", errcode, string(msg))
 }
 
+func (s *Snell) Warmup() error {
+	if _, err := s.Conn.Write([]byte{Version, CommandPing, 0}); err != nil {
+		return err
+	}
+	var reply [1]byte
+	if _, err := io.ReadFull(s.Conn, reply[:]); err != nil {
+		return err
+	}
+	if reply[0] != CommandPong {
+		return fmt.Errorf("unexpected Snell warmup reply: %d", reply[0])
+	}
+	return nil
+}
+
 func WriteHeader(conn net.Conn, host string, port uint, version int) error {
 	return WriteHeaderWithReuse(conn, host, port, version, false)
 }
@@ -166,6 +180,13 @@ func IdentityHeaderFromPSK(psk []byte) []byte {
 
 func StreamConnWithIdentity(conn net.Conn, psk []byte, version int) *Snell {
 	return streamConn(conn, psk, version, IdentityHeaderFromPSK(psk))
+}
+
+func StreamConnWithExporterIdentity(conn net.Conn, psk []byte, version int, exporter []byte) *Snell {
+	if version >= Version4 {
+		return &Snell{Conn: newV4ConnWithExporterIdentity(conn, psk, exporter)}
+	}
+	return StreamConnWithIdentity(conn, psk, version)
 }
 
 func StreamConn(conn net.Conn, psk []byte, version int) *Snell {

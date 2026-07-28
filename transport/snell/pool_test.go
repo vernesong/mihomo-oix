@@ -52,6 +52,17 @@ func TestPoolConnCloseIsIdempotent(t *testing.T) {
 	}
 }
 
+func TestWarmupAuthenticatesConnection(t *testing.T) {
+	rawConn := &recordingConn{readData: []byte{CommandPong}}
+	conn := &Snell{Conn: rawConn}
+	if err := conn.Warmup(); err != nil {
+		t.Fatal(err)
+	}
+	if rawConn.writes != 1 || rawConn.reads != 1 {
+		t.Fatalf("warmup I/O = writes:%d reads:%d", rawConn.writes, rawConn.reads)
+	}
+}
+
 func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 	rawConn := &recordingConn{}
 	pooledConn := &Snell{Conn: rawConn}

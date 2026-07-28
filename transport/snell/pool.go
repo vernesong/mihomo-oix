@@ -13,7 +13,18 @@ import (
 )
 
 type Pool struct {
-	pool *pool.Pool[*Snell]
+	pool    *pool.Pool[*Snell]
+	factory func(context.Context) (*Snell, error)
+}
+
+func (p *Pool) Warm(ctx context.Context, count int) {
+	for range count {
+		conn, err := p.factory(ctx)
+		if err != nil {
+			return
+		}
+		p.put(conn)
+	}
 }
 
 const (
@@ -132,5 +143,5 @@ func NewPool(factory func(context.Context) (*Snell, error)) *Pool {
 		}),
 	)
 
-	return &Pool{pool: p}
+	return &Pool{pool: p, factory: factory}
 }
