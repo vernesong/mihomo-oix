@@ -18,24 +18,25 @@ import (
 )
 
 type TLSConfig struct {
-	Host                string
-	SkipCertVerify      bool
-	NameCertVerify      string
-	CAFile              string
-	FingerPrint         string
-	Certificate         string
-	PrivateKey          string
-	ClientFingerprint   string
-	NextProtos          []string
-	ECH                 *ech.Config
-	ShadowTLS           *shadowtls.Config
-	Restls              *restls.Config
-	JLS                 *jls.Config
-	Reality             *tlsC.RealityConfig
-	TLSMirror           *tlsmirror.Config
-	TLSMirrorDialer     tlsmirror.EnrollmentDialer
-	ClientSessionCache  tls.ClientSessionCache
-	UClientSessionCache utls.ClientSessionCache
+	Host                 string
+	SkipCertVerify       bool
+	NameCertVerify       string
+	CAFile               string
+	FingerPrint          string
+	Certificate          string
+	PrivateKey           string
+	ClientFingerprint    string
+	NextProtos           []string
+	ECH                  *ech.Config
+	ShadowTLS            *shadowtls.Config
+	Restls               *restls.Config
+	JLS                  *jls.Config
+	Reality              *tlsC.RealityConfig
+	TLSMirror            *tlsmirror.Config
+	TLSMirrorDialer      tlsmirror.EnrollmentDialer
+	ClientSessionCache   tls.ClientSessionCache
+	UClientSessionCache  utls.ClientSessionCache
+	DisableRenegotiation bool
 }
 
 func (cfg *TLSConfig) ToStdConfig() (*tls.Config, error) {
@@ -137,6 +138,16 @@ func StreamTLSConn(ctx context.Context, conn net.Conn, cfg *TLSConfig) (net.Conn
 			return nil, err
 		}
 		tlsConn := tlsC.UClient(conn, tlsConfig, clientFingerprint)
+		if cfg.DisableRenegotiation {
+			if err = tlsConn.BuildHandshakeState(); err != nil {
+				return nil, err
+			}
+			for _, extension := range tlsConn.Extensions {
+				if renegotiation, ok := extension.(*utls.RenegotiationInfoExtension); ok {
+					renegotiation.Renegotiation = utls.RenegotiateNever
+				}
+			}
+		}
 		err = tlsConn.HandshakeContext(ctx)
 		if err != nil {
 			return nil, err

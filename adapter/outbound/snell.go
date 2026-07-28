@@ -439,17 +439,18 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			nextProtos = append(nextProtos, snellECHTLSLegacyALPN)
 		}
 		echTLSOpt = &vmess.TLSConfig{
-			Host:                host,
-			SkipCertVerify:      skipCertVerify,
-			CAFile:              opt.CAFile,
-			ClientFingerprint:   resolveSnellECHTLSClientFingerprint(opt, option),
-			FingerPrint:         opt.Fingerprint,
-			Certificate:         opt.Certificate,
-			PrivateKey:          opt.PrivateKey,
-			NextProtos:          nextProtos,
-			ECH:                 echConfig,
-			ClientSessionCache:  tls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
-			UClientSessionCache: utls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
+			Host:                 host,
+			SkipCertVerify:       skipCertVerify,
+			CAFile:               opt.CAFile,
+			ClientFingerprint:    resolveSnellECHTLSClientFingerprint(opt, option),
+			FingerPrint:          opt.Fingerprint,
+			Certificate:          opt.Certificate,
+			PrivateKey:           opt.PrivateKey,
+			NextProtos:           nextProtos,
+			ECH:                  echConfig,
+			ClientSessionCache:   tls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
+			UClientSessionCache:  utls.NewLRUClientSessionCache(snellECHTLSSessionCacheCapacity),
+			DisableRenegotiation: true,
 		}
 	default:
 		return nil, fmt.Errorf("snell %s obfs mode error: %s", addr, obfsOption.Mode)
