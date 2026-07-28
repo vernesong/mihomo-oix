@@ -28,14 +28,23 @@ const (
 
 type v4Conn struct {
 	net.Conn
-	psk      []byte
-	identity []byte
-	r        *v4Reader
-	w        *v4Writer
+	psk              []byte
+	identity         []byte
+	identityExporter []byte
+	r                *v4Reader
+	w                *v4Writer
 }
 
 func newV4Conn(conn net.Conn, psk []byte, identity []byte) *v4Conn {
 	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), identity...)}
+}
+
+func newV4ConnWithExporterIdentity(conn net.Conn, psk, exporter []byte) *v4Conn {
+	return &v4Conn{
+		Conn:             conn,
+		psk:              psk,
+		identityExporter: append([]byte(nil), exporter...),
+	}
 }
 
 func (c *v4Conn) initReader() error {
@@ -59,6 +68,9 @@ func (c *v4Conn) initWriter() error {
 	}
 	if len(c.identity) == IdentityHeaderLength {
 		w.identity = c.identity
+	}
+	if len(c.identityExporter) == IdentityExporterLength {
+		w.identityExporter = c.identityExporter
 	}
 	c.w = w
 	return nil
@@ -235,11 +247,13 @@ type v4Writer struct {
 	aead                 cipher.AEAD
 	nonce                [v4NonceSize]byte
 	salt                 [v4SaltSize]byte
+	psk                  []byte
 	saltSent             bool
 	initialPaddingLength uint16
 	payloadLimit         uint16
 	lastWrite            time.Time
 	identity             []byte
+	identityExporter     []byte
 	mux                  sync.Mutex
 }
 
@@ -261,6 +275,7 @@ func newV4Writer(w io.Writer, psk []byte) (*v4Writer, error) {
 		Writer:               w,
 		aead:                 aead,
 		salt:                 salt,
+		psk:                  append([]byte(nil), psk...),
 		initialPaddingLength: uint16(v4InitialPaddingMin + paddingDelta),
 	}, nil
 }
@@ -297,7 +312,7 @@ func (w *v4Writer) nextPayloadLimit() uint16 {
 	var payloadLimit uint16
 	switch {
 	case w.lastWrite.IsZero():
-		payloadLimit = v4FrameSize - 55 - w.initialPaddingLength
+		payloadLimit = uint16(v4FrameSize - 55 - w.identityWireLength() - int(w.initialPaddingLength))
 	case now.Sub(w.lastWrite) > 30*time.Second:
 		payloadLimit = v4FrameSize - 39
 	default:
@@ -315,6 +330,16 @@ func (w *v4Writer) nextPayloadLimit() uint16 {
 		w.payloadLimit = maxLength
 	}
 	return payloadLimit
+}
+
+func (w *v4Writer) identityWireLength() int {
+	if len(w.identityExporter) == IdentityExporterLength {
+		return len(identityWireMagicV2) + IdentityHeaderLength + IdentityAuthTagLength
+	}
+	if len(w.identity) == IdentityHeaderLength {
+		return len(identityWireMagic) + IdentityHeaderLength
+	}
+	return 0
 }
 
 func (w *v4Writer) nextFramePaddingLength(payloadLength int) int {
@@ -348,15 +373,21 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 
 	frameLength := len(headerCipher) + paddingLength + len(payloadCipher)
 	if !w.saltSent {
-		frameLength += v4SaltSize
-		if len(w.identity) == IdentityHeaderLength {
-			frameLength += len(identityWireMagic) + IdentityHeaderLength
-		}
+		frameLength += v4SaltSize + w.identityWireLength()
 	}
 	frame := make([]byte, 0, frameLength)
 	if !w.saltSent {
 		frame = append(frame, w.salt[:]...)
-		if len(w.identity) == IdentityHeaderLength {
+		if len(w.identityExporter) == IdentityExporterLength {
+			identity := IdentityV2HeaderFromPSK(w.psk)
+			tag, err := IdentityV2AuthTag(w.psk, w.identityExporter, w.salt[:])
+			if err != nil {
+				return err
+			}
+			frame = append(frame, identityWireMagicV2...)
+			frame = append(frame, identity...)
+			frame = append(frame, tag...)
+		} else if len(w.identity) == IdentityHeaderLength {
 			frame = append(frame, identityWireMagic...)
 			frame = append(frame, w.identity...)
 		}
