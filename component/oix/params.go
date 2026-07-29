@@ -57,7 +57,7 @@ func parseParams(raw string) queryParams {
 	}
 
 	params := queryParams{Extras: map[string]string{}}
-	var explicitMode, legacyMode string
+	var explicitMode string
 	legacyPremium := false
 	for _, pair := range strings.Split(raw, "&") {
 		if pair == "" {
@@ -81,13 +81,6 @@ func parseParams(raw string) queryParams {
 			if normalized == modeOverseas || normalized == modeEmergency || normalized == modePremium {
 				explicitMode = normalized
 			}
-		case "lv":
-			switch value {
-			case "1":
-				legacyMode = modeOverseas
-			case "2":
-				legacyMode = modeEmergency
-			}
 		case "type":
 			legacyPremium = isLegacyPremiumType(value) || legacyPremium
 		case "tfo":
@@ -109,9 +102,6 @@ func parseParams(raw string) queryParams {
 	}
 
 	params.Mode = explicitMode
-	if params.Mode == "" {
-		params.Mode = legacyMode
-	}
 	if params.Mode == "" && legacyPremium {
 		params.Mode = modePremium
 	}
@@ -439,7 +429,7 @@ func writeParamsFile(path, value string) error {
 
 func isReservedParamKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "mode", "lv", "nolv", "type", "tfo", "simplerules", "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
+	case "mode", "type", "tfo", "simplerules", "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
 		return true
 	default:
 		return false
@@ -455,7 +445,7 @@ func validateEditableParams(raw string) error {
 		keyRaw, valueRaw, hasValue := strings.Cut(pair, "=")
 		key := strings.ToLower(decodeQueryComponent(keyRaw))
 		switch key {
-		case "mode", "lv", "type", "nolv":
+		case "mode", "type":
 			if !hasValue {
 				return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
 			}
@@ -464,8 +454,6 @@ func validateEditableParams(raw string) error {
 			switch key {
 			case "mode":
 				valid = value == modeOverseas || value == modeEmergency || value == modePremium
-			case "lv":
-				valid = value == "1" || value == "2"
 			case "type":
 				valid = isLegacyPremiumType(value)
 			}

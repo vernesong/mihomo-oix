@@ -470,7 +470,7 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 		t.Fatal(err)
 	}
 	homeDir := t.TempDir()
-	if err := SetParams(homeDir, "&lv=1&tfo=false&area=hk"); err != nil {
+	if err := SetParams(homeDir, "&mode=overseas&tfo=false&area=hk"); err != nil {
 		t.Fatal(err)
 	}
 

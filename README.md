@@ -64,7 +64,7 @@ update or reset options return `409 Conflict`.
 
 The controller exposes the current encoded options and default through `GET /oix/options`. Use `PUT /oix/options` with
 `{"params":"&mode=premium&tfo=true&area=hk"}` to update them, or `DELETE /oix/options` to return to the account default.
-Lossy routing values such as `mode=fusion`, invalid `lv`, or obsolete `type` filters are rejected with `400 Bad Request`.
+A `mode` outside the supported values, or an obsolete `type` filter, is rejected with `400 Bad Request`.
 
 ## Dashboard
 

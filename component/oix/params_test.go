@@ -11,7 +11,7 @@ import (
 )
 
 func TestParamsEditableOptions(t *testing.T) {
-	params := parseParams("&lv=2&type=love&tfo=false&simplerules=true&area=hk&custom=1")
+	params := parseParams("&mode=emergency&type=love&tfo=false&simplerules=true&area=hk&custom=1")
 
 	if params.Mode != modeEmergency {
 		t.Fatalf("unexpected routing params: %+v", params)
@@ -32,7 +32,7 @@ func TestParamsEditableOptions(t *testing.T) {
 }
 
 func TestValidModeWinsOverPremiumTypeAndInvalidRepeatedMode(t *testing.T) {
-	params := parseParams("&mode=overseas&type=love&mode=bad&lv=2&area=hk")
+	params := parseParams("&mode=overseas&type=love&mode=bad&area=hk")
 
 	if params.Mode != modeOverseas {
 		t.Fatalf("unexpected routing params: %+v", params)
@@ -77,7 +77,7 @@ func TestLegacyPremiumAliasesNormalizeAndOldTypeFiltersAreDropped(t *testing.T) 
 }
 
 func TestParamsRejectInvalidAndInternalKeys(t *testing.T) {
-	params := parseParams("&lv=bad&LV=bad&nolv=2&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
+	params := parseParams("&mode=bad&MODE=bad&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
 
 	if params.Mode != modePremium || params.TFO != nil || params.SimpleRules {
 		t.Fatalf("invalid reserved values were retained: %+v", params)
@@ -91,7 +91,7 @@ func TestParamsRejectInvalidAndInternalKeys(t *testing.T) {
 }
 
 func TestParamsTierMigrationPreservesIndependentOptions(t *testing.T) {
-	params := parseParams("&lv=1&tfo=false&simplerules=true&area=hk")
+	params := parseParams("&mode=overseas&tfo=false&simplerules=true&area=hk")
 	migrated := params.withTierDefaults(queryParams{Mode: modePremium})
 
 	if migrated.Mode != modePremium {
@@ -117,7 +117,7 @@ func TestEffectiveParamsFollowTierDefaults(t *testing.T) {
 		t.Fatalf("alu params = %q, want %q", got, want)
 	}
 
-	if err := SetParams(homeDir, "&lv=2&tfo=false&simplerules=true&area=hk"); err != nil {
+	if err := SetParams(homeDir, "&mode=emergency&tfo=false&simplerules=true&area=hk"); err != nil {
 		t.Fatal(err)
 	}
 	premium, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "platinum", Rank: intPointer(60)})
@@ -161,7 +161,7 @@ func TestEffectiveParamsPreserveCustomRouting(t *testing.T) {
 	if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "alu", Rank: intPointer(20)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetParams(homeDir, "&lv=1&tfo=false&area=hk"); err != nil {
+	if err := SetParams(homeDir, "&mode=overseas&tfo=false&area=hk"); err != nil {
 		t.Fatal(err)
 	}
 	premium, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "platinum", Rank: intPointer(60)})
@@ -178,7 +178,7 @@ func TestEnvironmentParamsOverrideStoredOptions(t *testing.T) {
 	if err := SetParams(homeDir, "&type=love&tfo=true"); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("OIX_PARAMS", "&lv=1&tfo=false&area=hk")
+	t.Setenv("OIX_PARAMS", "&mode=overseas&tfo=false&area=hk")
 
 	params, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "platinum", Rank: intPointer(60)})
 	if err != nil {
@@ -216,7 +216,7 @@ func TestSetParamsRejectsOversizedValue(t *testing.T) {
 
 func TestSetParamsRejectsLossyRoutingValues(t *testing.T) {
 	t.Setenv("OIX_PARAMS", "")
-	for _, raw := range []string{"&mode=fusion", "&lv=3", "&type=relay", "&nolv=1", "&mode"} {
+	for _, raw := range []string{"&mode=fusion", "&type=relay", "&mode"} {
 		if err := SetParams(t.TempDir(), raw); !errors.Is(err, ErrParamsInvalid) {
 			t.Fatalf("SetParams(%q) error = %v, want ErrParamsInvalid", raw, err)
 		}
@@ -344,7 +344,7 @@ func TestEnvironmentParamsRejectMutations(t *testing.T) {
 	homeDir := t.TempDir()
 	t.Setenv("OIX_PARAMS", "&type=love")
 
-	if err := SetParams(homeDir, "&lv=1"); !errors.Is(err, ErrParamsEnvironmentOverride) {
+	if err := SetParams(homeDir, "&mode=overseas"); !errors.Is(err, ErrParamsEnvironmentOverride) {
 		t.Fatalf("SetParams error = %v, want ErrParamsEnvironmentOverride", err)
 	}
 	if err := ResetParams(homeDir); !errors.Is(err, ErrParamsEnvironmentOverride) {
@@ -358,7 +358,7 @@ func TestEffectiveParamsAdjustUnsupportedRoutingMode(t *testing.T) {
 	if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "platinum", Rank: intPointer(60)}); err != nil {
 		t.Fatal(err)
 	}
-	if err := SetParams(homeDir, "&lv=2&tfo=false&area=hk"); err != nil {
+	if err := SetParams(homeDir, "&mode=emergency&tfo=false&area=hk"); err != nil {
 		t.Fatal(err)
 	}
 
