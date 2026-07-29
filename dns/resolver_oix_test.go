@@ -59,6 +59,72 @@ func TestManagedDNSHedgesTCPWhenUDPIsBlackholed(t *testing.T) {
 	}
 }
 
+func TestManagedDNSDoesNotMutateCallerQuestion(t *testing.T) {
+	seed := make([]byte, ed25519.SeedSize)
+	for i := range seed {
+		seed[i] = byte(i + 1)
+	}
+
+	const managedAddr = "127.0.0.1:65353"
+	oldKey, oldDomains, oldAddr := oixdns.DNSPrivateKey, oixdns.NodesDomains, oixdns.DNSAddr
+	oixdns.DNSPrivateKey = base64.StdEncoding.EncodeToString(seed)
+	oixdns.NodesDomains = "cloud-nodes.example"
+	oixdns.DNSAddr = managedAddr
+	oixdns.SetEnsured()
+	t.Cleanup(func() {
+		oixdns.DNSPrivateKey, oixdns.NodesDomains, oixdns.DNSAddr = oldKey, oldDomains, oldAddr
+		oixdns.ClearEnsured()
+		oixdns.ResetManagedDNS()
+	})
+
+	const question = "node1.cloud-nodes.example."
+	request := new(D.Msg)
+	request.SetQuestion(question, D.TypeA)
+
+	var observed string
+	fake := dnsClientFunc(func(_ context.Context, query *D.Msg) (*D.Msg, error) {
+		observed = query.Question[0].Name
+		if name := request.Question[0].Name; name != question {
+			t.Errorf("caller question mutated to %q while the query is in flight", name)
+		}
+		reply := new(D.Msg)
+		reply.SetReply(query)
+		reply.Answer = append(reply.Answer, &D.A{
+			Hdr: D.RR_Header{Name: query.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+			A:   net.IPv4(127, 0, 0, 1),
+		})
+		return reply, nil
+	})
+
+	oixClientCache.Lock()
+	previousAddr, previousClient := oixClientCache.addr, oixClientCache.client
+	oixClientCache.addr, oixClientCache.client = managedAddr, fake
+	oixClientCache.Unlock()
+	t.Cleanup(func() {
+		oixClientCache.Lock()
+		oixClientCache.addr, oixClientCache.client = previousAddr, previousClient
+		oixClientCache.Unlock()
+	})
+
+	r := &Resolver{cache: Config{}.newCache()}
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+
+	response, err := r.exchangeWithoutCache(ctx, request)
+	if err != nil {
+		t.Fatalf("exchangeWithoutCache() error = %v", err)
+	}
+	if response == nil {
+		t.Fatal("exchangeWithoutCache() response is nil")
+	}
+	if !strings.HasSuffix(observed, "."+question) || observed == "."+question {
+		t.Fatalf("query name %q is not an obfuscated cloud domain", observed)
+	}
+	if name := request.Question[0].Name; name != question {
+		t.Fatalf("caller question = %q, want %q", name, question)
+	}
+}
+
 func TestManagedDNSHedgesTCPOverNetworkWhenUDPIsBlackholed(t *testing.T) {
 	tcpListener, err := net.Listen("tcp4", "127.0.0.1:0")
 	if err != nil {
