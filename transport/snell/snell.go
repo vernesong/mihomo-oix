@@ -103,7 +103,7 @@ func (s *Snell) ReadReply() error {
 }
 
 func (s *Snell) Warmup() error {
-	if _, err := s.Conn.Write([]byte{Version, CommandPing, 0}); err != nil {
+	if _, err := s.Write([]byte{Version, CommandPing, 0}); err != nil {
 		return err
 	}
 	var reply [1]byte

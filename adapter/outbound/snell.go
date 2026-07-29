@@ -423,12 +423,8 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		echTLSIdentityVersion = opt.IdentityVersion
 		echTLSLegacyFallback = opt.LegacyFallback
 		echTLSPreconnect = opt.Preconnect
-		skipCertVerify := opt.SkipCertVerify || opt.Insecure
-		if skipCertVerify {
+		if opt.SkipCertVerify || opt.Insecure {
 			return nil, fmt.Errorf("snell %s %s requires certificate verification", addr, snellECHTLSALPN)
-		}
-		if opt.CAFile != "" && skipCertVerify {
-			return nil, fmt.Errorf("snell %s ca-file and insecure/skip-cert-verify are mutually exclusive", addr)
 		}
 		echConfig, err := snellECHTLSConfig(opt)
 		if err != nil {
@@ -440,7 +436,6 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		}
 		echTLSOpt = &vmess.TLSConfig{
 			Host:                 host,
-			SkipCertVerify:       skipCertVerify,
 			CAFile:               opt.CAFile,
 			ClientFingerprint:    resolveSnellECHTLSClientFingerprint(opt, option),
 			FingerPrint:          opt.Fingerprint,
