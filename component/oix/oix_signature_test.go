@@ -15,7 +15,7 @@ import (
 
 func setupSignedFetchTest(t *testing.T) string {
 	t.Helper()
-	t.Setenv("OIX_PARAMS", "lv=1")
+	t.Setenv("OIX_PARAMS", "mode=overseas")
 
 	oldAppSecret := AppSecret
 	oldSecretKey := ageSecretKey
@@ -37,7 +37,7 @@ func setupSignedFetchTest(t *testing.T) string {
 
 func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 	t.Run("empty pubkey fails fast without request", func(t *testing.T) {
-		t.Setenv("OIX_PARAMS", "lv=1")
+		t.Setenv("OIX_PARAMS", "mode=overseas")
 		homeDir := t.TempDir()
 
 		oldAppSecret := AppSecret
