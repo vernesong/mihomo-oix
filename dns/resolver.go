@@ -199,9 +199,9 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 		if oc == nil {
 			return nil, errors.New("oix DNS unavailable")
 		}
-		m.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
-		msg, err = oc.ExchangeContext(ctx, m)
-		m.Question[0] = q
+		query := m.Copy()
+		query.Question[0].Name = D.Fqdn(oixdns.Obfuscate(domain))
+		msg, err = oc.ExchangeContext(ctx, query)
 		if err == nil && msg != nil {
 			markCloudIPsFromMsg(msg)
 			putoixMsgToCache(r.cache, q, msg)
