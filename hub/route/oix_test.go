@@ -43,7 +43,7 @@ func Test_oixOptionsLifecycle(t *testing.T) {
 func Test_oixOptionsRejectEnvironmentOverride(t *testing.T) {
 	restore := isolateoixOptionsTest(t)
 	defer restore()
-	t.Setenv("OIX_PARAMS", "&type=love")
+	t.Setenv("OIX_PARAMS", "&mode=premium")
 
 	handler := oixRouter()
 	if status, _ := requestoixOptions(t, handler, http.MethodPut, `{"params":"&mode=overseas"}`); status != http.StatusConflict {
