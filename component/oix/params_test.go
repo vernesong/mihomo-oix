@@ -60,32 +60,27 @@ func TestParamsRoundTripEncoding(t *testing.T) {
 	}
 }
 
-func TestLegacyPremiumAliasesNormalizeAndOldTypeFiltersAreDropped(t *testing.T) {
-	for _, alias := range []string{"love", "latest", "extreme"} {
-		if got, want := parseParams("&type="+alias).encode(), "&mode=premium"; got != want {
-			t.Fatalf("type %q = %q, want %q", alias, got, want)
+func TestObsoleteTypeFilterIsAlwaysDropped(t *testing.T) {
+	for _, obsolete := range []string{"love", "latest", "extreme", "relay", "cusrelay", "gamer", "back", "all", "default"} {
+		if got := parseParams("&type=" + obsolete).encode(); got != "" {
+			t.Fatalf("obsolete type %q retained as %q", obsolete, got)
 		}
 	}
 	if got := parseParams("&mode=fusion").encode(); got != "" {
 		t.Fatalf("unsupported fusion mode retained as %q", got)
 	}
-	for _, obsolete := range []string{"relay", "cusrelay", "gamer", "back", "all", "default"} {
-		if got := parseParams("&type=" + obsolete).encode(); got != "" {
-			t.Fatalf("obsolete type %q retained as %q", obsolete, got)
-		}
-	}
 }
 
 func TestParamsRejectInvalidAndInternalKeys(t *testing.T) {
-	params := parseParams("&mode=bad&MODE=bad&type=love&type&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&area=hk")
+	params := parseParams("&mode=bad&MODE=bad&type=love&type&lv=2&nolv=1&tfo=bad&tfo&simplerules&provider=clash&age-public-key=x&=orphan&area=hk")
 
-	if params.Mode != modePremium || params.TFO != nil || params.SimpleRules {
+	if params.Mode != "" || params.TFO != nil || params.SimpleRules {
 		t.Fatalf("invalid reserved values were retained: %+v", params)
 	}
 	if !reflect.DeepEqual(params.Extras, map[string]string{"area": "hk"}) {
 		t.Fatalf("extras = %#v", params.Extras)
 	}
-	if got, want := params.encode(), "&mode=premium&area=hk"; got != want {
+	if got, want := params.encode(), "&area=hk"; got != want {
 		t.Fatalf("Encode() = %q, want %q", got, want)
 	}
 }
@@ -175,7 +170,7 @@ func TestEffectiveParamsPreserveCustomRouting(t *testing.T) {
 
 func TestEnvironmentParamsOverrideStoredOptions(t *testing.T) {
 	homeDir := t.TempDir()
-	if err := SetParams(homeDir, "&type=love&tfo=true"); err != nil {
+	if err := SetParams(homeDir, "&mode=premium&tfo=true"); err != nil {
 		t.Fatal(err)
 	}
 	t.Setenv("OIX_PARAMS", "&mode=overseas&tfo=false&area=hk")
@@ -216,10 +211,17 @@ func TestSetParamsRejectsOversizedValue(t *testing.T) {
 
 func TestSetParamsRejectsLossyRoutingValues(t *testing.T) {
 	t.Setenv("OIX_PARAMS", "")
-	for _, raw := range []string{"&mode=fusion", "&type=relay", "&mode"} {
+	for _, raw := range []string{"&mode=fusion", "&mode"} {
 		if err := SetParams(t.TempDir(), raw); !errors.Is(err, ErrParamsInvalid) {
 			t.Fatalf("SetParams(%q) error = %v, want ErrParamsInvalid", raw, err)
 		}
+	}
+	obsolete := t.TempDir()
+	if err := SetParams(obsolete, "&type=relay&lv=2"); err != nil {
+		t.Fatalf("obsolete keys rejected: %v", err)
+	}
+	if raw, _, err := readParamsFile(paramsFilePath(obsolete)); err != nil || raw != "&tfo=true" {
+		t.Fatalf("stored obsolete params = %q, err = %v", raw, err)
 	}
 	homeDir := t.TempDir()
 	if err := SetParams(homeDir, "??&MODE=Premium"); err != nil {
@@ -342,7 +344,7 @@ func TestReadParamsFileRejectsOversizedValue(t *testing.T) {
 
 func TestEnvironmentParamsRejectMutations(t *testing.T) {
 	homeDir := t.TempDir()
-	t.Setenv("OIX_PARAMS", "&type=love")
+	t.Setenv("OIX_PARAMS", "&mode=premium")
 
 	if err := SetParams(homeDir, "&mode=overseas"); !errors.Is(err, ErrParamsEnvironmentOverride) {
 		t.Fatalf("SetParams error = %v, want ErrParamsEnvironmentOverride", err)
