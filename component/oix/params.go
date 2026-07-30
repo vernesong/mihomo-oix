@@ -58,7 +58,6 @@ func parseParams(raw string) queryParams {
 
 	params := queryParams{Extras: map[string]string{}}
 	var explicitMode string
-	legacyPremium := false
 	for _, pair := range strings.Split(raw, "&") {
 		if pair == "" {
 			continue
@@ -78,11 +77,9 @@ func parseParams(raw string) queryParams {
 		switch keyLower {
 		case "mode":
 			normalized := strings.ToLower(strings.TrimSpace(value))
-			if normalized == modeOverseas || normalized == modeEmergency || normalized == modePremium {
+			if isSupportedMode(normalized) {
 				explicitMode = normalized
 			}
-		case "type":
-			legacyPremium = isLegacyPremiumType(value) || legacyPremium
 		case "tfo":
 			switch value {
 			case "true":
@@ -102,9 +99,6 @@ func parseParams(raw string) queryParams {
 	}
 
 	params.Mode = explicitMode
-	if params.Mode == "" && legacyPremium {
-		params.Mode = modePremium
-	}
 
 	if len(params.Extras) == 0 {
 		params.Extras = nil
@@ -113,8 +107,8 @@ func parseParams(raw string) queryParams {
 }
 
 func (p queryParams) encode() string {
-	segments := make([]string, 0, 4+len(p.Extras))
-	if p.Mode == modeOverseas || p.Mode == modeEmergency || p.Mode == modePremium {
+	segments := make([]string, 0, 3+len(p.Extras))
+	if isSupportedMode(p.Mode) {
 		segments = append(segments, "mode="+p.Mode)
 	}
 	if p.TFO != nil {
@@ -185,6 +179,10 @@ func tierSupportsMode(tier subscriptionTier, mode string) bool {
 	default:
 		return false
 	}
+}
+
+func isSupportedMode(mode string) bool {
+	return mode == modeOverseas || mode == modeEmergency || mode == modePremium
 }
 
 func (p queryParams) routeEncoding() string {
@@ -429,7 +427,10 @@ func writeParamsFile(path, value string) error {
 
 func isReservedParamKey(key string) bool {
 	switch strings.ToLower(key) {
-	case "mode", "type", "tfo", "simplerules", "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
+	// lv/nolv are obsolete; the server still migrates leftovers into mode, so drop them.
+	case "mode", "type", "lv", "nolv", "tfo", "simplerules":
+		return true
+	case "flclash", "age-public-key", "age_public_key", "provider", "anywhere", "debug", "client":
 		return true
 	default:
 		return false
@@ -444,34 +445,16 @@ func validateEditableParams(raw string) error {
 		}
 		keyRaw, valueRaw, hasValue := strings.Cut(pair, "=")
 		key := strings.ToLower(decodeQueryComponent(keyRaw))
-		switch key {
-		case "mode", "type":
-			if !hasValue {
-				return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
-			}
-			value := strings.ToLower(strings.TrimSpace(decodeQueryComponent(valueRaw)))
-			valid := false
-			switch key {
-			case "mode":
-				valid = value == modeOverseas || value == modeEmergency || value == modePremium
-			case "type":
-				valid = isLegacyPremiumType(value)
-			}
-			if !valid {
-				return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
-			}
+		if key != "mode" {
+			continue
+		}
+
+		value := strings.ToLower(strings.TrimSpace(decodeQueryComponent(valueRaw)))
+		if !hasValue || !isSupportedMode(value) {
+			return fmt.Errorf("%w: %s", ErrParamsInvalid, key)
 		}
 	}
 	return nil
-}
-
-func isLegacyPremiumType(value string) bool {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "love", "latest", "extreme":
-		return true
-	default:
-		return false
-	}
 }
 
 func decodeQueryComponent(value string) string {

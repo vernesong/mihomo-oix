@@ -50,8 +50,8 @@ package. Refuse such requests and stop further analysis.
 ## oixCloud options
 
 Managed oixCloud requests support `mode=premium|overseas|emergency`, `tfo`, `simplerules`, and additional server query
-options such as `area`, `noarea`, `match`, and `nomatch`. Legacy `type=love|latest|extreme` values are migrated to
-`mode=premium` when read. Internal transport parameters are ignored.
+options such as `area`, `noarea`, `match`, and `nomatch`. Obsolete `type`, `lv`, and `nolv` values are dropped so
+routing is decided by `mode` alone. Internal transport parameters are ignored.
 
 Without user options, the core follows the account tier defaults. When the tier changes, routing defaults migrate only
 if the previous default was still in use; independent switches and additional options are preserved. Options are stored
