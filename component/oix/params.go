@@ -10,6 +10,8 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+
+	"github.com/metacubex/mihomo/log"
 )
 
 const (
@@ -283,14 +285,16 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	current = current.adjustedForTier(tier).withDefaultTFO()
 
 	currentEncoded := current.encode()
+	// These files only cache derived state, so a write failure must not stop the
+	// managed fetch; the values are recomputed on the next run.
 	if !environmentOverride && (!hasCurrent || currentRaw != currentEncoded) {
 		if err := writeParamsFile(paramsFilePath(homeDir), currentEncoded); err != nil {
-			return queryParams{}, err
+			log.Warnln("[oixCloud] failed to persist account options: %s", err)
 		}
 	}
 	if oldDefaultRaw != newDefaultRaw {
 		if err := writeParamsFile(defaultParamsFilePath(homeDir), newDefaultRaw); err != nil {
-			return queryParams{}, err
+			log.Warnln("[oixCloud] failed to persist tier defaults: %s", err)
 		}
 	}
 
