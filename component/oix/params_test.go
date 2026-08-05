@@ -168,6 +168,26 @@ func TestEffectiveParamsPreserveCustomRouting(t *testing.T) {
 	}
 }
 
+func TestEffectiveParamsSurvivePersistenceFailure(t *testing.T) {
+	if os.Geteuid() == 0 {
+		t.Skip("root bypasses the read-only directory used to force a write failure")
+	}
+	t.Setenv("OIX_PARAMS", "")
+	homeDir := t.TempDir()
+	if err := os.Chmod(homeDir, 0o555); err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() { _ = os.Chmod(homeDir, 0o755) })
+
+	params, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "alu", Rank: intPointer(20)})
+	if err != nil {
+		t.Fatalf("unpersisted options must still resolve: %v", err)
+	}
+	if got, want := params.encode(), "&mode=emergency&tfo=true"; got != want {
+		t.Fatalf("params = %q, want %q", got, want)
+	}
+}
+
 func TestEnvironmentParamsOverrideStoredOptions(t *testing.T) {
 	homeDir := t.TempDir()
 	if err := SetParams(homeDir, "&mode=premium&tfo=true"); err != nil {
