@@ -15,7 +15,6 @@ import (
 	"sync/atomic"
 	"time"
 
-	"github.com/metacubex/mihomo/common/contextutils"
 	"github.com/metacubex/tls"
 	"golang.org/x/sync/semaphore"
 )
@@ -1096,15 +1095,13 @@ func operationContextError(ctx context.Context, fallback error) error {
 	return fallback
 }
 
-// interruptControlConnOnDone makes cancellation observable to the TLS reads
-// and writes of one epoch. stop waits for a callback that already started, so
-// it is also the success boundary after which cancellation cannot close a
-// later epoch through the reused ControlConn.
-func interruptControlConnOnDone(ctx context.Context, conn io.Closer) func() {
-	done := make(chan struct{})
-	stop := contextutils.AfterFunc(ctx, func() {
-		defer close(done)
-		_ = conn.Close()
+// interruptTLSOnDone makes cancellation observable to tls.Conn reads backed
+// by ControlConn, whose packet read otherwise has no context parameter.
+func (c *Client) interruptTLSOnDone(ctx context.Context) func() {
+	stop := context.AfterFunc(ctx, func() {
+		if conn := c.tlsConn.Load(); conn != nil {
+			_ = conn.SetDeadline(time.Now())
+		}
 	})
 	return func() {
 		if !stop() {
