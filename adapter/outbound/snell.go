@@ -59,24 +59,22 @@ type SnellOption struct {
 }
 
 type snellECHTLSObfsOption struct {
-	ALPN              string            `obfs:"alpn,omitempty"`
-	Protocol          string            `obfs:"protocol,omitempty"`
-	IdentityVersion   int               `obfs:"identity-version,omitempty"`
-	LegacyFallback    bool              `obfs:"legacy-fallback,omitempty"`
-	Preconnect        int               `obfs:"preconnect,omitempty"`
-	Host              string            `obfs:"host,omitempty"`
-	SNI               string            `obfs:"sni,omitempty"`
-	Path              string            `obfs:"path,omitempty"`
-	ECHConfig         string            `obfs:"ech-config,omitempty"`
-	ECHConfigFile     string            `obfs:"ech-config-file,omitempty"`
-	CAFile            string            `obfs:"ca-file,omitempty"`
-	Insecure          bool              `obfs:"insecure,omitempty"`
-	Fingerprint       string            `obfs:"fingerprint,omitempty"`
-	ClientFingerprint string            `obfs:"client-fingerprint,omitempty"`
-	Certificate       string            `obfs:"certificate,omitempty"`
-	PrivateKey        string            `obfs:"private-key,omitempty"`
-	Headers           map[string]string `obfs:"headers,omitempty"`
-	SkipCertVerify    bool              `obfs:"skip-cert-verify,omitempty"`
+	ALPN              string `obfs:"alpn,omitempty"`
+	Protocol          string `obfs:"protocol,omitempty"`
+	IdentityVersion   int    `obfs:"identity-version,omitempty"`
+	LegacyFallback    bool   `obfs:"legacy-fallback,omitempty"`
+	Preconnect        int    `obfs:"preconnect,omitempty"`
+	Host              string `obfs:"host,omitempty"`
+	SNI               string `obfs:"sni,omitempty"`
+	ECHConfig         string `obfs:"ech-config,omitempty"`
+	ECHConfigFile     string `obfs:"ech-config-file,omitempty"`
+	CAFile            string `obfs:"ca-file,omitempty"`
+	Insecure          bool   `obfs:"insecure,omitempty"`
+	Fingerprint       string `obfs:"fingerprint,omitempty"`
+	ClientFingerprint string `obfs:"client-fingerprint,omitempty"`
+	Certificate       string `obfs:"certificate,omitempty"`
+	PrivateKey        string `obfs:"private-key,omitempty"`
+	SkipCertVerify    bool   `obfs:"skip-cert-verify,omitempty"`
 }
 
 func snellECHTLSHost(opt *snellECHTLSObfsOption, server string) string {
@@ -261,7 +259,7 @@ func (s *Snell) writeHeaderContext(ctx context.Context, c net.Conn, metadata *C.
 // DialContext implements C.ProxyAdapter
 func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn, err error) {
 	if s.reuse {
-		c, err := s.pool.Get()
+		c, err := s.pool.GetContext(ctx)
 		if err != nil {
 			return nil, err
 		}
@@ -518,7 +516,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 				return nil, err
 			}
 			if s.version == snell.Version4 {
-				if err = sc.Warmup(); err != nil {
+				if err = sc.WarmupContext(ctx); err != nil {
 					_ = sc.Close()
 					return nil, err
 				}

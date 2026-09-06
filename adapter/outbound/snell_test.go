@@ -1,11 +1,49 @@
 package outbound
 
 import (
+	"context"
+	"errors"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/metacubex/mihomo/component/ech"
+	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/transport/snell"
 )
+
+func TestSnellReuseDialHonorsCancellation(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	started := make(chan struct{})
+	adapter := &Snell{
+		reuse: true,
+		pool: snell.NewPool(func(factoryCtx context.Context) (*snell.Snell, error) {
+			close(started)
+			select {
+			case <-factoryCtx.Done():
+				return nil, factoryCtx.Err()
+			case <-time.After(time.Second):
+				return nil, errors.New("pool factory did not receive caller cancellation")
+			}
+		}),
+	}
+	result := make(chan error, 1)
+	go func() {
+		_, err := adapter.DialContext(ctx, &C.Metadata{})
+		result <- err
+	}()
+	<-started
+	cancel()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("DialContext() error = %v, want context.Canceled", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("pooled dial remained blocked after cancellation")
+	}
+}
 
 func TestSnellECHTLSUsesRawTLSWithoutPath(t *testing.T) {
 	echConfig, _, err := ech.GenECHConfig("front.example.com")

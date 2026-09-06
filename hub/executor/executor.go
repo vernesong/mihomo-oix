@@ -89,6 +89,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	log.SetLevel(cfg.General.LogLevel)
 
 	tunnel.OnSuspend()
+	oix.StopPeriodicUpdate()
 
 	ca.ResetCertificate()
 	for _, c := range cfg.TLS.CustomTrustCert {
@@ -586,6 +587,7 @@ func closeSmart() {
 }
 
 func Shutdown() {
+	oix.StopPeriodicUpdate()
 	listener.Cleanup()
 	tproxy.CleanupTProxyIPTables()
 	resolver.StoreFakePoolState()

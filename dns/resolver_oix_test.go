@@ -5,14 +5,17 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"net"
+	"net/netip"
 	"strings"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"github.com/metacubex/mihomo/component/dialer"
+	"github.com/metacubex/mihomo/component/fakeip"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/resolver"
+	C "github.com/metacubex/mihomo/constant"
 
 	D "github.com/miekg/dns"
 )
@@ -26,6 +29,146 @@ func (f dnsClientFunc) ExchangeContext(ctx context.Context, msg *D.Msg) (*D.Msg,
 func (dnsClientFunc) Address() string { return "test" }
 
 func (dnsClientFunc) ResetConnection() {}
+
+func useManagedDNSClient(t *testing.T, client dnsClient) {
+	t.Helper()
+	const addr = "127.0.0.1:65353"
+	oldKey, oldDomains, oldAddr := oixdns.DNSPrivateKey, oixdns.NodesDomains, oixdns.DNSAddr
+	wasEnsured := oixdns.IsEnsured()
+	oixdns.DNSPrivateKey = base64.StdEncoding.EncodeToString(make([]byte, ed25519.SeedSize))
+	oixdns.NodesDomains, oixdns.DNSAddr = "cloud-nodes.example", addr
+	oixdns.SetEnsured()
+	oixClientCache.Lock()
+	previousAddr, previousClient := oixClientCache.addr, oixClientCache.client
+	oixClientCache.addr, oixClientCache.client = addr, client
+	oixClientCache.Unlock()
+	t.Cleanup(func() {
+		oixdns.DNSPrivateKey, oixdns.NodesDomains, oixdns.DNSAddr = oldKey, oldDomains, oldAddr
+		if !wasEnsured {
+			oixdns.ClearEnsured()
+		}
+		oixClientCache.Lock()
+		oixClientCache.addr, oixClientCache.client = previousAddr, previousClient
+		oixClientCache.Unlock()
+	})
+}
+
+func TestManagedDNSServiceSignsOnceAndRestoresReply(t *testing.T) {
+	const name = "node.cloud-nodes.example."
+	var calls int
+	useManagedDNSClient(t, dnsClientFunc(func(_ context.Context, query *D.Msg) (*D.Msg, error) {
+		calls++
+		if got := query.Question[0].Name; D.CountLabel(got) != D.CountLabel(name)+2 || !strings.HasSuffix(got, "."+name) {
+			t.Errorf("managed query must be signed exactly once, got %q", got)
+		}
+		reply := new(D.Msg)
+		reply.SetReply(query)
+		reply.Answer = []D.RR{&D.A{
+			Hdr: D.RR_Header{Name: query.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+			A:   net.IPv4(192, 0, 2, 1),
+		}}
+		return reply, nil
+	}))
+	r := &Resolver{cache: Config{}.newCache()}
+	service := NewService(r, NewEnhancer(EnhancerConfig{EnhancedMode: C.DNSNormal}))
+	for i := 0; i < 2; i++ {
+		query := new(D.Msg)
+		query.SetQuestion(name, D.TypeA)
+		reply, err := service.ServeMsg(context.Background(), query)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if reply.Id != query.Id || reply.Question[0] != query.Question[0] {
+			t.Fatalf("reply does not match original query: %v", reply.Question)
+		}
+		if len(reply.Answer) != 1 || reply.Answer[0].Header().Name != name {
+			t.Fatalf("answer does not match original name: %v", reply.Answer)
+		}
+	}
+	if calls != 1 {
+		t.Fatalf("upstream calls = %d, want 1 with cached reply", calls)
+	}
+}
+
+func TestManagedDNSFakeIPKeepsOriginalName(t *testing.T) {
+	useManagedDNSClient(t, dnsClientFunc(func(_ context.Context, _ *D.Msg) (*D.Msg, error) {
+		t.Error("fake IP lookup unexpectedly reached upstream")
+		return nil, nil
+	}))
+	pool, err := fakeip.New(fakeip.Options{IPNet: netip.MustParsePrefix("198.18.0.0/16"), Size: 10})
+	if err != nil {
+		t.Fatal(err)
+	}
+	service := NewService(&Resolver{cache: Config{}.newCache()}, NewEnhancer(EnhancerConfig{
+		EnhancedMode: C.DNSFakeIP, FakeIPPool: pool, FakeIPSkipper: &fakeip.Skipper{},
+	}))
+	query := new(D.Msg)
+	query.SetQuestion("node.cloud-nodes.example.", D.TypeA)
+	reply, err := service.ServeMsg(context.Background(), query)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if reply.Question[0] != query.Question[0] || reply.Answer[0].Header().Name != query.Question[0].Name {
+		t.Fatalf("fake IP response contains signed name: %v", reply)
+	}
+	ips := msgToIP(reply)
+	if host, ok := pool.LookBack(ips[0]); !ok || host != "node.cloud-nodes.example" {
+		t.Fatalf("fake IP mapping = %q, %v", host, ok)
+	}
+}
+
+func TestManagedDNSResolveECHSignsOnce(t *testing.T) {
+	const host = "node.cloud-nodes.example"
+	client := dnsClientFunc(func(_ context.Context, query *D.Msg) (*D.Msg, error) {
+		if got := query.Question[0].Name; D.CountLabel(got) != D.CountLabel(host)+2 {
+			t.Errorf("ECH query must be signed exactly once, got %q", got)
+		}
+		reply := new(D.Msg)
+		reply.SetReply(query)
+		reply.Answer = []D.RR{&D.HTTPS{SVCB: D.SVCB{
+			Hdr:      D.RR_Header{Name: query.Question[0].Name, Rrtype: D.TypeHTTPS, Class: D.ClassINET, Ttl: 60},
+			Priority: 1, Target: ".", Value: []D.SVCBKeyValue{&D.SVCBECHConfig{ECH: []byte{1, 2, 3}}},
+		}}}
+		return reply, nil
+	})
+	useManagedDNSClient(t, client)
+	r := &Resolver{cache: Config{}.newCache(), main: []dnsClient{client}}
+	config, err := resolver.ResolveECHWithResolver(context.Background(), host, r)
+	if err != nil || string(config) != string([]byte{1, 2, 3}) {
+		t.Fatalf("ResolveECHWithResolver() = %v, %v", config, err)
+	}
+}
+
+func TestManagedDNSCacheDropsOPTAndHonorsRecordTTLs(t *testing.T) {
+	query := new(D.Msg)
+	query.SetQuestion("node.cloud-nodes.example.", D.TypeA)
+	reply := new(D.Msg)
+	reply.SetReply(query)
+	reply.Answer = []D.RR{&D.A{
+		Hdr: D.RR_Header{Name: query.Question[0].Name, Rrtype: D.TypeA, Class: D.ClassINET, Ttl: 300},
+		A:   net.IPv4(192, 0, 2, 1),
+	}}
+	reply.Ns = []D.RR{&D.NS{
+		Hdr: D.RR_Header{Name: "cloud-nodes.example.", Rrtype: D.TypeNS, Class: D.ClassINET, Ttl: 60},
+		Ns:  "ns.cloud-nodes.example.",
+	}}
+	reply.SetEdns0(4096, true)
+	cache := Config{}.newCache()
+	putoixMsgToCache(cache, query.Question[0], reply)
+	cached, expires, ok := getMsgFromCache(cache, query.Question[0])
+	if !ok {
+		t.Fatal("successful managed response was not cached")
+	}
+	if cached.IsEdns0() != nil {
+		t.Fatal("cached response retains per-hop OPT record")
+	}
+	if cached.Ns[0].Header().Ttl != 60 || time.Until(expires) > time.Minute {
+		t.Fatalf("cache extended authoritative TTL: %v, %s", cached.Ns, time.Until(expires))
+	}
+	if reply.IsEdns0() == nil || reply.Answer[0].Header().Ttl != 300 {
+		t.Fatal("caching mutated caller response")
+	}
+}
 
 func TestManagedDNSHedgesTCPWhenUDPIsBlackholed(t *testing.T) {
 	udp := dnsClientFunc(func(ctx context.Context, _ *D.Msg) (*D.Msg, error) {

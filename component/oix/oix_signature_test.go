@@ -115,7 +115,7 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 		if err != nil {
 			t.Fatalf("fetchFrom() error = %v", err)
 		}
-		if len(result) == 0 {
+		if result == nil {
 			t.Fatal("config is empty")
 		}
 	})
@@ -181,7 +181,7 @@ func TestFetchBestAcceptsAPIBaseURLTrailingSlash(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchBest() error = %v", err)
 	}
-	if len(config) == 0 {
+	if config == nil {
 		t.Fatal("config is empty")
 	}
 }
@@ -267,7 +267,7 @@ func TestFetchBestWaitsForNonEmptyConfig(t *testing.T) {
 	if err != nil {
 		t.Fatalf("fetchBest() error = %v", err)
 	}
-	if len(config) == 0 {
+	if config == nil {
 		t.Fatal("empty response won over valid fallback response")
 	}
 }
@@ -299,5 +299,54 @@ func TestFetchBestRequiresAllEndpointsToRejectAuthentication(t *testing.T) {
 	_, err = fetchBest(context.Background(), "token", []string{authServer.URL, authServer2.URL}, t.TempDir())
 	if !IsAuthError(err) {
 		t.Fatalf("unanimous endpoint errors = %v, want auth failure", err)
+	}
+}
+
+func TestFetchBestOnlyPersistsWinningProviderOptions(t *testing.T) {
+	publicKey := setupSignedFetchTest(t)
+	t.Setenv("OIX_PARAMS", "")
+	homeDir := t.TempDir()
+	if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "alu"}); err != nil {
+		t.Fatal(err)
+	}
+	before, err := GetParamsState(homeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	loserStarted := make(chan struct{})
+	loser := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/information" {
+			_ = json.NewEncoder(w).Encode(informationResponse{Ret: http.StatusOK, Data: &informationData{PlanCode: "iron"}})
+			return
+		}
+		close(loserStarted)
+		<-r.Context().Done()
+	}))
+	t.Cleanup(loser.Close)
+	winner := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == "/api/v1/information" {
+			<-loserStarted
+			_ = json.NewEncoder(w).Encode(informationResponse{Ret: http.StatusOK, Data: &informationData{PlanCode: "silver"}})
+			return
+		}
+		writeSignedConfig(t, w, r, publicKey)
+	}))
+	t.Cleanup(winner.Close)
+	setoixHTTPClientForTest(t, &http.Client{})
+
+	config, err := fetchBest(context.Background(), "token", []string{loser.URL, winner.URL}, homeDir)
+	if err != nil || config == nil {
+		t.Fatalf("fetchBest() = %v, %v", config, err)
+	}
+	if state, err := GetParamsState(homeDir); err != nil || state != before {
+		t.Fatalf("fetch changed options before provider was saved: %+v, %v, want %+v", state, err, before)
+	}
+	if !saveResult(defaultProviderDir, homeDir, config.data) {
+		t.Fatal("save failed")
+	}
+	config.params.persist(homeDir)
+	state, err := GetParamsState(homeDir)
+	if err != nil || state.Params != "&mode=premium&tfo=true" || state.DefaultParams != "&mode=premium" {
+		t.Fatalf("winning provider options = %+v, %v", state, err)
 	}
 }

@@ -56,19 +56,23 @@ var (
 )
 
 var (
-	ErrAuthFailed = errors.New("authentication failed")
-	ErrNoToken    = errors.New("OIX_TOKEN not set")
-	ErrNoDomains  = errors.New("no API domains configured")
+	ErrAuthFailed     = errors.New("authentication failed")
+	ErrNoToken        = errors.New("OIX_TOKEN not set")
+	ErrNoDomains      = errors.New("no API domains configured")
+	ErrNoSubscription = errors.New("no subscription found for this token")
 )
 
 var (
+	accountMu  sync.Mutex
 	tokenMu    sync.RWMutex
 	loginToken string
+	loggedOut  bool
 )
 
 func SetToken(token string) {
 	tokenMu.Lock()
 	loginToken = normalizeToken(token)
+	loggedOut = false
 	tokenMu.Unlock()
 }
 
@@ -87,8 +91,13 @@ func CurrentToken() string {
 }
 
 func getToken() string {
-	if t := CurrentToken(); t != "" {
-		return t
+	tokenMu.RLock()
+	defer tokenMu.RUnlock()
+	if loggedOut {
+		return ""
+	}
+	if loginToken != "" {
+		return loginToken
 	}
 	return normalizeToken(os.Getenv("OIX_TOKEN"))
 }
@@ -276,15 +285,16 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 		}
 		return false, err
 	}
-	if len(config) == 0 {
+	if config == nil {
 		log.Warnln("[oixCloud] ensure failed, no provider found for [%s]", ProviderFile())
 		ensureFromDisk(dir, homeDir)
 		return false, nil
 	}
-	ok := saveResult(dir, homeDir, config)
+	ok := saveResult(dir, homeDir, config.data)
 	if !ok {
 		return false, errors.New("save failed")
 	}
+	config.params.persist(homeDir)
 	oixdns.SetEnsured()
 	if providerExists {
 		log.Infoln("[oixCloud] provider [%s] already exists, file updated", ProviderFile())
@@ -372,15 +382,17 @@ func runPeriodicUpdate(ctx context.Context, dir, homeDir string) error {
 	if err != nil {
 		return err
 	}
-	if len(config) == 0 {
+	if config == nil {
 		return nil
 	}
 	if err := ctx.Err(); err != nil {
 		return err
 	}
-	if saveResult(dir, homeDir, config) {
-		log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
+	if !saveResult(dir, homeDir, config.data) {
+		return errors.New("save failed")
 	}
+	config.params.persist(homeDir)
+	log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 	return nil
 }
 
@@ -406,7 +418,10 @@ func ForceUpdate() error {
 	if dir == "" {
 		return errors.New("periodic update not started")
 	}
-	_, err := Ensure(dir, homeDir, true)
+	ok, err := Ensure(dir, homeDir, true)
+	if err == nil && !ok {
+		return ErrNoSubscription
+	}
 	return err
 }
 
@@ -428,7 +443,9 @@ func tokenFilePath(homeDir string) string {
 }
 
 func LoadPersistedToken(homeDir string) {
-	if homeDir == "" || getToken() != "" {
+	tokenMu.Lock()
+	defer tokenMu.Unlock()
+	if homeDir == "" || loggedOut || loginToken != "" || normalizeToken(os.Getenv("OIX_TOKEN")) != "" {
 		return
 	}
 	path := tokenFilePath(homeDir)
@@ -436,9 +453,7 @@ func LoadPersistedToken(homeDir string) {
 	if err != nil {
 		return
 	}
-	if t := strings.TrimSpace(string(data)); t != "" {
-		SetToken(t)
-	}
+	loginToken = normalizeToken(string(data))
 }
 
 func persistToken(homeDir, token string) error {
@@ -449,6 +464,9 @@ func persistToken(homeDir, token string) error {
 }
 
 func Login(token string) (bool, error) {
+	accountMu.Lock()
+	defer accountMu.Unlock()
+
 	token = normalizeToken(token)
 	if token == "" {
 		return false, ErrNoToken
@@ -457,28 +475,50 @@ func Login(token string) (bool, error) {
 	if dir == "" {
 		return false, errors.New("oix provider not initialized")
 	}
-	prev := CurrentToken()
-	SetToken(token)
-	ok, err := Ensure(dir, homeDir, true)
-	if err != nil || !ok {
-		SetToken(prev)
+
+	// Validate a candidate account without exposing it to concurrent updates or
+	// disturbing the active account when authentication or provider storage fails.
+	if ok, err := loginWithToken(dir, homeDir, token); err != nil || !ok {
 		return ok, err
-	}
-	if err := persistToken(homeDir, token); err != nil {
-		log.Warnln("[oixCloud] persist token failed: %s", err)
 	}
 	StartPeriodicUpdate(dir, homeDir)
 	return true, nil
 }
 
+func loginWithToken(dir, homeDir, token string) (bool, error) {
+	providerUpdateMu.Lock()
+	defer providerUpdateMu.Unlock()
+
+	config, err := fetchBest(context.Background(), token, apiBaseURLs(), homeDir)
+	if err != nil || config == nil {
+		return false, err
+	}
+	if !saveResult(dir, homeDir, config.data) {
+		return false, errors.New("save failed")
+	}
+	config.params.persist(homeDir)
+	if err := persistToken(homeDir, token); err != nil {
+		log.Warnln("[oixCloud] persist token failed: %s", err)
+	}
+	SetToken(token)
+	oixdns.SetEnsured()
+	return true, nil
+}
+
 func Logout() {
-	SetToken("")
+	accountMu.Lock()
+	defer accountMu.Unlock()
+
+	tokenMu.Lock()
+	loginToken = ""
+	loggedOut = true
+	tokenMu.Unlock()
 	StopPeriodicUpdate()
+	dir, homeDir := providerPaths()
 	providerUpdateMu.Lock()
 	defer providerUpdateMu.Unlock()
 	oixdns.ClearEnsured()
 	oixdns.ResetManagedDNS()
-	dir, homeDir := providerPaths()
 	if homeDir != "" {
 		_ = os.Remove(tokenFilePath(homeDir))
 		clearParams(homeDir)
@@ -492,7 +532,12 @@ func IsoixProvider(name string) bool {
 	return name == ProviderFile()
 }
 
-func fetchBest(parent context.Context, token string, urls []string, homeDir string) ([]byte, error) {
+type fetchedConfig struct {
+	data   []byte
+	params *resolvedParams
+}
+
+func fetchBest(parent context.Context, token string, urls []string, homeDir string) (*fetchedConfig, error) {
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
@@ -507,7 +552,7 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	defer cancel()
 
 	type outcome struct {
-		config []byte
+		config *fetchedConfig
 		err    error
 	}
 	results := make(chan outcome, len(urls))
@@ -535,7 +580,7 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	for range urls {
 		o := <-results
 		if o.err == nil {
-			if len(o.config) > 0 {
+			if o.config != nil {
 				cancel()
 				return o.config, nil
 			}
@@ -560,7 +605,7 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	return nil, ErrNoDomains
 }
 
-func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, error) {
+func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
 	if agePublicKey == "" {
 		return nil, errors.New("age key unavailable")
 	}
@@ -576,9 +621,13 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, err
 	planCancel()
 
 	var params queryParams
+	var resolved *resolvedParams
 	var err error
 	if planErr == nil {
-		params, err = effectiveParamsForPlan(homeDir, plan)
+		resolved, err = resolveParamsForPlan(homeDir, plan)
+		if err == nil {
+			params = resolved.params
+		}
 	} else {
 		if err := ctx.Err(); err != nil {
 			return nil, err
@@ -636,7 +685,11 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) ([]byte, err
 	if apiResp.Config == "" {
 		return nil, nil
 	}
-	return decodeArmoredConfig(apiResp.Config)
+	data, err := decodeArmoredConfig(apiResp.Config)
+	if err != nil {
+		return nil, err
+	}
+	return &fetchedConfig{data: data, params: resolved}, nil
 }
 
 func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity, error) {

@@ -261,17 +261,26 @@ func defaultParamsForPlan(plan planIdentity) queryParams {
 	return defaultParamsForTier(tierForPlan(plan))
 }
 
-func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, error) {
+type resolvedParams struct {
+	params              queryParams
+	currentRaw          string
+	defaultRaw          string
+	environmentOverride bool
+	hasCurrent          bool
+	newDefaultRaw       string
+}
+
+func resolveParamsForPlan(homeDir string, plan planIdentity) (*resolvedParams, error) {
 	paramsMu.Lock()
 	defer paramsMu.Unlock()
 
 	currentRaw, environmentOverride, hasCurrent, err := readCurrentParams(homeDir)
 	if err != nil {
-		return queryParams{}, err
+		return nil, err
 	}
 	oldDefaultRaw, _, err := readParamsFile(defaultParamsFilePath(homeDir))
 	if err != nil {
-		return queryParams{}, err
+		return nil, err
 	}
 	oldDefaultRoute := parseParams(oldDefaultRaw).routeEncoding()
 
@@ -284,7 +293,41 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 	}
 	current = current.adjustedForTier(tier).withDefaultTFO()
 
-	currentEncoded := current.encode()
+	return &resolvedParams{
+		params:              current,
+		currentRaw:          currentRaw,
+		defaultRaw:          oldDefaultRaw,
+		environmentOverride: environmentOverride,
+		hasCurrent:          hasCurrent,
+		newDefaultRaw:       newDefaultRaw,
+	}, nil
+}
+
+func (p *resolvedParams) persist(homeDir string) {
+	if p == nil {
+		return
+	}
+	paramsMu.Lock()
+	defer paramsMu.Unlock()
+
+	// A response may arrive after an options edit or another endpoint's response.
+	// Only the successfully saved provider may commit its derived options, and it
+	// must not replace a newer local choice.
+	currentRaw, environmentOverride, hasCurrent, err := readCurrentParams(homeDir)
+	if err != nil {
+		log.Warnln("[oixCloud] failed to read account options before saving: %s", err)
+		return
+	}
+	defaultRaw, _, err := readParamsFile(defaultParamsFilePath(homeDir))
+	if err != nil {
+		log.Warnln("[oixCloud] failed to read tier defaults before saving: %s", err)
+		return
+	}
+	if currentRaw != p.currentRaw || environmentOverride != p.environmentOverride || hasCurrent != p.hasCurrent || defaultRaw != p.defaultRaw {
+		return
+	}
+
+	currentEncoded := p.params.encode()
 	// These files only cache derived state, so a write failure must not stop the
 	// managed fetch; the values are recomputed on the next run.
 	if !environmentOverride && (!hasCurrent || currentRaw != currentEncoded) {
@@ -292,13 +335,11 @@ func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, err
 			log.Warnln("[oixCloud] failed to persist account options: %s", err)
 		}
 	}
-	if oldDefaultRaw != newDefaultRaw {
-		if err := writeParamsFile(defaultParamsFilePath(homeDir), newDefaultRaw); err != nil {
+	if defaultRaw != p.newDefaultRaw {
+		if err := writeParamsFile(defaultParamsFilePath(homeDir), p.newDefaultRaw); err != nil {
 			log.Warnln("[oixCloud] failed to persist tier defaults: %s", err)
 		}
 	}
-
-	return current, nil
 }
 
 func effectiveParamsWithoutPlan(homeDir string) (queryParams, error) {

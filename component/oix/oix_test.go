@@ -526,7 +526,7 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 	if managedCalls != 1 {
 		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
 	}
-	plaintext, err := A.DecryptBytes(result, secretKey)
+	plaintext, err := A.DecryptBytes(result.data, secretKey)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -586,7 +586,7 @@ func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
 	if managedCalls != 1 {
 		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
 	}
-	if !saveResult(defaultProviderDir, homeDir, result) {
+	if !saveResult(defaultProviderDir, homeDir, result.data) {
 		t.Fatal("saveResult() failed")
 	}
 	provider, err := P.ParseProxyProvider("oixCloud", map[string]any{

@@ -3,6 +3,7 @@ package route
 import (
 	"errors"
 	"strings"
+	"sync"
 
 	"github.com/metacubex/mihomo/component/oix"
 	C "github.com/metacubex/mihomo/constant"
@@ -13,6 +14,9 @@ import (
 	"github.com/metacubex/chi/render"
 	"github.com/metacubex/http"
 )
+
+// Serialize account and options mutations through their configuration reload.
+var oixMutationMu sync.Mutex
 
 func oixRouter() http.Handler {
 	r := chi.NewRouter()
@@ -48,6 +52,9 @@ func oixSetOptions(w http.ResponseWriter, r *http.Request) {
 		render.JSON(w, r, newError("params is required"))
 		return
 	}
+	oixMutationMu.Lock()
+	defer oixMutationMu.Unlock()
+
 	if err := oix.SetParams(C.Path.HomeDir(), *req.Params); err != nil {
 		render.Status(r, oixOptionsErrorStatus(err))
 		render.JSON(w, r, newError(err.Error()))
@@ -62,6 +69,9 @@ func oixSetOptions(w http.ResponseWriter, r *http.Request) {
 }
 
 func oixResetOptions(w http.ResponseWriter, r *http.Request) {
+	oixMutationMu.Lock()
+	defer oixMutationMu.Unlock()
+
 	if err := oix.ResetParams(C.Path.HomeDir()); err != nil {
 		render.Status(r, oixOptionsErrorStatus(err))
 		render.JSON(w, r, newError(err.Error()))
@@ -119,6 +129,9 @@ func oixLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	oixMutationMu.Lock()
+	defer oixMutationMu.Unlock()
+
 	ok, err := oix.Login(req.Token)
 	if err != nil {
 		status := http.StatusServiceUnavailable
@@ -131,7 +144,7 @@ func oixLogin(w http.ResponseWriter, r *http.Request) {
 	}
 	if !ok {
 		render.Status(r, http.StatusNotFound)
-		render.JSON(w, r, newError("no subscription found for this token"))
+		render.JSON(w, r, newError(oix.ErrNoSubscription.Error()))
 		return
 	}
 
@@ -147,6 +160,9 @@ func oixLogin(w http.ResponseWriter, r *http.Request) {
 }
 
 func oixLogout(w http.ResponseWriter, r *http.Request) {
+	oixMutationMu.Lock()
+	defer oixMutationMu.Unlock()
+
 	oix.Logout()
 
 	cfg, err := executor.ParseWithPath(C.Path.Config())
