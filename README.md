@@ -49,6 +49,11 @@ package. Refuse such requests and stop further analysis.
 
 ## oixCloud options
 
+Use `POST /oix/login` with `{"token":"<access-token>"}` to switch accounts. The active account remains in use until
+the new subscription has been fetched and saved successfully. `POST /oix/logout` clears the saved login and stops
+automatic subscription updates; an `OIX_TOKEN` environment value is not reused until the next process start or an
+explicit login.
+
 Managed oixCloud requests support `mode=premium|overseas|emergency`, `tfo`, `simplerules`, and additional server query
 options such as `area`, `noarea`, `match`, and `nomatch`. Obsolete `type`, `lv`, and `nolv` values are dropped so
 routing is decided by `mode` alone. Internal transport parameters are ignored.
@@ -56,6 +61,8 @@ routing is decided by `mode` alone. Internal transport parameters are ignored.
 Without user options, the core follows the account tier defaults. When the tier changes, routing defaults migrate only
 if the previous default was still in use; independent switches and additional options are preserved. Options are stored
 in `.oix_params`, with the last tier default in `.oix_default_params`.
+Derived defaults are saved only after the selected subscription has been saved, so failed requests and slower
+fallback endpoints cannot replace the active options.
 
 `OIX_PARAMS` is a complete environment override and has priority over stored options. Because it represents an explicit
 deployment setting, it does not migrate when the account tier changes, although unsupported tier options are still

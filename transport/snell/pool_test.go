@@ -63,6 +63,75 @@ func TestWarmupAuthenticatesConnection(t *testing.T) {
 	}
 }
 
+type warmupWriteSignalConn struct {
+	net.Conn
+	started chan struct{}
+}
+
+func (c *warmupWriteSignalConn) Write(b []byte) (int, error) {
+	close(c.started)
+	return c.Conn.Write(b)
+}
+
+func TestWarmupContextCancellationInterruptsIO(t *testing.T) {
+	for _, readRequest := range []bool{false, true} {
+		name := "blocked write"
+		if readRequest {
+			name = "blocked reply"
+		}
+		t.Run(name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn := &warmupWriteSignalConn{Conn: client, started: make(chan struct{})}
+			result := make(chan error, 1)
+			go func() { result <- (&Snell{Conn: conn}).WarmupContext(ctx) }()
+			select {
+			case <-conn.started:
+			case <-time.After(time.Second):
+				t.Fatal("warmup did not begin writing the authentication request")
+			}
+			if readRequest {
+				if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				var request [3]byte
+				if _, err := io.ReadFull(server, request[:]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("warmup error = %v, want context.Canceled", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("warmup remained blocked after cancellation")
+			}
+		})
+	}
+}
+
+func TestWarmupContextSuccessDetachesCancellation(t *testing.T) {
+	rawConn := &recordingConn{readData: []byte{CommandPong}}
+	conn := &Snell{Conn: rawConn}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := conn.WarmupContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if rawConn.closed {
+		t.Fatal("completed warmup retained the request cancellation callback")
+	}
+	if _, err := conn.Write([]byte("next request")); err != nil {
+		t.Fatalf("connection cannot be reused after warmup: %v", err)
+	}
+}
+
 func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 	rawConn := &recordingConn{}
 	pooledConn := &Snell{Conn: rawConn}

@@ -403,3 +403,44 @@ func TestEffectiveParamsAdjustUnsupportedRoutingMode(t *testing.T) {
 		t.Fatalf("alu-adjusted params = %q, want %q", got, want)
 	}
 }
+
+func effectiveParamsForPlan(homeDir string, plan planIdentity) (queryParams, error) {
+	resolved, err := resolveParamsForPlan(homeDir, plan)
+	if err != nil {
+		return queryParams{}, err
+	}
+	resolved.persist(homeDir)
+	return resolved.params, nil
+}
+
+func TestResolvedParamsPreserveChangesDuringFetch(t *testing.T) {
+	for _, change := range []string{"edit", "reset"} {
+		t.Run(change, func(t *testing.T) {
+			t.Setenv("OIX_PARAMS", "")
+			homeDir := t.TempDir()
+			if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "silver"}); err != nil {
+				t.Fatal(err)
+			}
+			resolved, err := resolveParamsForPlan(homeDir, planIdentity{Code: "iron"})
+			if err != nil {
+				t.Fatal(err)
+			}
+			if change == "edit" {
+				err = SetParams(homeDir, "&mode=overseas&tfo=false&area=hk")
+			} else {
+				err = ResetParams(homeDir)
+			}
+			if err != nil {
+				t.Fatal(err)
+			}
+			before, err := GetParamsState(homeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			resolved.persist(homeDir)
+			if after, err := GetParamsState(homeDir); err != nil || before != after {
+				t.Fatalf("pending response replaced %s: before %+v, after %+v, error %v", change, before, after, err)
+			}
+		})
+	}
+}

@@ -1,6 +1,7 @@
 package snell
 
 import (
+	"context"
 	"encoding/binary"
 	"errors"
 	"fmt"
@@ -10,6 +11,7 @@ import (
 	"sync"
 
 	"github.com/metacubex/blake3"
+	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 	"github.com/metacubex/mihomo/transport/socks5"
@@ -114,6 +116,20 @@ func (s *Snell) Warmup() error {
 		return fmt.Errorf("unexpected Snell warmup reply: %d", reply[0])
 	}
 	return nil
+}
+
+// WarmupContext bounds the authentication exchange after the transport handshake.
+// An interrupted exchange cannot be reused, so cancellation closes the connection.
+func (s *Snell) WarmupContext(ctx context.Context) (err error) {
+	if err = ctx.Err(); err != nil {
+		_ = s.Close()
+		return err
+	}
+	if ctx.Done() != nil {
+		done := N.SetupContextForConn(ctx, s)
+		defer done(&err)
+	}
+	return s.Warmup()
 }
 
 func WriteHeader(conn net.Conn, host string, port uint, version int) error {

@@ -951,10 +951,21 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	}
 
 	var AllProviders []string
+	oix.LoadPersistedToken(C.Path.HomeDir())
+	managedProviderName := ""
+	if oix.HasToken() {
+		managedProviderName = oix.ProviderFile()
+		if managedProviderName == provider.ReservedName {
+			return nil, nil, fmt.Errorf("can not use reserved provider name `%s` for OIX", managedProviderName)
+		}
+	}
 	// parse and initial providers
 	for name, mapping := range providersConfig {
 		if name == provider.ReservedName {
 			return nil, nil, fmt.Errorf("can not defined a provider called `%s`", provider.ReservedName)
+		}
+		if name == managedProviderName {
+			continue // Apply managed defaults before validating this provider.
 		}
 
 		pd, err := provider.ParseProxyProvider(name, mapping, T.Tunnel)
@@ -966,39 +977,13 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 		AllProviders = append(AllProviders, name)
 	}
 
-	oix.LoadPersistedToken(C.Path.HomeDir())
-	if oix.HasToken() {
-		oixName := oix.ProviderFile()
-
-		preferredPath := ""
-		if provider, exists := providersMap[oixName]; exists {
-			preferredPath = provider.Path()
+	if managedProviderName != "" {
+		pd, err := parseOIXProvider(managedProviderName, providersConfig[managedProviderName], providersMap)
+		if err != nil {
+			return nil, nil, fmt.Errorf("parse proxy provider %s error: %w", managedProviderName, err)
 		}
-		providerPaths := make([]string, 0, len(providersMap))
-		for _, pv := range providersMap {
-			if p := pv.Path(); p != "" {
-				providerPaths = append(providerPaths, p)
-			}
-		}
-		dir := oix.ProviderDirectory(C.Path.HomeDir(), preferredPath, providerPaths)
-		providerPath := filepath.Join(C.Path.HomeDir(), dir, oixName)
-		relPath, _ := filepath.Rel(C.Path.HomeDir(), providerPath)
-
-		userMapping, userConfigured := providersConfig[oixName]
-		var mapping map[string]any
-		if userConfigured {
-			mapping = oix.ProviderConfig(relPath, userMapping)
-		} else {
-			mapping = oix.ProviderConfig(relPath, nil)
-		}
-
-		pd, err := provider.ParseProxyProvider(oixName, mapping, T.Tunnel)
-		if err == nil {
-			providersMap[oixName] = pd
-			if !userConfigured {
-				AllProviders = append(AllProviders, oixName)
-			}
-		}
+		providersMap[managedProviderName] = pd
+		AllProviders = append(AllProviders, managedProviderName)
 	}
 
 	slices.Sort(AllProxies)
