@@ -108,7 +108,7 @@ func TestEffectiveParamsFollowTierDefaults(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if got, want := alu.encode(), "&mode=emergency&tfo=true"; got != want {
+	if got, want := alu.encode(), "&mode=emergency"; got != want {
 		t.Fatalf("alu params = %q, want %q", got, want)
 	}
 
@@ -183,7 +183,7 @@ func TestEffectiveParamsSurvivePersistenceFailure(t *testing.T) {
 	if err != nil {
 		t.Fatalf("unpersisted options must still resolve: %v", err)
 	}
-	if got, want := params.encode(), "&mode=emergency&tfo=true"; got != want {
+	if got, want := params.encode(), "&mode=emergency"; got != want {
 		t.Fatalf("params = %q, want %q", got, want)
 	}
 }
@@ -240,14 +240,14 @@ func TestSetParamsRejectsLossyRoutingValues(t *testing.T) {
 	if err := SetParams(obsolete, "&type=relay&lv=2"); err != nil {
 		t.Fatalf("obsolete keys rejected: %v", err)
 	}
-	if raw, _, err := readParamsFile(paramsFilePath(obsolete)); err != nil || raw != "&tfo=true" {
+	if raw, _, err := readParamsFile(paramsFilePath(obsolete)); err != nil || raw != "" {
 		t.Fatalf("stored obsolete params = %q, err = %v", raw, err)
 	}
 	homeDir := t.TempDir()
 	if err := SetParams(homeDir, "??&MODE=Premium"); err != nil {
 		t.Fatalf("case-insensitive valid mode rejected: %v", err)
 	}
-	if raw, _, err := readParamsFile(paramsFilePath(homeDir)); err != nil || raw != "&mode=premium&tfo=true" {
+	if raw, _, err := readParamsFile(paramsFilePath(homeDir)); err != nil || raw != "&mode=premium" {
 		t.Fatalf("stored normalized params = %q, err = %v", raw, err)
 	}
 }
@@ -442,5 +442,48 @@ func TestResolvedParamsPreserveChangesDuringFetch(t *testing.T) {
 				t.Fatalf("pending response replaced %s: before %+v, after %+v, error %v", change, before, after, err)
 			}
 		})
+	}
+}
+
+func TestParamsPreserveOptionalTFO(t *testing.T) {
+	for _, source := range []string{"stored", "environment"} {
+		for _, value := range []string{"", "true", "false"} {
+			t.Run(source+"/tfo="+value, func(t *testing.T) {
+				t.Setenv("OIX_PARAMS", "")
+				homeDir := t.TempDir()
+				raw := "&mode=overseas&area=hk"
+				if value != "" {
+					raw = "&mode=overseas&tfo=" + value + "&area=hk"
+				}
+				if source == "environment" {
+					// A complete override must also clear a stored explicit TFO value.
+					if err := SetParams(homeDir, "&tfo=true"); err != nil {
+						t.Fatal(err)
+					}
+					t.Setenv("OIX_PARAMS", raw)
+				} else if err := SetParams(homeDir, raw); err != nil {
+					t.Fatal(err)
+				}
+				checkState := func() {
+					t.Helper()
+					state, err := GetParamsState(homeDir)
+					if err != nil || state.Params != raw {
+						t.Fatalf("options state = %+v, %v, want %q", state, err, raw)
+					}
+				}
+				checkState()
+				fallback, err := effectiveParamsWithoutPlan(homeDir)
+				if err != nil || fallback.encode() != raw {
+					t.Fatalf("fallback params = %q, %v, want %q", fallback.encode(), err, raw)
+				}
+				for _, code := range []string{"alu", "silver"} {
+					params, err := effectiveParamsForPlan(homeDir, planIdentity{Code: code})
+					if err != nil || params.encode() != raw {
+						t.Fatalf("%s params = %q, %v, want %q", code, params.encode(), err, raw)
+					}
+					checkState()
+				}
+			})
+		}
 	}
 }
