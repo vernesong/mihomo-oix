@@ -113,7 +113,7 @@ func detectFileType(data []byte) compressionType {
 }
 
 func (u *UIUpdater) downloadUI() error {
-	data, err := downloadForBytes(u.externalUIURL)
+	data, err := downloadForBytes(u.externalUIURL, func(data []byte) error { return validateArchive(data, true) })
 	if err != nil {
 		return fmt.Errorf("can't download file: %w", err)
 	}

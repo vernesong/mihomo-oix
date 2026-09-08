@@ -1,11 +1,12 @@
 package lightgbm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"github.com/metacubex/http"
 	"math"
-	"net/http"
 	"net/netip"
 	"os"
 	"regexp"
@@ -14,12 +15,13 @@ import (
 	"sync"
 	"time"
 
-	"github.com/vernesong/leaves"
 	"github.com/metacubex/mihomo/common/singleflight"
+	"github.com/metacubex/mihomo/common/utils"
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/vernesong/leaves"
 )
 
 const (
@@ -27,10 +29,10 @@ const (
 )
 
 var (
-	smartModel   *WeightModel
-	reloadModel  = singleflight.Group[bool]{StoreResult: false}
-	modelOnce    sync.Once
-	lgbmUrl      string
+	smartModel  *WeightModel
+	reloadModel = singleflight.Group[bool]{StoreResult: false}
+	modelOnce   sync.Once
+	lgbmUrl     string
 
 	domainRegex = regexp.MustCompile(`([a-zA-Z0-9-]+)(\.[a-zA-Z0-9-]+)+$`)
 
@@ -430,51 +432,51 @@ type WeightModel struct {
 }
 
 func GetModel() *WeightModel {
-    modelOnce.Do(func() {
-        m := &WeightModel{}
-        modelPath := C.Path.SmartModel()
+	modelOnce.Do(func() {
+		m := &WeightModel{}
+		modelPath := C.Path.SmartModel()
 
-        if _, err := os.Stat(modelPath); err == nil {
-            if err := m.loadModel(modelPath); err != nil {
-                log.Warnln("[Smart] Model.bin invalid, remove and download: %v", err)
-                if rmErr := os.Remove(modelPath); rmErr != nil {
-                    log.Errorln("[Smart] Failed to remove invalid Model.bin: %v", rmErr)
-                    return
-                }
+		if _, err := os.Stat(modelPath); err == nil {
+			if err := m.loadModel(modelPath); err != nil {
+				log.Warnln("[Smart] Model.bin invalid, remove and download: %v", err)
+				if rmErr := os.Remove(modelPath); rmErr != nil {
+					log.Errorln("[Smart] Failed to remove invalid Model.bin: %v", rmErr)
+					return
+				}
 
-                if downloadErr := downloadModel(modelPath); downloadErr != nil {
-                    log.Errorln("[Smart] Failed to download Model.bin: %v", downloadErr)
-                    return
-                }
+				if downloadErr := downloadModel(modelPath); downloadErr != nil {
+					log.Errorln("[Smart] Failed to download Model.bin: %v", downloadErr)
+					return
+				}
 
-                if reloadErr := m.loadModel(modelPath); reloadErr != nil {
-                    log.Errorln("[Smart] Failed to load downloaded Model.bin: %v", reloadErr)
-                    return
-                }
+				if reloadErr := m.loadModel(modelPath); reloadErr != nil {
+					log.Errorln("[Smart] Failed to load downloaded Model.bin: %v", reloadErr)
+					return
+				}
 
-                log.Infoln("[Smart] Model.bin downloaded and loaded successfully")
-            } else {
-                log.Infoln("[Smart] Model file loaded successfully")
-            }
-        } else {
-            log.Infoln("[Smart] Can't find Model.bin, start download")
-            if downloadErr := downloadModel(modelPath); downloadErr != nil {
-                log.Errorln("[Smart] Can't download Model.bin: %v", downloadErr)
-                return
-            }
+				log.Infoln("[Smart] Model.bin downloaded and loaded successfully")
+			} else {
+				log.Infoln("[Smart] Model file loaded successfully")
+			}
+		} else {
+			log.Infoln("[Smart] Can't find Model.bin, start download")
+			if downloadErr := downloadModel(modelPath); downloadErr != nil {
+				log.Errorln("[Smart] Can't download Model.bin: %v", downloadErr)
+				return
+			}
 
-            if loadErr := m.loadModel(modelPath); loadErr != nil {
-                log.Errorln("[Smart] Failed to load downloaded Model.bin: %v", loadErr)
-                return
-            }
+			if loadErr := m.loadModel(modelPath); loadErr != nil {
+				log.Errorln("[Smart] Failed to load downloaded Model.bin: %v", loadErr)
+				return
+			}
 
-            log.Infoln("[Smart] Download Model.bin finish")
-        }
+			log.Infoln("[Smart] Download Model.bin finish")
+		}
 
-        smartModel = m
-    })
+		smartModel = m
+	})
 
-    return smartModel
+	return smartModel
 }
 
 func (m *WeightModel) loadModel(path string) error {
@@ -551,19 +553,15 @@ func downloadModel(path string) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*90)
 	defer cancel()
 
-	resp, err := mihomoHttp.HttpRequest(ctx, modelUrl, http.MethodGet, nil, nil)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	_, data, err := mihomoHttp.Get(ctx, modelUrl, nil, 0, func(_ *http.Response, data []byte) error { return ValidateModel(data) }, mihomoHttp.WithPublicRead())
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	return utils.WriteFileAtomic(ctx, path, data, 0o644)
+}
 
+func ValidateModel(data []byte) error {
+	_, err := leaves.LGEnsembleFromReader(bufio.NewReader(bytes.NewReader(data)), false)
 	return err
 }
 
@@ -1021,26 +1019,26 @@ func boolToFloat(b bool) float64 {
 
 func CreateModelInputFromStatsRecord(atomicRecord *smart.AtomicStatsRecord, metadata *C.Metadata, uploadTotal, downloadTotal, maxUploadRate, maxDownloadRate, connectionDuration float64, wildcardTarget string, lossRate, cumulLossRate float64) *smart.ModelInput {
 	input := &smart.ModelInput{
-		Success:                       atomicRecord.Get("success").(int64),
-		Failure:                       atomicRecord.Get("failure").(int64),
-		ConnectTime:                   atomicRecord.Get("connectTime").(int64),
-		Latency:                       atomicRecord.Get("latency").(int64),
-		UploadTotal:                   uploadTotal,
-		HistoryUploadTotal:            atomicRecord.Get("uploadTotal").(float64),
-		MaxuploadRate:                 maxUploadRate,
-		HistoryMaxUploadRate:          atomicRecord.Get("maxUploadRate").(float64),
-		DownloadTotal:                 downloadTotal,
-		HistoryDownloadTotal:          atomicRecord.Get("downloadTotal").(float64),
-		MaxdownloadRate:               maxDownloadRate,
-		HistoryMaxDownloadRate:        atomicRecord.Get("maxDownloadRate").(float64),
-		HistoryConnectionDuration:     atomicRecord.Get("duration").(float64),
-		ConnectionDuration:            connectionDuration,
-		LastUsed:                      atomicRecord.Get("lastUsed").(int64),
-		IsUDP:                         metadata.NetWork == C.UDP,
-		IsTCP:                         metadata.NetWork == C.TCP,
-		LossRate:                      lossRate,
-		CumulLossRate:                 cumulLossRate,
-		EmaLossRate:                   atomicRecord.Get("lossRate").(float64),
+		Success:                   atomicRecord.Get("success").(int64),
+		Failure:                   atomicRecord.Get("failure").(int64),
+		ConnectTime:               atomicRecord.Get("connectTime").(int64),
+		Latency:                   atomicRecord.Get("latency").(int64),
+		UploadTotal:               uploadTotal,
+		HistoryUploadTotal:        atomicRecord.Get("uploadTotal").(float64),
+		MaxuploadRate:             maxUploadRate,
+		HistoryMaxUploadRate:      atomicRecord.Get("maxUploadRate").(float64),
+		DownloadTotal:             downloadTotal,
+		HistoryDownloadTotal:      atomicRecord.Get("downloadTotal").(float64),
+		MaxdownloadRate:           maxDownloadRate,
+		HistoryMaxDownloadRate:    atomicRecord.Get("maxDownloadRate").(float64),
+		HistoryConnectionDuration: atomicRecord.Get("duration").(float64),
+		ConnectionDuration:        connectionDuration,
+		LastUsed:                  atomicRecord.Get("lastUsed").(int64),
+		IsUDP:                     metadata.NetWork == C.UDP,
+		IsTCP:                     metadata.NetWork == C.TCP,
+		LossRate:                  lossRate,
+		CumulLossRate:             cumulLossRate,
+		EmaLossRate:               atomicRecord.Get("lossRate").(float64),
 	}
 
 	if metadata.DstIPASN == "unknown" {

@@ -10,12 +10,11 @@ import (
 
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/common/utils"
+	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/resource"
 	"github.com/metacubex/mihomo/component/smart/lightgbm"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-
-	"github.com/vernesong/leaves"
 )
 
 var (
@@ -33,7 +32,6 @@ func LgbmUpdateInterval() int {
 	return lgbmUpdateInterval
 }
 
-
 func SetLgbmAutoUpdate(newAutoUpdate bool) {
 	lgbmAutoUpdate = newAutoUpdate
 }
@@ -42,19 +40,18 @@ func SetLgbmUpdateInterval(newUpdateInterval int) {
 	lgbmUpdateInterval = newUpdateInterval
 }
 
-
 func UpdateLgbmModel() (err error) {
 	modelUrl := lightgbm.LgbmUrl()
 	if modelUrl == "" {
 		modelUrl = lightgbm.GetModelDownloadURL()
 	}
 
-	vehicle := resource.NewHTTPVehicle(modelUrl, C.Path.SmartModel(), "", nil, defaultHttpTimeout, 0)
+	vehicle := resource.NewHTTPVehicle(modelUrl, C.Path.SmartModel(), "", nil, defaultHttpTimeout, 0, mihomoHttp.WithPublicRead())
 	var oldHash utils.HashType
 	if buf, err := os.ReadFile(vehicle.Path()); err == nil {
 		oldHash = utils.MakeHash(buf)
 	}
-	data, hash, err := vehicle.Read(context.Background(), oldHash)
+	data, hash, err := vehicle.ReadValidated(context.Background(), oldHash, lightgbm.ValidateModel)
 	if err != nil {
 		return fmt.Errorf("can't download LightGBM model file: %w", err)
 	}
@@ -64,23 +61,6 @@ func UpdateLgbmModel() (err error) {
 	}
 	if len(data) == 0 {
 		return fmt.Errorf("can't download LightGBM model file: no data")
-	}
-
-	tmpFile, err := os.CreateTemp("", "lgbm_model_*.bin")
-	if err != nil {
-		return fmt.Errorf("failed to create temp file for validation: %w", err)
-	}
-	tmpPath := tmpFile.Name()
-	tmpFile.Close()
-	defer os.Remove(tmpPath)
-
-	if err := os.WriteFile(tmpPath, data, 0644); err != nil {
-		return fmt.Errorf("failed to write temp file: %w", err)
-	}
-
-	_, err = leaves.LGEnsembleFromFile(tmpPath, false)
-	if err != nil {
-		return fmt.Errorf("invalid LightGBM model file: %s", err)
 	}
 
 	if err = vehicle.Write(data); err != nil {

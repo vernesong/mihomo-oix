@@ -14,6 +14,8 @@ import (
 	"github.com/metacubex/mihomo/component/geodata/router"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+	"github.com/oschwald/maxminddb-golang"
+	"google.golang.org/protobuf/proto"
 )
 
 var (
@@ -100,8 +102,76 @@ func verifyGeodataFile(path string) error {
 	return verifyGeodata(f)
 }
 
+func VerifyMMDBBytes(data []byte) error {
+	reader, err := maxminddb.FromBytes(data)
+	if err != nil {
+		return err
+	}
+	defer reader.Close()
+	networks := reader.Networks(maxminddb.SkipAliasedNetworks)
+	records := 0
+	for networks.Next() {
+		var record any
+		if _, err := networks.Network(&record); err != nil {
+			return err
+		}
+		records++
+	}
+	if err := networks.Err(); err != nil {
+		return err
+	}
+	if records == 0 {
+		return fmt.Errorf("empty MMDB database")
+	}
+	return nil
+}
+
 func VerifyGeodataBytes(data []byte) error {
 	return verifyGeodata(bytes.NewReader(data))
+}
+
+// VerifyGeoIPBytes and VerifyGeoSiteBytes decode every record before a
+// downloaded candidate wins; valid outer framing alone is not enough.
+func VerifyGeoIPBytes(data []byte) error {
+	var database router.GeoIPList
+	if err := proto.Unmarshal(data, &database); err != nil {
+		return err
+	}
+	if len(database.Entry) == 0 {
+		return fmt.Errorf("empty GeoIP database")
+	}
+	for _, entry := range database.Entry {
+		if entry.CountryCode == "" {
+			return fmt.Errorf("GeoIP entry has no country code")
+		}
+		for _, cidr := range entry.Cidr {
+			if len(cidr.Ip) != 4 && len(cidr.Ip) != 16 || cidr.Prefix > uint32(len(cidr.Ip)*8) {
+				return fmt.Errorf("invalid GeoIP CIDR")
+			}
+		}
+	}
+	return nil
+}
+
+func VerifyGeoSiteBytes(data []byte) error {
+	var database router.GeoSiteList
+	if err := proto.Unmarshal(data, &database); err != nil {
+		return err
+	}
+	if len(database.Entry) == 0 {
+		return fmt.Errorf("empty GeoSite database")
+	}
+	for _, entry := range database.Entry {
+		if entry.CountryCode == "" {
+			return fmt.Errorf("GeoSite entry has no country code")
+		}
+		for _, domain := range entry.Domain {
+			if domain.Type < router.Domain_Plain || domain.Type > router.Domain_Full {
+				return fmt.Errorf("invalid GeoSite domain type")
+			}
+		}
+	}
+	return nil
 }
 
 func Verify(name string) error {

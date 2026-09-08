@@ -32,6 +32,7 @@ type Fetcher[V any] struct {
 	parser       Parser[V]
 	interval     time.Duration
 	onUpdate     func(V)
+	discard      func(V)
 	watcher      *fswatch.Watcher
 	loadBufMutex sync.Mutex
 	backoff      slowdown.Backoff
@@ -58,8 +59,11 @@ func (f *Fetcher[V]) Initial() (V, error) {
 		// local file exists, use it first
 		buf, err := os.ReadFile(f.vehicle.Path())
 		modTime := stat.ModTime()
-		contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), false)
-		f.updatedAt = modTime // reset updatedAt to file's modTime
+		var contents V
+		if err == nil {
+			contents, _, err = f.loadBuf(buf, utils.MakeHash(buf), false)
+			f.updatedAt = modTime // reset updatedAt to file's modTime
+		}
 
 		if err == nil {
 			err = f.startPullLoop(time.Since(modTime) > f.interval)
@@ -80,8 +84,11 @@ func (f *Fetcher[V]) Initial() (V, error) {
 			if stat, sErr := file.Stat(); sErr == nil {
 				modTime = stat.ModTime()
 			}
-			contents, _, err := f.loadBuf(buf, utils.MakeHash(buf), true)
-			f.updatedAt = modTime // reset updatedAt to file's modTime
+			var contents V
+			if err == nil {
+				contents, _, err = f.loadBuf(buf, utils.MakeHash(buf), true)
+				f.updatedAt = modTime // reset updatedAt to file's modTime
+			}
 
 			if err == nil {
 				log.Infoln("[Provider] %s extract successful from bundle file", f.Name())
@@ -113,13 +120,38 @@ func (f *Fetcher[V]) Initial() (V, error) {
 	return contents, nil
 }
 
+// SetDiscard releases parsed candidates that never become the published resource.
+func (f *Fetcher[V]) SetDiscard(discard func(V)) { f.discard = discard }
+
 func (f *Fetcher[V]) Update() (V, bool, error) {
-	buf, hash, err := f.vehicle.Read(f.ctx, f.hash)
+	f.loadBufMutex.Lock()
+	defer f.loadBufMutex.Unlock()
+	var buf []byte
+	var hash utils.HashType
+	var contents V
+	var parsed bool
+	var err error
+	if vehicle, ok := f.vehicle.(*HTTPVehicle); ok {
+		buf, hash, err = vehicle.ReadValidated(f.ctx, f.hash, func(data []byte) error {
+			if f.hash.Equal(utils.MakeHash(data)) {
+				return nil
+			}
+			var parseErr error
+			contents, parseErr = f.parser(data)
+			parsed = parseErr == nil
+			return parseErr
+		}, true)
+	} else {
+		buf, hash, err = f.vehicle.Read(f.ctx, f.hash)
+	}
 	if err != nil {
-		f.backoff.AddAttempt() // add a failed attempt to backoff
+		if parsed && f.discard != nil {
+			f.discard(contents)
+		}
+		f.backoff.AddAttempt()
 		return lo.Empty[V](), false, err
 	}
-	return f.loadBuf(buf, hash, f.vehicle.Type() != P.File)
+	return f.loadBufLocked(buf, hash, f.vehicle.Type() != P.File, contents, parsed)
 }
 
 func (f *Fetcher[V]) SideUpdate(buf []byte) (V, bool, error) {
@@ -130,6 +162,20 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 	f.loadBufMutex.Lock()
 	defer f.loadBufMutex.Unlock()
 
+	return f.loadBufLocked(buf, hash, updateFile, lo.Empty[V](), false)
+}
+
+func (f *Fetcher[V]) loadBufLocked(buf []byte, hash utils.HashType, updateFile bool, contents V, parsed bool) (V, bool, error) {
+	published := false
+	defer func() {
+		if parsed && !published && f.discard != nil {
+			f.discard(contents)
+		}
+	}()
+
+	if err := f.ctx.Err(); err != nil {
+		return lo.Empty[V](), false, err
+	}
 	now := time.Now()
 	if f.hash.Equal(hash) {
 		if updateFile {
@@ -144,15 +190,29 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 		return lo.Empty[V](), true, nil
 	}
 
-	contents, err := f.parser(buf)
+	var err error
+	if !parsed {
+		contents, err = f.parser(buf)
+		parsed = err == nil
+	}
 	if err != nil {
 		f.backoff.AddAttempt() // add a failed attempt to backoff
+		return lo.Empty[V](), false, err
+	}
+	if err := f.ctx.Err(); err != nil {
 		return lo.Empty[V](), false, err
 	}
 	f.backoff.Reset() // no error, reset backoff
 
 	if updateFile {
-		if err = f.vehicle.Write(buf); err != nil {
+		if writer, ok := f.vehicle.(interface {
+			WriteContext(context.Context, []byte) error
+		}); ok {
+			err = writer.WriteContext(f.ctx, buf)
+		} else {
+			err = f.vehicle.Write(buf)
+		}
+		if err != nil {
 			return lo.Empty[V](), false, err
 		}
 	}
@@ -163,6 +223,7 @@ func (f *Fetcher[V]) loadBuf(buf []byte, hash utils.HashType, updateFile bool) (
 		f.onUpdate(contents)
 	}
 
+	published = true
 	return contents, false, nil
 }
 
