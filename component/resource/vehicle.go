@@ -2,10 +2,8 @@ package resource
 
 import (
 	"context"
-	"errors"
-	"io"
 	"os"
-	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
@@ -19,8 +17,7 @@ import (
 const (
 	DefaultHttpTimeout = time.Second * 20
 
-	fileMode os.FileMode = 0o666
-	dirMode  os.FileMode = 0o755
+	fileMode os.FileMode = 0o644
 )
 
 var (
@@ -33,18 +30,6 @@ func ETag() bool {
 
 func SetETag(b bool) {
 	etag = b
-}
-
-func safeWrite(path string, buf []byte) error {
-	dir := filepath.Dir(path)
-
-	if _, err := os.Stat(dir); os.IsNotExist(err) {
-		if err := os.MkdirAll(dir, dirMode); err != nil {
-			return err
-		}
-	}
-
-	return os.WriteFile(path, buf, fileMode)
 }
 
 type FileVehicle struct {
@@ -77,7 +62,11 @@ func (f *FileVehicle) Proxy() string {
 }
 
 func (f *FileVehicle) Write(buf []byte) error {
-	return safeWrite(f.path, buf)
+	return f.WriteContext(context.Background(), buf)
+}
+
+func (f *FileVehicle) WriteContext(ctx context.Context, buf []byte) error {
+	return utils.WriteFileAtomic(ctx, f.path, buf, fileMode)
 }
 
 func NewFileVehicle(path string) *FileVehicle {
@@ -92,7 +81,7 @@ type HTTPVehicle struct {
 	timeout   time.Duration
 	sizeLimit int64
 	inRead    func(response *http.Response)
-	provider  P.ProxyProvider
+	options   []mihomoHttp.Option
 }
 
 func (h *HTTPVehicle) Url() string {
@@ -112,54 +101,65 @@ func (h *HTTPVehicle) Proxy() string {
 }
 
 func (h *HTTPVehicle) Write(buf []byte) error {
-	return safeWrite(h.path, buf)
+	return h.WriteContext(context.Background(), buf)
+}
+
+func (h *HTTPVehicle) WriteContext(ctx context.Context, buf []byte) error {
+	return utils.WriteFileAtomic(ctx, h.path, buf, fileMode)
 }
 
 func (h *HTTPVehicle) SetInRead(fn func(response *http.Response)) {
 	h.inRead = fn
 }
 
-func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []byte, hash utils.HashType, err error) {
+func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) ([]byte, utils.HashType, error) {
+	return h.ReadValidated(ctx, oldHash, nil)
+}
+
+// ReadValidated checks complete candidates before publishing metadata or choosing a route.
+func (h *HTTPVehicle) ReadValidated(ctx context.Context, oldHash utils.HashType, validate func([]byte) error, trustedCache ...bool) (buf []byte, hash utils.HashType, err error) {
 	ctx, cancel := context.WithTimeout(ctx, h.timeout)
 	defer cancel()
 	header := h.header
+	allowConditional := oldHash.IsValid() && (validate == nil || len(trustedCache) > 0 && trustedCache[0])
+	// Only our stored validator is tied to oldHash. User-supplied conditions
+	// could select a body-less 304 without any matching cached representation.
+	if header != nil {
+		header = header.Clone()
+		for key := range header {
+			if strings.EqualFold(key, "If-None-Match") || strings.EqualFold(key, "If-Modified-Since") {
+				delete(header, key)
+			}
+		}
+	}
 	setIfNoneMatch := false
-	if etag && oldHash.IsValid() {
+	if allowConditional && etag {
 		etagWithHash := cachefile.Cache().GetETagWithHash(h.url)
 		if oldHash.Equal(etagWithHash.Hash) && etagWithHash.ETag != "" {
 			if header == nil {
 				header = http.Header{}
-			} else {
-				header = header.Clone()
 			}
 			header.Set("If-None-Match", etagWithHash.ETag)
 			setIfNoneMatch = true
 		}
 	}
-	resp, err := mihomoHttp.HttpRequest(ctx, h.url, http.MethodGet, header, nil, mihomoHttp.WithSpecialProxy(h.proxy))
+	resp, buf, err := mihomoHttp.Get(ctx, h.url, header, h.sizeLimit, func(resp *http.Response, data []byte) error {
+		if resp.StatusCode == http.StatusNotModified {
+			return nil
+		}
+		if validate != nil {
+			return validate(data)
+		}
+		return nil
+	}, append(append([]mihomoHttp.Option{}, h.options...), mihomoHttp.WithSpecialProxy(h.proxy))...)
 	if err != nil {
-		return
+		return nil, hash, err
 	}
-	defer resp.Body.Close()
-
 	if h.inRead != nil {
 		h.inRead(resp)
 	}
-
-	if resp.StatusCode < 200 || resp.StatusCode > 299 {
-		if setIfNoneMatch && resp.StatusCode == http.StatusNotModified {
-			return nil, oldHash, nil
-		}
-		err = errors.New(resp.Status)
-		return
-	}
-	var reader io.Reader = resp.Body
-	if h.sizeLimit > 0 {
-		reader = io.LimitReader(reader, h.sizeLimit)
-	}
-	buf, err = io.ReadAll(reader)
-	if err != nil {
-		return
+	if setIfNoneMatch && resp.StatusCode == http.StatusNotModified {
+		return nil, oldHash, nil
 	}
 	hash = utils.MakeHash(buf)
 	if etag {
@@ -172,7 +172,7 @@ func (h *HTTPVehicle) Read(ctx context.Context, oldHash utils.HashType) (buf []b
 	return
 }
 
-func NewHTTPVehicle(url string, path string, proxy string, header http.Header, timeout time.Duration, sizeLimit int64) *HTTPVehicle {
+func NewHTTPVehicle(url string, path string, proxy string, header http.Header, timeout time.Duration, sizeLimit int64, options ...mihomoHttp.Option) *HTTPVehicle {
 	return &HTTPVehicle{
 		url:       url,
 		path:      path,
@@ -180,5 +180,6 @@ func NewHTTPVehicle(url string, path string, proxy string, header http.Header, t
 		header:    header,
 		timeout:   timeout,
 		sizeLimit: sizeLimit,
+		options:   append([]mihomoHttp.Option{}, options...),
 	}
 }

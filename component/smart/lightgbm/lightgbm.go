@@ -1,11 +1,12 @@
 package lightgbm
 
 import (
+	"bufio"
+	"bytes"
 	"context"
 	"fmt"
-	"io"
+	"github.com/metacubex/http"
 	"math"
-	"net/http"
 	"net/netip"
 	"os"
 	"regexp"
@@ -15,11 +16,11 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/singleflight"
+	"github.com/metacubex/mihomo/common/utils"
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
-
 	"github.com/vernesong/leaves"
 )
 
@@ -662,19 +663,15 @@ func downloadModel(path string) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*90)
 	defer cancel()
 
-	resp, err := mihomoHttp.HttpRequest(ctx, modelUrl, http.MethodGet, nil, nil)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	_, data, err := mihomoHttp.Get(ctx, modelUrl, nil, 0, func(_ *http.Response, data []byte) error { return ValidateModel(data) }, mihomoHttp.WithPublicRead())
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
+	return utils.WriteFileAtomic(ctx, path, data, 0o644)
+}
 
+func ValidateModel(data []byte) error {
+	_, err := leaves.LGEnsembleFromReader(bufio.NewReader(bytes.NewReader(data)), false)
 	return err
 }
 

@@ -2,8 +2,6 @@ package updater
 
 import (
 	"context"
-	"fmt"
-	"io"
 	"os"
 	"time"
 
@@ -14,22 +12,18 @@ import (
 
 const defaultHttpTimeout = time.Second * 90
 
-func downloadForBytes(url string) ([]byte, error) {
+func downloadForBytes(url string, validators ...func([]byte) error) ([]byte, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), defaultHttpTimeout)
 	defer cancel()
-	resp, err := mihomoHttp.HttpRequest(ctx, url, http.MethodGet, nil, nil)
-	if err != nil {
-		return nil, err
-	}
-	defer resp.Body.Close()
-
-	// A non-200 response (e.g. a CDN/gateway error page) must not be returned as
-	// if it were valid content.
-	if resp.StatusCode != http.StatusOK {
-		return nil, fmt.Errorf("download %s: unexpected status %d", url, resp.StatusCode)
-	}
-
-	return io.ReadAll(resp.Body)
+	_, data, err := mihomoHttp.Get(ctx, url, nil, 0, func(_ *http.Response, data []byte) error {
+		for _, validate := range validators {
+			if err := validate(data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}, mihomoHttp.WithPublicRead())
+	return data, err
 }
 
 func saveFile(bytes []byte, path string) error {

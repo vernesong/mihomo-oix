@@ -2,10 +2,10 @@ package http
 
 import (
 	"context"
+	"errors"
 	"io"
 	"net"
 	URL "net/url"
-	"runtime"
 	"strings"
 	"time"
 
@@ -69,7 +69,7 @@ func HttpRequest(ctx context.Context, url, method string, header map[string][]st
 
 	transport := &http.Transport{
 		// from http.DefaultTransport
-		DisableKeepAlives:     runtime.GOOS == "android",
+		DisableKeepAlives:     true, // Each request owns its transport; do not retain idle connections.
 		MaxIdleConns:          100,
 		IdleConnTimeout:       30 * time.Second,
 		TLSHandshakeTimeout:   10 * time.Second,
@@ -86,7 +86,13 @@ func HttpRequest(ctx context.Context, url, method string, header map[string][]st
 		TLSClientConfig: tlsConfig,
 	}
 
-	client := http.Client{Transport: transport}
+	client := http.Client{Transport: transport, CheckRedirect: func(req *http.Request, via []*http.Request) error {
+		if len(via) >= 10 {
+			return errors.New("stopped after 10 redirects")
+		}
+		StripRedirectCredentials(req.Header, req.URL, via[0].URL)
+		return nil
+	}}
 	return client.Do(req)
 }
 
@@ -96,6 +102,7 @@ type option struct {
 	specialProxy string
 	dialer       C.Dialer
 	caOption     ca.Option
+	publicRead   bool
 }
 
 func WithSpecialProxy(name string) Option {
@@ -115,3 +122,7 @@ func WithCAOption(caOption ca.Option) Option {
 		opt.caOption = caOption
 	}
 }
+
+// WithPublicRead allows a public download's HTTP 403 to lose to another route.
+// Credentials or a query string automatically retain strict auth rejection.
+func WithPublicRead() Option { return func(opt *option) { opt.publicRead = true } }

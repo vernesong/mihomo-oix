@@ -121,7 +121,7 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 	})
 }
 
-func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
+func TestFetchFromForbiddenIsAuthError(t *testing.T) {
 	homeDir := t.TempDir()
 	setupSignedFetchTest(t)
 
@@ -142,8 +142,8 @@ func TestFetchFromForbiddenIsNotAuthError(t *testing.T) {
 	if err == nil {
 		t.Fatal("expected error")
 	}
-	if IsAuthError(err) {
-		t.Fatalf("HTTP 403 must not be treated as auth error, got %v", err)
+	if !IsAuthError(err) {
+		t.Fatalf("HTTP 403 must be treated as auth error, got %v", err)
 	}
 }
 
@@ -224,10 +224,10 @@ func TestDecodeJSONResponseEnforcesSizeLimit(t *testing.T) {
 	}
 }
 
-func TestAPIResponseForbiddenIsNotAuthError(t *testing.T) {
+func TestAPIResponseForbiddenIsAuthError(t *testing.T) {
 	err := apiResponseError("managed config", http.StatusForbidden, "forbidden")
-	if IsAuthError(err) {
-		t.Fatalf("ret=403 must not be treated as auth error, got %v", err)
+	if !IsAuthError(err) {
+		t.Fatalf("ret=403 must be treated as auth error, got %v", err)
 	}
 }
 
@@ -272,7 +272,7 @@ func TestFetchBestWaitsForNonEmptyConfig(t *testing.T) {
 	}
 }
 
-func TestFetchBestRequiresAllEndpointsToRejectAuthentication(t *testing.T) {
+func TestFetchBestTreatsAuthenticationAsAuthoritative(t *testing.T) {
 	setupSignedFetchTest(t)
 
 	newServer := func(status int) *httptest.Server {
@@ -288,12 +288,12 @@ func TestFetchBestRequiresAllEndpointsToRejectAuthentication(t *testing.T) {
 	}
 	authServer := newServer(http.StatusUnauthorized)
 	authServer2 := newServer(http.StatusUnauthorized)
-	nonAuthServer := newServer(http.StatusForbidden)
+	nonAuthServer := newServer(http.StatusNotFound)
 
 	setoixHTTPClientForTest(t, &http.Client{})
 	_, err := fetchBest(context.Background(), "token", []string{authServer.URL, nonAuthServer.URL}, t.TempDir())
-	if err == nil || IsAuthError(err) {
-		t.Fatalf("mixed endpoint errors = %v, want non-auth failure", err)
+	if !IsAuthError(err) {
+		t.Fatalf("mixed endpoint errors = %v, want auth failure", err)
 	}
 
 	_, err = fetchBest(context.Background(), "token", []string{authServer.URL, authServer2.URL}, t.TempDir())

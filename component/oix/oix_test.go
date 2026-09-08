@@ -19,7 +19,6 @@ import (
 	"testing"
 	"time"
 
-	P "github.com/metacubex/mihomo/adapter/provider"
 	A "github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	R "github.com/metacubex/mihomo/component/resolver"
@@ -367,7 +366,7 @@ func Test_oixHTTPDoReplaysRequestBody(t *testing.T) {
 	})
 	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", strings.NewReader("payload"))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test/api/v1/information", strings.NewReader("payload"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -400,7 +399,7 @@ func Test_oixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
 	})
 	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test", io.NopCloser(strings.NewReader("payload")))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test/api/v1/information", io.NopCloser(strings.NewReader("payload")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -535,7 +534,7 @@ func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
 	}
 }
 
-func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
+func TestFetchFromStopsWhenAccountAuthenticationRejected(t *testing.T) {
 	secretKey, publicKey, err := A.GenX25519KeyPair()
 	if err != nil {
 		t.Fatal(err)
@@ -580,31 +579,11 @@ func TestFetchFromFallsBackWhenAccountAuthenticationUnavailable(t *testing.T) {
 	setoixHTTPClientForTest(t, server.Client())
 
 	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
-	if err != nil {
-		t.Fatalf("fetchFrom() error = %v", err)
+	if !IsAuthError(err) || result != nil {
+		t.Fatalf("result=%v error=%v, want authentication failure", result, err)
 	}
-	if managedCalls != 1 {
-		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
-	}
-	if !saveResult(defaultProviderDir, homeDir, result.data) {
-		t.Fatal("saveResult() failed")
-	}
-	provider, err := P.ParseProxyProvider("oixCloud", map[string]any{
-		"type":           "file",
-		"path":           filepath.Join(homeDir, defaultProviderDir, ProviderFile()),
-		"age-secret-key": secretKey,
-	}, nil)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if err := provider.Update(); err != nil {
-		t.Fatal(err)
-	}
-	if closer, ok := provider.(interface{ Close() error }); ok {
-		t.Cleanup(func() { _ = closer.Close() })
-	}
-	if provider.Count() != 1 || provider.Proxies()[0].Name() != "simulated-node" {
-		t.Fatalf("parsed proxies = %v, want simulated-node", provider.Proxies())
+	if managedCalls != 0 {
+		t.Fatalf("managed calls=%d, want none after account rejection", managedCalls)
 	}
 }
 
@@ -1220,7 +1199,7 @@ func TestEnsureKeepsManagedDNSWhenFetchFailsWithCachedProvider(t *testing.T) {
 	}
 }
 
-func TestEnsureKeepsManagedDNSWhenAuthFailureIsNotUnanimous(t *testing.T) {
+func TestEnsureRejectsAuthenticationWithoutWaitingForUnanimity(t *testing.T) {
 	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
 	ApiDomains = "auth.oix.test,unavailable.oix.test"
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
@@ -1242,11 +1221,11 @@ func TestEnsureKeepsManagedDNSWhenAuthFailureIsNotUnanimous(t *testing.T) {
 	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
 	_, err := Ensure(defaultProviderDir, homeDir, true)
-	if err == nil || IsAuthError(err) {
-		t.Fatalf("Ensure() error = %v, want non-auth failure", err)
+	if !IsAuthError(err) {
+		t.Fatalf("Ensure() error=%v, want auth failure", err)
 	}
-	if !oixdns.IsEnsured() {
-		t.Fatal("managed DNS not enabled despite cached provider on disk")
+	if oixdns.IsEnsured() {
+		t.Fatal("managed DNS enabled despite authoritative authentication rejection")
 	}
 }
 

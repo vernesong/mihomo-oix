@@ -26,9 +26,11 @@ import (
 
 	"github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/dialer"
+	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	"github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/listener/inner"
 	"github.com/metacubex/mihomo/log"
 	"gopkg.in/yaml.v3"
 )
@@ -52,7 +54,8 @@ var (
 	periodicMu       sync.RWMutex
 	providerUpdateMu sync.Mutex
 
-	oixHTTPClient = newoixHTTPClient()
+	oixHTTPClient       = newoixHTTPClient()
+	oixRoutedHTTPClient = newoixRoutedHTTPClient()
 )
 
 var (
@@ -118,7 +121,6 @@ const (
 	hedgeDelay              = 250 * time.Millisecond
 	maxManagedResponseBytes = 16 << 20
 	maxAccountResponseBytes = 1 << 20
-	maxErrorResponseBytes   = 1024
 )
 
 const oixUserAgent = "OpenClash for oixCloud"
@@ -544,68 +546,65 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	if ageSecretKey == "" || agePublicKey == "" {
 		ageKeyPair()
 	}
-	if len(urls) == 1 {
-		return fetchFrom(parent, token, urls[0], homeDir)
-	}
-
-	ctx, cancel := context.WithCancel(parent)
+	ctx, cancel := context.WithTimeout(parent, totalTimeout)
 	defer cancel()
-
-	type outcome struct {
-		config *fetchedConfig
-		err    error
-	}
-	results := make(chan outcome, len(urls))
-
+	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(urls))
 	for i, baseURL := range urls {
-		go func(index int, baseURL string) {
-			if index > 0 {
+		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
+			if i > 0 {
 				timer := time.NewTimer(hedgeDelay)
 				defer timer.Stop()
 				select {
 				case <-timer.C:
 				case <-ctx.Done():
-					results <- outcome{nil, ctx.Err()}
-					return
+					return nil, ctx.Err()
 				}
 			}
 			config, err := fetchFrom(ctx, token, baseURL, homeDir)
-			results <- outcome{config, err}
-		}(i, baseURL)
-	}
-
-	var authErrs []error
-	var nonAuthErrs []error
-	hadEmpty := false
-	for range urls {
-		o := <-results
-		if o.err == nil {
-			if o.config != nil {
-				cancel()
-				return o.config, nil
+			if err == nil && config == nil {
+				err = ErrNoSubscription
 			}
-			hadEmpty = true
-			continue
-		}
-		if errors.Is(o.err, ErrAuthFailed) {
-			authErrs = append(authErrs, o.err)
-		} else {
-			nonAuthErrs = append(nonAuthErrs, o.err)
-		}
+			return config, err
+		})
 	}
-	if hadEmpty {
+	config, err := mihomoHttp.RaceReads(ctx, attempts, nil)
+	if !IsAuthError(err) && errors.Is(err, ErrNoSubscription) {
 		return nil, nil
 	}
-	if len(nonAuthErrs) > 0 {
-		return nil, errors.Join(nonAuthErrs...)
-	}
-	if len(authErrs) > 0 {
-		return nil, errors.Join(authErrs...)
-	}
-	return nil, ErrNoDomains
+	return config, err
 }
 
+type oixHTTPClientContextKey struct{}
+
 func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
+	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
+	defer cancel()
+	clients := []*http.Client{oixHTTPClient}
+	if inner.GetTunnel() != nil {
+		clients = append([]*http.Client{oixRoutedHTTPClient}, clients...)
+	}
+	return fetchFromClients(ctx, token, baseURL, homeDir, clients)
+}
+
+func fetchFromClients(ctx context.Context, token, baseURL, homeDir string, clients []*http.Client) (*fetchedConfig, error) {
+	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(clients))
+	for _, client := range clients {
+		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
+			config, err := fetchFromRoute(context.WithValue(ctx, oixHTTPClientContextKey{}, client), token, baseURL, homeDir)
+			if err == nil && config == nil {
+				err = ErrNoSubscription
+			}
+			return config, err
+		})
+	}
+	config, err := mihomoHttp.RaceReads(ctx, attempts, nil)
+	if !IsAuthError(err) && errors.Is(err, ErrNoSubscription) {
+		return nil, nil
+	}
+	return config, err
+}
+
+func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
 	if agePublicKey == "" {
 		return nil, errors.New("age key unavailable")
 	}
@@ -629,6 +628,9 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedCon
 			params = resolved.params
 		}
 	} else {
+		if IsAuthError(planErr) {
+			return nil, planErr
+		}
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -647,7 +649,7 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedCon
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
-		return nil, fmt.Errorf("create request: %w", err)
+		return nil, fmt.Errorf("create request: %w", mihomoHttp.RedactError(err))
 	}
 	req.Header.Set("User-Agent", oixUserAgent)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -661,13 +663,8 @@ func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedCon
 	}
 	defer resp.Body.Close()
 
-	if resp.StatusCode != 200 {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBytes))
-		err := fmt.Errorf("HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusUnauthorized {
-			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		return nil, err
+	if resp.StatusCode != http.StatusOK {
+		return nil, oixStatusError(resp.StatusCode)
 	}
 
 	var apiResp apiResponse
@@ -696,7 +693,7 @@ func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity
 	url := baseURL + "/api/v1/information"
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
 	if err != nil {
-		return planIdentity{}, fmt.Errorf("create account request: %w", err)
+		return planIdentity{}, fmt.Errorf("create account request: %w", mihomoHttp.RedactError(err))
 	}
 	req.Header.Set("User-Agent", oixUserAgent)
 	req.Header.Set("Authorization", "Bearer "+token)
@@ -708,12 +705,7 @@ func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		body, _ := io.ReadAll(io.LimitReader(resp.Body, maxErrorResponseBytes))
-		err := fmt.Errorf("account HTTP %d: %s", resp.StatusCode, string(body))
-		if resp.StatusCode == http.StatusUnauthorized {
-			err = fmt.Errorf("%w: %w", ErrAuthFailed, err)
-		}
-		return planIdentity{}, err
+		return planIdentity{}, oixStatusError(resp.StatusCode)
 	}
 
 	var apiResp informationResponse
@@ -766,7 +758,15 @@ func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error)
 
 func apiResponseError(scope string, ret int, msg string) error {
 	err := fmt.Errorf("%s rejected (ret=%d): %s", scope, ret, msg)
-	if ret == http.StatusUnauthorized {
+	if ret == http.StatusUnauthorized || ret == http.StatusForbidden {
+		return fmt.Errorf("%w: %w", oixStatusError(ret), err)
+	}
+	return err
+}
+
+func oixStatusError(status int) error {
+	err := error(mihomoHttp.StatusError(status))
+	if mihomoHttp.IsAuthenticationError(err) {
 		return fmt.Errorf("%w: %w", ErrAuthFailed, err)
 	}
 	return err
@@ -779,6 +779,16 @@ func decodeArmoredConfig(encoded string) ([]byte, error) {
 	}
 	if !isAgeArmored(raw) {
 		return nil, errors.New("config not encrypted")
+	}
+	plain, err := age.DecryptBytes(raw, ageSecretKey)
+	if err != nil {
+		return nil, errors.New("invalid encrypted config")
+	}
+	var schema struct {
+		Proxies []map[string]any `yaml:"proxies"`
+	}
+	if err := yaml.Unmarshal(plain, &schema); err != nil || schema.Proxies == nil {
+		return nil, errors.New("invalid managed provider config")
 	}
 	return raw, nil
 }
@@ -976,6 +986,13 @@ func lookupoixHost(ctx context.Context, primary, fallback oixHostResolver, looku
 func newoixHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout: 15 * time.Second,
+		CheckRedirect: func(req *http.Request, via []*http.Request) error {
+			if len(via) >= 10 {
+				return errors.New("stopped after 10 redirects")
+			}
+			mihomoHttp.StripRedirectCredentials(req.Header, req.URL, via[0].URL)
+			return nil
+		},
 		Transport: &http.Transport{
 			Proxy: nil,
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -992,11 +1009,41 @@ func newoixHTTPClient() *http.Client {
 	}
 }
 
+func newoixRoutedHTTPClient() *http.Client {
+	client := newoixHTTPClient()
+	transport := client.Transport.(*http.Transport)
+	direct := transport.DialContext
+	transport.DialContext = func(ctx context.Context, network, address string) (net.Conn, error) {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		if conn, err := inner.HandleTcp(inner.GetTunnel(), address, ""); err == nil {
+			return conn, nil
+		}
+		return direct(ctx, network, address)
+	}
+	return client
+}
+
+// Only the two explicitly read-only API operations may be replayed.
+func isOixRead(req *http.Request) bool {
+	return req.Method == http.MethodGet && req.URL.Path == "/api/v1/managed/flclash/direct" ||
+		req.Method == http.MethodPost && req.URL.Path == "/api/v1/information"
+}
+
 func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	ctx := req.Context()
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
-	for i := 0; i <= maxRetries; i++ {
+	retries := 0
+	if isOixRead(req) {
+		retries = maxRetries
+	}
+	client := oixHTTPClient
+	if route, ok := ctx.Value(oixHTTPClientContextKey{}).(*http.Client); ok {
+		client = route
+	}
+	for i := 0; i <= retries; i++ {
 		if err := ctx.Err(); err != nil {
 			return nil, err
 		}
@@ -1026,12 +1073,12 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 			}
 			attempt.Body = body
 		}
-		resp, err := oixHTTPClient.Do(attempt)
+		resp, err := client.Do(attempt)
 		if err != nil {
-			lastErr = err
+			lastErr = mihomoHttp.RedactError(err)
 			continue
 		}
-		if resp.StatusCode >= 500 {
+		if resp.StatusCode >= 500 && retries > 0 {
 			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
 			resp.Body.Close()
 			continue
@@ -1041,7 +1088,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	if lastErr == nil {
 		lastErr = errors.New("request failed")
 	}
-	return nil, fmt.Errorf("request failed after %d attempts: %w", maxRetries+1, lastErr)
+	return nil, fmt.Errorf("request failed after %d attempts: %w", retries+1, lastErr)
 }
 
 func saveResult(dir, homeDir string, raw []byte) bool {

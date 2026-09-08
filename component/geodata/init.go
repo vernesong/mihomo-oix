@@ -3,12 +3,12 @@ package geodata
 import (
 	"context"
 	"fmt"
-	"io"
 	"os"
 	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
+	"github.com/metacubex/mihomo/common/utils"
 	mihomoHttp "github.com/metacubex/mihomo/component/http"
 	"github.com/metacubex/mihomo/component/mmdb"
 	C "github.com/metacubex/mihomo/constant"
@@ -71,20 +71,19 @@ func SetASNUrl(url string) {
 func downloadToPath(url string, path string) (err error) {
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second*90)
 	defer cancel()
-	resp, err := mihomoHttp.HttpRequest(ctx, url, http.MethodGet, nil, nil)
-	if err != nil {
-		return
-	}
-	defer resp.Body.Close()
-
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY, 0o644)
+	_, data, err := mihomoHttp.Get(ctx, url, nil, 0, func(_ *http.Response, data []byte) error {
+		if path == C.Path.MMDB() || path == C.Path.ASN() {
+			return VerifyMMDBBytes(data)
+		}
+		if path == C.Path.GeoSite() {
+			return VerifyGeoSiteBytes(data)
+		}
+		return VerifyGeoIPBytes(data)
+	}, mihomoHttp.WithPublicRead())
 	if err != nil {
 		return err
 	}
-	defer f.Close()
-	_, err = io.Copy(f, resp.Body)
-
-	return err
+	return utils.WriteFileAtomic(ctx, path, data, 0o644)
 }
 
 func InitGeoSite() error {
