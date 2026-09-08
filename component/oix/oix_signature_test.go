@@ -346,7 +346,46 @@ func TestFetchBestOnlyPersistsWinningProviderOptions(t *testing.T) {
 	}
 	config.params.persist(homeDir)
 	state, err := GetParamsState(homeDir)
-	if err != nil || state.Params != "&mode=premium&tfo=true" || state.DefaultParams != "&mode=premium" {
+	if err != nil || state.Params != "&mode=premium" || state.DefaultParams != "&mode=premium" {
 		t.Fatalf("winning provider options = %+v, %v", state, err)
+	}
+}
+
+func TestFetchFromOmitsUnspecifiedTFO(t *testing.T) {
+	for _, planAvailable := range []bool{true, false} {
+		name := "with plan"
+		if !planAvailable {
+			name = "without plan"
+		}
+		t.Run(name, func(t *testing.T) {
+			publicKey := setupSignedFetchTest(t)
+			t.Setenv("OIX_PARAMS", "")
+			homeDir := t.TempDir()
+			managedCalls := 0
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				if r.URL.Path == "/api/v1/information" {
+					if planAvailable {
+						_ = json.NewEncoder(w).Encode(informationResponse{Ret: http.StatusOK, Data: &informationData{PlanCode: "silver"}})
+					} else {
+						http.NotFound(w, r)
+					}
+					return
+				}
+				managedCalls++
+				if r.URL.Query().Has("tfo") {
+					t.Errorf("unspecified TFO was added to request: %s", r.URL.RawQuery)
+				}
+				writeSignedConfig(t, w, r, publicKey)
+			}))
+			t.Cleanup(server.Close)
+			setoixHTTPClientForTest(t, server.Client())
+			result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
+			if err != nil || result == nil {
+				t.Fatalf("fetchFrom() = %v, %v", result, err)
+			}
+			if managedCalls != 1 {
+				t.Fatalf("managed calls = %d, want 1", managedCalls)
+			}
+		})
 	}
 }

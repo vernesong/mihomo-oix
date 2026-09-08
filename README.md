@@ -61,6 +61,7 @@ routing is decided by `mode` alone. Internal transport parameters are ignored.
 Without user options, the core follows the account tier defaults. When the tier changes, routing defaults migrate only
 if the previous default was still in use; independent switches and additional options are preserved. Options are stored
 in `.oix_params`, with the last tier default in `.oix_default_params`.
+The `tfo` parameter is sent only when explicitly set to `true` or `false`; omitting it does not enable TFO.
 Derived defaults are saved only after the selected subscription has been saved, so failed requests and slower
 fallback endpoints cannot replace the active options.
 

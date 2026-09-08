@@ -156,13 +156,6 @@ func (p queryParams) withTierDefaults(defaults queryParams) queryParams {
 	return p
 }
 
-func (p queryParams) withDefaultTFO() queryParams {
-	if p.TFO == nil {
-		p.TFO = boolPointer(true)
-	}
-	return p
-}
-
 func (p queryParams) adjustedForTier(tier subscriptionTier) queryParams {
 	if !tierSupportsMode(tier, p.Mode) {
 		p.Mode = defaultParamsForTier(tier).Mode
@@ -291,7 +284,7 @@ func resolveParamsForPlan(homeDir string, plan planIdentity) (*resolvedParams, e
 	if !environmentOverride && (!hasCurrent || (current.routeEncoding() == oldDefaultRoute && oldDefaultRoute != newDefaultRaw)) {
 		current = current.withTierDefaults(newDefault)
 	}
-	current = current.adjustedForTier(tier).withDefaultTFO()
+	current = current.adjustedForTier(tier)
 
 	return &resolvedParams{
 		params:              current,
@@ -350,7 +343,7 @@ func effectiveParamsWithoutPlan(homeDir string) (queryParams, error) {
 	if err != nil {
 		return queryParams{}, err
 	}
-	return parseParams(raw).withDefaultTFO(), nil
+	return parseParams(raw), nil
 }
 
 func GetParamsState(homeDir string) (ParamsState, error) {
@@ -362,7 +355,7 @@ func GetParamsState(homeDir string) (ParamsState, error) {
 	}
 	source := "file"
 	if environmentOverride {
-		params = parseParams(params).withDefaultTFO().encode()
+		params = parseParams(params).encode()
 		source = "environment"
 	} else if !exists {
 		source = "default"
@@ -401,7 +394,7 @@ func SetParams(homeDir, raw string) error {
 	if err := validateEditableParams(raw); err != nil {
 		return err
 	}
-	params := parseParams(raw).withDefaultTFO()
+	params := parseParams(raw)
 	return writeParamsFile(paramsFilePath(homeDir), params.encode())
 }
 
