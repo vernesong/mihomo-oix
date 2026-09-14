@@ -152,6 +152,16 @@ jobs:
         echo "---test with_gvisor---"
         go test ./... -tags "with_gvisor" -count=1
 
+    - name: Test Linux firewall backends
+      if: ${{ matrix.jobs.test == 'test' }}
+      run: |
+        sudo apt-get update
+        sudo apt-get install -y nftables iptables iproute2 procps
+        go test -c -o "$RUNNER_TEMP/tproxy.test" ./listener/tproxy
+        for backend in NFT IPTables; do
+          sudo env MIHOMO_TEST_FIREWALL=1 unshare --net "$RUNNER_TEMP/tproxy.test" -test.run "^Test${backend}Kernel$" -test.v
+        done
+
     - name: Update CA
       run: |
         sudo apt-get update && sudo apt-get install ca-certificates

@@ -5,17 +5,19 @@ import (
 	"fmt"
 	"net"
 	"runtime"
+	"strings"
 
-	"github.com/metacubex/mihomo/common/cmd"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/log"
 )
 
 var (
-	dnsPort       uint16
-	tProxyPort    uint16
-	interfaceName string
-	DnsRedirect   bool
+	iptablesCleanup    []string
+	runIPTablesCommand = func(command string) (string, error) {
+		args := strings.Fields(command)
+		out, err := runFirewallCommand("", args[0], args[1:]...)
+		return string(out), err
+	}
 )
 
 const (
@@ -24,155 +26,141 @@ const (
 )
 
 func SetTProxyIPTables(ifname string, bypass []string, tport uint16, dnsredir bool, dport uint16) error {
-	if _, err := cmd.ExecCmd("iptables -V"); err != nil {
-		return fmt.Errorf("current operations system [%s] are not support iptables or command iptables does not exist", runtime.GOOS)
+	if _, err := runIPTablesCommand("iptables -V"); err != nil {
+		return fmt.Errorf("iptables backend unavailable on %s: %w", runtime.GOOS, err)
 	}
 
 	if ifname == "" {
 		return errors.New("the 'interface-name' can not be empty")
 	}
 
-	interfaceName = ifname
-	tProxyPort = tport
-	DnsRedirect = dnsredir
-	dnsPort = dport
+	if len(iptablesCleanup) != 0 {
+		return errors.New("previous iptables rules must be cleaned up first")
+	}
+	var setupErr error
+	execCmd := func(command string) {
+		if setupErr != nil {
+			return
+		}
+		log.Debugln("[IPTABLES] %s", command)
+		if _, setupErr = runIPTablesCommand(command); setupErr != nil {
+			setupErr = fmt.Errorf("%s: %w", command, setupErr)
+			return
+		}
+		if undo := undoIPTablesCommand(command); undo != "" {
+			iptablesCleanup = append(iptablesCleanup, undo)
+		}
+	}
 
-	// add route
+	// Claim the exclusive route before adding a non-exclusive policy rule.
+	// A route conflict must not add or remove another instance's matching rule.
+	execCmd(fmt.Sprintf("ip -f inet route add local default dev %s table %s", ifname, PROXY_ROUTE_TABLE))
 	execCmd(fmt.Sprintf("ip -f inet rule add fwmark %s lookup %s", PROXY_FWMARK, PROXY_ROUTE_TABLE))
-	execCmd(fmt.Sprintf("ip -f inet route add local default dev %s table %s", interfaceName, PROXY_ROUTE_TABLE))
 
 	// set FORWARD
-	if interfaceName != "lo" {
-		execCmd("sysctl -w net.ipv4.ip_forward=1")
-		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -o %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -o %s -j ACCEPT", interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -i %s ! -o %s -j ACCEPT", interfaceName, interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -i %s -o %s -j ACCEPT", interfaceName, interfaceName))
+	if ifname != "lo" {
+		if setupErr == nil {
+			setupErr = ensureIPv4Forwarding(func(input, name string, args ...string) ([]byte, error) {
+				out, err := runIPTablesCommand(strings.Join(append([]string{name}, args...), " "))
+				return []byte(out), err
+			})
+		}
+		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -o %s -j ACCEPT", ifname))
+		execCmd(fmt.Sprintf("iptables -t filter -A FORWARD -i %s -j ACCEPT", ifname))
 	}
 
 	// set mihomo divert
 	execCmd("iptables -t mangle -N mihomo_divert")
-	execCmd("iptables -t mangle -F mihomo_divert")
 	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_divert -j MARK --set-mark %s", PROXY_FWMARK))
 	execCmd("iptables -t mangle -A mihomo_divert -j ACCEPT")
 
 	// set pre routing
 	execCmd("iptables -t mangle -N mihomo_prerouting")
-	execCmd("iptables -t mangle -F mihomo_prerouting")
 	execCmd("iptables -t mangle -A mihomo_prerouting -s 172.17.0.0/16 -j RETURN")
-	if DnsRedirect {
+	if dnsredir {
 		execCmd("iptables -t mangle -A mihomo_prerouting -p udp --dport 53 -j ACCEPT")
 		execCmd("iptables -t mangle -A mihomo_prerouting -p tcp --dport 53 -j ACCEPT")
 	}
 	execCmd("iptables -t mangle -A mihomo_prerouting -m addrtype --dst-type LOCAL -j RETURN")
-	addLocalnetworkToChain("mihomo_prerouting", bypass)
+	addLocalnetworkToChain("mihomo_prerouting", bypass, execCmd)
 	execCmd("iptables -t mangle -A mihomo_prerouting -p tcp -m socket -j mihomo_divert")
 	execCmd("iptables -t mangle -A mihomo_prerouting -p udp -m socket -j mihomo_divert")
-	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_prerouting -p tcp -j TPROXY --on-port %d --tproxy-mark %s/%s", tProxyPort, PROXY_FWMARK, PROXY_FWMARK))
-	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_prerouting -p udp -j TPROXY --on-port %d --tproxy-mark %s/%s", tProxyPort, PROXY_FWMARK, PROXY_FWMARK))
+	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_prerouting -p tcp -j TPROXY --on-port %d --tproxy-mark %s/%s", tport, PROXY_FWMARK, PROXY_FWMARK))
+	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_prerouting -p udp -j TPROXY --on-port %d --tproxy-mark %s/%s", tport, PROXY_FWMARK, PROXY_FWMARK))
 	execCmd("iptables -t mangle -A PREROUTING -j mihomo_prerouting")
 
-	if DnsRedirect {
-		execCmd(fmt.Sprintf("iptables -t nat -I PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 53 -j REDIRECT --to %d", dnsPort))
-		execCmd(fmt.Sprintf("iptables -t nat -I PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p udp --dport 53 -j REDIRECT --to %d", dnsPort))
+	if dnsredir {
+		execCmd(fmt.Sprintf("iptables -t nat -I PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 53 -j REDIRECT --to %d", dport))
+		execCmd(fmt.Sprintf("iptables -t nat -I PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p udp --dport 53 -j REDIRECT --to %d", dport))
 	}
 
 	// set post routing
-	if interfaceName != "lo" {
-		execCmd(fmt.Sprintf("iptables -t nat -A POSTROUTING -o %s -m addrtype ! --src-type LOCAL -j MASQUERADE", interfaceName))
+	if ifname != "lo" {
+		execCmd(fmt.Sprintf("iptables -t nat -A POSTROUTING -o %s -m addrtype ! --src-type LOCAL -j MASQUERADE", ifname))
 	}
 
 	// set output
 	execCmd("iptables -t mangle -N mihomo_output")
-	execCmd("iptables -t mangle -F mihomo_output")
 	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_output -m mark --mark %#x -j RETURN", dialer.DefaultRoutingMark.Load()))
-	if DnsRedirect {
+	if dnsredir {
 		execCmd("iptables -t mangle -A mihomo_output -p udp -m multiport --dports 53,123,137 -j ACCEPT")
 		execCmd("iptables -t mangle -A mihomo_output -p tcp --dport 53 -j ACCEPT")
 	}
 	execCmd("iptables -t mangle -A mihomo_output -m addrtype --dst-type LOCAL -j RETURN")
 	execCmd("iptables -t mangle -A mihomo_output -m addrtype --dst-type BROADCAST -j RETURN")
-	addLocalnetworkToChain("mihomo_output", bypass)
+	addLocalnetworkToChain("mihomo_output", bypass, execCmd)
 	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_output -p tcp -j MARK --set-mark %s", PROXY_FWMARK))
 	execCmd(fmt.Sprintf("iptables -t mangle -A mihomo_output -p udp -j MARK --set-mark %s", PROXY_FWMARK))
-	execCmd(fmt.Sprintf("iptables -t mangle -I OUTPUT -o %s -j mihomo_output", interfaceName))
+	execCmd(fmt.Sprintf("iptables -t mangle -I OUTPUT -o %s -j mihomo_output", ifname))
 
 	// set dns output
-	if DnsRedirect {
+	if dnsredir {
 		execCmd("iptables -t nat -N mihomo_dns_output")
-		execCmd("iptables -t nat -F mihomo_dns_output")
 		execCmd(fmt.Sprintf("iptables -t nat -A mihomo_dns_output -m mark --mark %#x -j RETURN", dialer.DefaultRoutingMark.Load()))
 		execCmd("iptables -t nat -A mihomo_dns_output -s 172.17.0.0/16 -j RETURN")
-		execCmd(fmt.Sprintf("iptables -t nat -A mihomo_dns_output -p udp -j REDIRECT --to-ports %d", dnsPort))
-		execCmd(fmt.Sprintf("iptables -t nat -A mihomo_dns_output -p tcp -j REDIRECT --to-ports %d", dnsPort))
+		execCmd(fmt.Sprintf("iptables -t nat -A mihomo_dns_output -p udp -j REDIRECT --to-ports %d", dport))
+		execCmd(fmt.Sprintf("iptables -t nat -A mihomo_dns_output -p tcp -j REDIRECT --to-ports %d", dport))
 		execCmd("iptables -t nat -I OUTPUT -p tcp --dport 53 -j mihomo_dns_output")
 		execCmd("iptables -t nat -I OUTPUT -p udp --dport 53 -j mihomo_dns_output")
 	}
 
+	if setupErr != nil {
+		return errors.Join(setupErr, CleanupTProxyIPTables())
+	}
 	return nil
 }
 
-func CleanupTProxyIPTables() {
-	if runtime.GOOS != "linux" || interfaceName == "" || tProxyPort == 0 {
-		return
+// Cleanup removes only successfully installed rules, in reverse order. A failed
+// deletion stays in the journal for retry instead of forgetting partial state.
+func CleanupTProxyIPTables() error {
+	for len(iptablesCleanup) > 0 {
+		i := len(iptablesCleanup) - 1
+		if _, err := runIPTablesCommand(iptablesCleanup[i]); err != nil {
+			return fmt.Errorf("cleanup %s: %w", iptablesCleanup[i], err)
+		}
+		iptablesCleanup = iptablesCleanup[:i]
 	}
-
-	log.Warnln("Cleanup tproxy linux iptables")
-
-	dialer.DefaultRoutingMark.CompareAndSwap(2158, 0)
-
-	if _, err := cmd.ExecCmd("iptables -t mangle -L mihomo_divert"); err != nil {
-		return
-	}
-
-	// clean route
-	execCmd(fmt.Sprintf("ip -f inet rule del fwmark %s lookup %s", PROXY_FWMARK, PROXY_ROUTE_TABLE))
-	execCmd(fmt.Sprintf("ip -f inet route del local default dev %s table %s", interfaceName, PROXY_ROUTE_TABLE))
-
-	// clean FORWARD
-	if interfaceName != "lo" {
-		execCmd(fmt.Sprintf("iptables -t filter -D FORWARD -i %s ! -o %s -j ACCEPT", interfaceName, interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -D FORWARD -i %s -o %s -j ACCEPT", interfaceName, interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -D FORWARD -o %s -m conntrack --ctstate RELATED,ESTABLISHED -j ACCEPT", interfaceName))
-		execCmd(fmt.Sprintf("iptables -t filter -D FORWARD -o %s -j ACCEPT", interfaceName))
-	}
-
-	// clean PREROUTING
-	if DnsRedirect {
-		execCmd(fmt.Sprintf("iptables -t nat -D PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p tcp --dport 53 -j REDIRECT --to %d", dnsPort))
-		execCmd(fmt.Sprintf("iptables -t nat -D PREROUTING ! -s 172.17.0.0/16 ! -d 127.0.0.0/8 -p udp --dport 53 -j REDIRECT --to %d", dnsPort))
-	}
-	execCmd("iptables -t mangle -D PREROUTING -j mihomo_prerouting")
-
-	// clean POSTROUTING
-	if interfaceName != "lo" {
-		execCmd(fmt.Sprintf("iptables -t nat -D POSTROUTING -o %s -m addrtype ! --src-type LOCAL -j MASQUERADE", interfaceName))
-	}
-
-	// clean OUTPUT
-	execCmd(fmt.Sprintf("iptables -t mangle -D OUTPUT -o %s -j mihomo_output", interfaceName))
-	if DnsRedirect {
-		execCmd("iptables -t nat -D OUTPUT -p tcp --dport 53 -j mihomo_dns_output")
-		execCmd("iptables -t nat -D OUTPUT -p udp --dport 53 -j mihomo_dns_output")
-	}
-
-	// clean chain
-	execCmd("iptables -t mangle -F mihomo_prerouting")
-	execCmd("iptables -t mangle -X mihomo_prerouting")
-	execCmd("iptables -t mangle -F mihomo_divert")
-	execCmd("iptables -t mangle -X mihomo_divert")
-	execCmd("iptables -t mangle -F mihomo_output")
-	execCmd("iptables -t mangle -X mihomo_output")
-	if DnsRedirect {
-		execCmd("iptables -t nat -F mihomo_dns_output")
-		execCmd("iptables -t nat -X mihomo_dns_output")
-	}
-	interfaceName = ""
-	tProxyPort = 0
-	dnsPort = 0
+	return nil
 }
 
-func addLocalnetworkToChain(chain string, bypass []string) {
+func undoIPTablesCommand(command string) string {
+	if strings.HasPrefix(command, "ip ") {
+		return strings.Replace(command, " add ", " del ", 1)
+	}
+	if strings.HasPrefix(command, "iptables ") {
+		for _, op := range []string{" -A ", " -I "} {
+			if strings.Contains(command, op) {
+				return strings.Replace(command, op, " -D ", 1)
+			}
+		}
+		if strings.Contains(command, " -N ") {
+			return strings.Replace(command, " -N ", " -X ", 1)
+		}
+	}
+	return ""
+}
+
+func addLocalnetworkToChain(chain string, bypass []string, execCmd func(string)) {
 	for _, bp := range bypass {
 		_, _, err := net.ParseCIDR(bp)
 		if err != nil {
@@ -181,28 +169,7 @@ func addLocalnetworkToChain(chain string, bypass []string) {
 		}
 		execCmd(fmt.Sprintf("iptables -t mangle -A %s -d %s -j RETURN", chain, bp))
 	}
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 0.0.0.0/8 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 10.0.0.0/8 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 100.64.0.0/10 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 127.0.0.0/8 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 169.254.0.0/16 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 172.16.0.0/12 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 192.0.0.0/24 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 192.0.2.0/24 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 192.88.99.0/24 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 192.168.0.0/16 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 198.51.100.0/24 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 203.0.113.0/24 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 224.0.0.0/4 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 240.0.0.0/4 -j RETURN", chain))
-	execCmd(fmt.Sprintf("iptables -t mangle -A %s -d 255.255.255.255/32 -j RETURN", chain))
-}
-
-func execCmd(cmdStr string) {
-	log.Debugln("[IPTABLES] %s", cmdStr)
-
-	_, err := cmd.ExecCmd(cmdStr)
-	if err != nil {
-		log.Warnln("[IPTABLES] exec cmd: %v", err)
+	for _, prefix := range tproxyIPv4Bypass {
+		execCmd(fmt.Sprintf("iptables -t mangle -A %s -d %s -j RETURN", chain, prefix))
 	}
 }

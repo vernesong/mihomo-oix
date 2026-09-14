@@ -111,7 +111,7 @@ func ApplyConfig(cfg *config.Config, force bool) {
 	updateoixProvider(cfg)
 	updateListeners(cfg.General, cfg.Listeners, force)
 	updateTun(cfg.General) // tun should not care "force"
-	updateIPTables(cfg)
+	updateTProxyFirewall(cfg)
 	updateTunnels(cfg.Tunnels)
 
 	tunnel.OnInnerLoading()
@@ -512,24 +512,24 @@ func patchSelectGroup(proxies map[string]C.Proxy) {
 	}
 }
 
-func updateIPTables(cfg *config.Config) {
-	tproxy.CleanupTProxyIPTables()
-
-	iptables := cfg.IPTables
-	if runtime.GOOS != "linux" || !iptables.Enable {
-		return
-	}
-
+func updateTProxyFirewall(cfg *config.Config) {
 	var err error
 	defer func() {
 		if err != nil {
-			log.Errorln("[IPTABLES] setting iptables failed: %s", err.Error())
+			log.Errorln("[TPROXY] setting firewall failed: %s", err.Error())
 			os.Exit(2)
 		}
 	}()
 
+	if err = tproxy.CleanupTProxyFirewall(); err != nil {
+		return
+	}
+	iptables := cfg.IPTables
+	if runtime.GOOS != "linux" || !iptables.Enable {
+		return
+	}
 	if cfg.General.Tun.Enable {
-		err = fmt.Errorf("when tun is enabled, iptables cannot be set automatically")
+		err = fmt.Errorf("when tun is enabled, TPROXY firewall cannot be set automatically")
 		return
 	}
 
@@ -543,8 +543,8 @@ func updateIPTables(cfg *config.Config) {
 		dnsPort netip.AddrPort
 	)
 
-	if tProxyPort == 0 {
-		err = fmt.Errorf("tproxy-port must be greater than zero")
+	if tProxyPort <= 0 || tProxyPort > 65535 {
+		err = fmt.Errorf("tproxy-port must be between 1 and 65535")
 		return
 	}
 
@@ -555,8 +555,8 @@ func updateIPTables(cfg *config.Config) {
 		}
 
 		dnsPort, err = netip.ParseAddrPort(dnsCfg.Listen)
-		if err != nil {
-			err = fmt.Errorf("DNS server must be correct")
+		if err != nil || dnsPort.Port() == 0 {
+			err = fmt.Errorf("DNS listen must be an IP address with a nonzero port")
 			return
 		}
 	}
@@ -565,14 +565,17 @@ func updateIPTables(cfg *config.Config) {
 		inboundInterface = iptables.InboundInterface
 	}
 
-	dialer.DefaultRoutingMark.CompareAndSwap(0, 2158)
-
-	err = tproxy.SetTProxyIPTables(inboundInterface, bypass, uint16(tProxyPort), DnsRedirect, dnsPort.Port())
+	defaultMark := dialer.DefaultRoutingMark.CompareAndSwap(0, 2158)
+	var backend string
+	backend, err = tproxy.SetTProxyFirewall(iptables.Backend, inboundInterface, bypass, uint16(tProxyPort), DnsRedirect, dnsPort.Port())
 	if err != nil {
+		if defaultMark {
+			dialer.DefaultRoutingMark.CompareAndSwap(2158, 0)
+		}
 		return
 	}
 
-	log.Infoln("[IPTABLES] Setting iptables completed")
+	log.Infoln("[TPROXY] Setting firewall completed (backend: %s)", backend)
 }
 
 func closeSmart() {
@@ -589,7 +592,9 @@ func closeSmart() {
 func Shutdown() {
 	oix.StopPeriodicUpdate()
 	listener.Cleanup()
-	tproxy.CleanupTProxyIPTables()
+	if err := tproxy.CleanupTProxyFirewall(); err != nil {
+		log.Warnln("[TPROXY] Cleanup firewall: %s", err)
+	}
 	resolver.StoreFakePoolState()
 
 	closeSmart()
