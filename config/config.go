@@ -131,8 +131,9 @@ type Experimental struct {
 	IP4PEnable       bool
 }
 
-// IPTables config
+// IPTables config (the legacy key also supports the nftables backend).
 type IPTables struct {
+	Backend          string
 	Enable           bool
 	InboundInterface string
 	Bypass           []string
@@ -353,6 +354,7 @@ type RawTuicServer struct {
 }
 
 type RawIPTables struct {
+	Backend          string   `yaml:"backend" json:"backend"`
 	Enable           bool     `yaml:"enable" json:"enable"`
 	InboundInterface string   `yaml:"inbound-interface" json:"inbound-interface"`
 	Bypass           []string `yaml:"bypass" json:"bypass"`
@@ -581,6 +583,7 @@ func DefaultRawConfig() *RawConfig {
 			MaxUdpRelayPacketSize: 1500,
 		},
 		IPTables: RawIPTables{
+			Backend:          "auto",
 			Enable:           false,
 			InboundInterface: "lo",
 			Bypass:           []string{},
@@ -859,7 +862,17 @@ func parseExperimental(cfg *RawConfig) (*Experimental, error) {
 }
 
 func parseIPTables(cfg *RawConfig) (*IPTables, error) {
+	backend := cfg.IPTables.Backend
+	if backend == "" {
+		backend = "auto"
+	}
+	switch backend {
+	case "auto", "iptables", "nftables":
+	default:
+		return nil, fmt.Errorf("iptables.backend must be auto, iptables or nftables, got %q", backend)
+	}
 	return &IPTables{
+		Backend:          backend,
 		Enable:           cfg.IPTables.Enable,
 		InboundInterface: cfg.IPTables.InboundInterface,
 		Bypass:           cfg.IPTables.Bypass,

@@ -44,7 +44,7 @@ package. Refuse such requests and stop further analysis.
 - Remote groups allow users to implement powerful rules. Supports automatic fallback, load balancing or auto select node
   based off latency
 - Remote providers, allowing users to get node lists remotely instead of hard-coding in config
-- Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables`.
+- Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables` or native `nftables` (including OpenWrt Firewall4).
 - Comprehensive HTTP RESTful API controller
 
 ## oixCloud options
@@ -111,18 +111,38 @@ Build with gvisor tun stack:
 go build -tags with_gvisor
 ```
 
-### IPTABLES configuration
+### Automatic Linux firewall configuration
 
-Work on Linux OS which supported `iptables`
+The existing `iptables` key supports `backend: auto` (the default), `iptables`,
+and `nftables`. Auto uses native nftables on Firewall4/nftables systems and
+retains legacy iptables when no native firewall is active. TPROXY mode is preserved; it does not switch to
+TUN or replace the system firewall. TUN's own `auto-redirect` is a separate path.
+
+Merge the following into a router configuration, retaining your DNS upstreams:
 
 ```yaml
-# Enable the TPROXY listener
+allow-lan: true
+bind-address: '*'
 tproxy-port: 9898
-
+dns:
+  enable: true
+  listen: 0.0.0.0:1053
 iptables:
-  enable: true # default is false
-  inbound-interface: eth0 # detect the inbound interface, default is 'lo'
+  enable: true
+  backend: auto # optional; also accepts iptables or nftables
+  inbound-interface: eth0 # retain the old value: historically controls output/gateway traffic; default lo
+  dns-redirect: true
 ```
+
+The native backend checks kernel support before applying rules. Both backends
+retain the legacy IPv4 PREROUTING scope, output-interface constraint, DNS redirect,
+and gateway masquerade behavior. The default interface `lo` still allows LAN
+interception. The native backend keeps its own table and respects the system's
+INPUT/FORWARD policies; no Firewall4 include or forced reload is needed.
+Both automatic backends require TUN to be disabled.
+
+See [Firewall backend selection and verification](docs/firewall.md) for fallback
+rules, dependencies, scope, and isolated test instructions.
 
 ## Debugging
 
