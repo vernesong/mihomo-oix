@@ -96,6 +96,17 @@ func oixOptionsErrorStatus(err error) int {
 	}
 }
 
+// reloadConfig re-reads the configuration file so an account or options change
+// takes effect, including the providers it selects.
+func reloadConfig() error {
+	cfg, err := executor.ParseWithPath(C.Path.Config())
+	if err != nil {
+		return err
+	}
+	executor.ApplyConfig(cfg, false)
+	return nil
+}
+
 func reloadoixOptions() error {
 	if !oix.HasToken() {
 		return nil
@@ -106,12 +117,7 @@ func reloadoixOptions() error {
 	if provider, exists := tunnel.Providers()[oix.ProviderFile()]; exists {
 		return provider.Update()
 	}
-	cfg, err := executor.ParseWithPath(C.Path.Config())
-	if err != nil {
-		return err
-	}
-	executor.ApplyConfig(cfg, false)
-	return nil
+	return reloadConfig()
 }
 
 func oixLogin(w http.ResponseWriter, r *http.Request) {
@@ -148,13 +154,11 @@ func oixLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	cfg, err := executor.ParseWithPath(C.Path.Config())
-	if err != nil {
+	if err := reloadConfig(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return
 	}
-	executor.ApplyConfig(cfg, false)
 
 	render.NoContent(w, r)
 }
@@ -165,13 +169,11 @@ func oixLogout(w http.ResponseWriter, r *http.Request) {
 
 	oix.Logout()
 
-	cfg, err := executor.ParseWithPath(C.Path.Config())
-	if err != nil {
+	if err := reloadConfig(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return
 	}
-	executor.ApplyConfig(cfg, false)
 
 	render.NoContent(w, r)
 }

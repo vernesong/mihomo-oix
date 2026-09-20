@@ -131,7 +131,8 @@ func SetTProxyFirewall(backend, ifname string, bypass []string, tport uint16, dn
 		return "", err
 	}
 	setupIPTables := func() (string, error) {
-		if err = SetTProxyIPTables(ifname, bypass, tport, dnsredir, dport); err != nil {
+		if err := SetTProxyIPTables(ifname, bypass, tport, dnsredir, dport); err != nil {
+			// A partially applied setup leaves a retryable cleanup behind.
 			if len(iptablesCleanup) != 0 {
 				firewallState.cleanup = CleanupTProxyIPTables
 			}
@@ -148,7 +149,7 @@ func SetTProxyFirewall(backend, ifname string, bypass []string, tport uint16, dn
 		ifname: ifname, bypass: bypass, tport: tport, dnsredir: dnsredir, dport: dport,
 		mark: dialer.DefaultRoutingMark.Load(),
 	}
-	if err = fw.setup(); err != nil {
+	if err := fw.setup(); err != nil {
 		if canFallbackToIPTables(backend, env, runFirewallCommand, err) {
 			log.Warnln("[TPROXY] nftables preflight failed on an unused nftables stack; using iptables: %s", err)
 			return setupIPTables()

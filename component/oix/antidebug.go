@@ -29,6 +29,8 @@ func injectionDetected() bool {
 	return false
 }
 
+// init runs the startup guard as soon as the package is loaded, before any
+// caller reaches main, so no entry point has to remember to call it.
 func init() {
 	GuardStartup()
 	go func() {

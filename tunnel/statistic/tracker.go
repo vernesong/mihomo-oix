@@ -144,17 +144,17 @@ func (tt *tcpTracker) Upstream() any {
 	return tt.Conn
 }
 
+// maskManagedMetadata hides managed node addresses before a tracker publishes
+// the connection through the controller API.
+func maskManagedMetadata(metadata *C.Metadata) {
+	metadata.RemoteDst = oixdns.Mask(metadata.RemoteDst)
+	metadata.Host = oixdns.Mask(metadata.Host)
+	metadata.SniffHost = oixdns.Mask(metadata.SniffHost)
+}
+
 func NewTCPTracker(conn C.Conn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *tcpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
-	if oixdns.ShouldMask(metadata.RemoteDst) {
-		metadata.RemoteDst = oixdns.Mask(metadata.RemoteDst)
-	}
-	if oixdns.ShouldMask(metadata.Host) {
-		metadata.Host = oixdns.Mask(metadata.Host)
-	}
-	if oixdns.ShouldMask(metadata.SniffHost) {
-		metadata.SniffHost = oixdns.Mask(metadata.SniffHost)
-	}
+	maskManagedMetadata(metadata)
 
 	trackerUUID := utils.NewUUIDV4()
 
@@ -260,15 +260,7 @@ func (ut *udpTracker) Upstream() any {
 
 func NewUDPTracker(conn C.PacketConn, manager *Manager, metadata *C.Metadata, rule C.Rule, uploadTotal int64, downloadTotal int64, pushToManager bool) *udpTracker {
 	metadata.RemoteDst = conn.RemoteDestination()
-	if oixdns.ShouldMask(metadata.RemoteDst) {
-		metadata.RemoteDst = oixdns.Mask(metadata.RemoteDst)
-	}
-	if oixdns.ShouldMask(metadata.Host) {
-		metadata.Host = oixdns.Mask(metadata.Host)
-	}
-	if oixdns.ShouldMask(metadata.SniffHost) {
-		metadata.SniffHost = oixdns.Mask(metadata.SniffHost)
-	}
+	maskManagedMetadata(metadata)
 
 	trackerUUID := utils.NewUUIDV4()
 

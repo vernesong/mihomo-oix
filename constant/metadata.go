@@ -311,11 +311,7 @@ func (m *Metadata) UDPAddr() *net.UDPAddr {
 
 func (m *Metadata) String() string {
 	if m.Host != "" {
-		host := m.Host
-		if oixdns.ShouldMask(host) {
-			host = oixdns.Mask(host)
-		}
-		return host
+		return oixdns.Mask(m.Host)
 	} else if m.DstIP.IsValid() {
 		return m.DstIP.String()
 	} else {

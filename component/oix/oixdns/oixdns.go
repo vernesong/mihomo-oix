@@ -55,23 +55,24 @@ func ManagedNodesDomain() string {
 	return strings.ToLower(strings.TrimSuffix(strings.TrimSpace(NodesDomains), "."))
 }
 
-var Ensured int32
+// ensured reports whether a managed provider is active, gating the obfuscated
+// DNS exchange. Only this package may change it.
+var ensured atomic.Bool
 
-func SetEnsured() {
-	atomic.StoreInt32(&Ensured, 1)
-}
+func SetEnsured() { ensured.Store(true) }
 
-func ClearEnsured() {
-	atomic.StoreInt32(&Ensured, 0)
-}
+func ClearEnsured() { ensured.Store(false) }
 
-func IsEnsured() bool {
-	return atomic.LoadInt32(&Ensured) == 1
-}
+func IsEnsured() bool { return ensured.Load() }
 
 var (
 	base32Encoding = base32.StdEncoding.WithPadding(base32.NoPadding)
-	cloudIPs       sync.Map
+
+	// cloudIPs deliberately never evicts. It is bounded by the provider's node
+	// count, and masking is fail-safe only while it is complete: a bounded cache
+	// would evict an IP that is still in use and publish it in logs and through
+	// the controller API. Keeping a stale entry only over-masks.
+	cloudIPs sync.Map
 
 	privKeyOnce sync.Once
 	privKey     ed25519.PrivateKey
@@ -146,29 +147,22 @@ func Obfuscate(domain string) string {
 	return p1 + "." + p2 + "." + basename
 }
 
-func MaskDomain(domain string) string {
+func maskDomain(domain string) string {
 	nodesDomain := ManagedNodesDomain()
 	d := strings.ToLower(strings.TrimSuffix(domain, "."))
-	if d == nodesDomain {
-		return "***." + nodesDomain
-	}
 	suffix := "." + nodesDomain
-	if strings.HasSuffix(d, suffix) {
+	if d != nodesDomain && strings.HasSuffix(d, suffix) {
 		return "***" + suffix
 	}
 	return "***." + nodesDomain
 }
 
-func ShouldMask(host string) bool {
-	if ShouldObfuscate(host) {
-		return true
-	}
-	return isCloudIP(host)
-}
-
+// Mask hides a managed node domain or a resolved node IP from logs and from the
+// controller API. Any other host is returned unchanged, so callers can apply it
+// unconditionally instead of testing first.
 func Mask(host string) string {
 	if ShouldObfuscate(host) {
-		return MaskDomain(host)
+		return maskDomain(host)
 	}
 	if isCloudIP(host) {
 		if _, port, err := net.SplitHostPort(host); err == nil {

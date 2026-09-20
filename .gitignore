@@ -27,3 +27,5 @@ test/config/cache*
 .vscode/
 .fleet/
 .env.local
+AGENTS.md
+CLAUDE.md

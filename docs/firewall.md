@@ -21,7 +21,8 @@
 ## 保留的旧配置语义
 
 `inbound-interface` 名称容易产生误解：旧实现用它限制本机 OUTPUT、配置网关
-转发/NAT，并不限制 PREROUTING新原生后端保留这一含义：
+转发/NAT，并不限制 PREROUTING
+新原生后端保留这一含义：
 
 - 未指定时仍为 `lo`；LAN 的 TCP/UDP 和 DNS 入站仍会接管，不会退化成仅本机
 - 本机普通 TCP/UDP 仅对经该接口出站的流量设置代理标记；DNS 重定向保持原范围
@@ -30,30 +31,33 @@
 - 保留 Docker 源网段排除、默认私网与用户 IPv4 bypass、代理出站 mark 绕过
   关闭 `dns-redirect` 后，DNS 流量按普通 TPROXY 规则处理
 - LAN 场景仍需 `allow-lan: true` 和可接收对应连接的 TPROXY/DNS 监听地址
-  不自动猜测接口，也不改写监听设置参见 [README 配置示例](../README.md#automatic-linux-firewall-configuration)
+  不自动猜测接口，也不改写监听设置
+参见 [README 配置示例](../README.md#automatic-linux-firewall-configuration)
 
-两条自动路径均为 IPv4，且与 `tun.enable` 互斥TUN 的 `auto-route` /
-`auto-redirect` 不受本次变更影响无效端口、导致回环的原生出站 mark、无效
-原生 bypass 会报错，不将过去被忽略的错误当成可用配置
+两条自动路径均为 IPv4，且与 `tun.enable` 互斥
+TUN 的 `auto-route` / `auto-redirect` 不受本次变更影响
+无效端口、导致回环的原生出站 mark、无效原生 bypass 会报错，
+不将过去被忽略的错误当成可用配置
 
 ## Firewall4 与生命周期
 
-原生规则位于独立的 `ip mihomo_tproxy` 表标准 Firewall4 reload/restart
-只重建自己的 `inet fw4` 表，因此不用写入 `/etc/nftables.d`、强制重载 fw4，
-也不用额外放宽其 INPUT 策略正常 LAN 放行、WAN 拒绝策略继续生效
+原生规则位于独立的 `ip mihomo_tproxy` 表
+标准 Firewall4 reload/restart 只重建自己的 `inet fw4` 表，
+因此不用写入 `/etc/nftables.d`、强制重载 fw4，也不用额外放宽其 INPUT 策略
+正常 LAN 放行、WAN 拒绝策略继续生效
 
-内核用 `nft -c -f -` 预检实际规则能力，之后设置策略路由并以单个 nft 事务
-写入自己的表依赖 nft、ip、网关模式下的 sysctl，以及内核 TPROXY、FIB、
-NAT/redirect 支持无需仅为 divert 快捷匹配额外安装 nft_socket 模块
+内核用 `nft -c -f -` 预检实际规则能力，之后设置策略路由并以单个 nft 事务写入自己的表
+依赖 nft、ip、网关模式下的 sysctl，以及内核 TPROXY、FIB、NAT/redirect 支持
+无需仅为 divert 快捷匹配额外安装 nft_socket 模块
 
 保留策略路由表/标记 `0x2d0`（720）及默认代理出站 mark 2158；由单个实例独占
-规则应用失败会清理成功创建的规则/路由清理失败保留状态供重试；不会覆盖冲突
-路由，也不会在清理旧规则时清除新配置明确设置的 routing-mark旧 iptables
-路径同样检查执行结果并反向清理已安装规则；删除了新建空链后的重复 flush、
-重复的转发规则和私网列表
+规则应用失败会清理成功创建的规则/路由，清理失败保留状态供重试
+不会覆盖冲突路由，也不会在清理旧规则时清除新配置明确设置的 routing-mark
+旧 iptables 路径同样检查执行结果并反向清理已安装规则；
+删除了新建空链后的重复 flush、重复的转发规则和私网列表
 
-原生表不会覆盖其他防火墙表的 DROP/REJECT自定义的 LAN INPUT/FORWARD 拒绝
-策略仍需管理员按需求放行；这不等于任意第三方防火墙策略都可以零调整迁移
+原生表不会覆盖其他防火墙表的 DROP/REJECT
+自定义的 LAN INPUT/FORWARD 拒绝策略仍需管理员按需求放行；这不等于任意第三方防火墙策略都可以零调整迁移
 SIGKILL、断电残留或外部全局 flush 的自动修复不在本次范围内，冲突时会报错，
 而不是猜测并删除其他进程的状态
 
@@ -71,8 +75,9 @@ go test -race ./listener/tproxy ./config ./hub/executor
 它们不属于本次防火墙场景覆盖范围
 
 真实内核测试对原生 nftables 和 iptables-legacy 使用同一组 TCP/UDP、DNS、
-LAN/WAN、默认 lo、网关 NAT、mark、重载和清理场景只能在可丢弃的 Linux
-网络命名空间中运行，需 nftables、iptables（含 legacy）、iproute2、procps：
+LAN/WAN、默认 lo、网关 NAT、mark、重载和清理场景
+只能在可丢弃的 Linux 网络命名空间中运行，
+需 nftables、iptables（含 legacy）、iproute2、procps：
 
 ```sh
 go test -c -o /tmp/tproxy.test ./listener/tproxy
@@ -81,9 +86,9 @@ for backend in NFT IPTables; do
 done
 ```
 
-跨平台时使用 `GOOS=linux GOARCH=<测试容器架构> CGO_ENABLED=0` 编译，在
-`--network none --cap-add NET_ADMIN` 的临时容器内执行发布工作流的 Linux
-测试任务也会在独立网络命名空间中运行这两套内核测试
+跨平台时使用 `GOOS=linux GOARCH=<测试容器架构> CGO_ENABLED=0` 编译，
+在 `--network none --cap-add NET_ADMIN` 的临时容器内执行
+发布工作流的 Linux 测试任务也会在独立网络命名空间中运行这两套内核测试
 
 Firewall4 使用真实 nft 规则模拟正常 LAN 放行/WAN 拒绝，以及仅重建 inet fw4
 表的重载流程；不声称已经在反馈用户的 OpenWrt 固件上实测
