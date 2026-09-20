@@ -32,13 +32,7 @@ func parseOIXProvider(name string, base map[string]any, providers map[string]P.P
 	} else if location.Type == "http" {
 		preferredPath = C.Path.GetPathByHash("proxies", location.URL)
 	}
-	providerPaths := make([]string, 0, len(providers))
-	for _, pv := range providers {
-		if path := pv.Path(); path != "" {
-			providerPaths = append(providerPaths, path)
-		}
-	}
-	dir := oix.ProviderDirectory(C.Path.HomeDir(), preferredPath, providerPaths)
+	dir := oix.ProviderDirectoryOf(C.Path.HomeDir(), preferredPath, providers)
 	mapping := oix.ProviderConfig(filepath.Join(dir, name), base)
 	return provider.ParseProxyProvider(name, mapping, tunnel.Tunnel)
 }

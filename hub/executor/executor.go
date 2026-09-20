@@ -326,13 +326,7 @@ func updateoixProvider(cfg *config.Config) {
 	if provider, exists := cfg.Providers[name]; exists {
 		preferredPath = provider.Path()
 	}
-	providerPaths := make([]string, 0, len(cfg.Providers))
-	for _, pv := range cfg.Providers {
-		if p := pv.Path(); p != "" {
-			providerPaths = append(providerPaths, p)
-		}
-	}
-	dir := oix.ProviderDirectory(C.Path.HomeDir(), preferredPath, providerPaths)
+	dir := oix.ProviderDirectoryOf(C.Path.HomeDir(), preferredPath, cfg.Providers)
 
 	oix.SetProviderPaths(dir, C.Path.HomeDir())
 

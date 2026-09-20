@@ -223,8 +223,6 @@ func main() {
 		return
 	}
 
-	oix.GuardStartup()
-
 	var options []hub.Option
 	if externalUI != "" {
 		options = append(options, hub.WithExternalUI(externalUI))

@@ -18,7 +18,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
-	"sort"
+	"slices"
 	"strconv"
 	"strings"
 	"sync"
@@ -165,6 +165,9 @@ func ageKeyFilePath(homeDir string) string {
 
 func ageKeyPair() (secretKey, publicKey string) {
 	ageKeyInitOnce.Do(func() {
+		if ageSecretKey != "" && agePublicKey != "" {
+			return
+		}
 		homeDir := C.Path.HomeDir()
 		if homeDir != "" {
 			keyPath := ageKeyFilePath(homeDir)
@@ -249,6 +252,18 @@ func ProviderDirectory(homeDir, preferredPath string, providerPaths []string) st
 		}
 	}
 	return defaultProviderDir
+}
+
+// ProviderDirectoryOf resolves the managed provider directory from providers
+// that have already been parsed, so callers do not repeat the path scan.
+func ProviderDirectoryOf[T interface{ Path() string }](homeDir, preferredPath string, providers map[string]T) string {
+	providerPaths := make([]string, 0, len(providers))
+	for _, pv := range providers {
+		if path := pv.Path(); path != "" {
+			providerPaths = append(providerPaths, path)
+		}
+	}
+	return ProviderDirectory(homeDir, preferredPath, providerPaths)
 }
 
 func relativeProviderDirectory(homeDir, providerPath string) (string, bool) {
@@ -543,9 +558,9 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
-	if ageSecretKey == "" || agePublicKey == "" {
-		ageKeyPair()
-	}
+	// Always go through the Once so this goroutine synchronizes with whichever
+	// one generated the pair before reading it below.
+	ageKeyPair()
 	ctx, cancel := context.WithTimeout(parent, totalTimeout)
 	defer cancel()
 	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(urls))
@@ -560,13 +575,24 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 					return nil, ctx.Err()
 				}
 			}
-			config, err := fetchFrom(ctx, token, baseURL, homeDir)
-			if err == nil && config == nil {
-				err = ErrNoSubscription
-			}
-			return config, err
+			return reportEmptySubscription(fetchFrom(ctx, token, baseURL, homeDir))
 		})
 	}
+	return raceConfigReads(ctx, attempts)
+}
+
+// reportEmptySubscription turns an empty result into an error so a racing peer
+// that may still hold a subscription is awaited instead of being cancelled.
+func reportEmptySubscription(config *fetchedConfig, err error) (*fetchedConfig, error) {
+	if err == nil && config == nil {
+		return nil, ErrNoSubscription
+	}
+	return config, err
+}
+
+// raceConfigReads restores the empty-subscription result once every attempt has
+// reported it, while an authentication failure stays authoritative.
+func raceConfigReads(ctx context.Context, attempts []func(context.Context) (*fetchedConfig, error)) (*fetchedConfig, error) {
 	config, err := mihomoHttp.RaceReads(ctx, attempts, nil)
 	if !IsAuthError(err) && errors.Is(err, ErrNoSubscription) {
 		return nil, nil
@@ -590,18 +616,11 @@ func fetchFromClients(ctx context.Context, token, baseURL, homeDir string, clien
 	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(clients))
 	for _, client := range clients {
 		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
-			config, err := fetchFromRoute(context.WithValue(ctx, oixHTTPClientContextKey{}, client), token, baseURL, homeDir)
-			if err == nil && config == nil {
-				err = ErrNoSubscription
-			}
-			return config, err
+			routeCtx := context.WithValue(ctx, oixHTTPClientContextKey{}, client)
+			return reportEmptySubscription(fetchFromRoute(routeCtx, token, baseURL, homeDir))
 		})
 	}
-	config, err := mihomoHttp.RaceReads(ctx, attempts, nil)
-	if !IsAuthError(err) && errors.Is(err, ErrNoSubscription) {
-		return nil, nil
-	}
-	return config, err
+	return raceConfigReads(ctx, attempts)
 }
 
 func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
@@ -611,9 +630,6 @@ func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetch
 	if AppSecret == "" {
 		return nil, errors.New("app secret unavailable")
 	}
-
-	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
-	defer cancel()
 
 	planCtx, planCancel := context.WithTimeout(ctx, planTimeout)
 	plan, planErr := fetchPlanIdentity(planCtx, token, baseURL)
@@ -717,27 +733,26 @@ func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity
 
 func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
 	limited := &io.LimitedReader{R: reader, N: maxBytes + 1}
+	oversized := func() error { return fmt.Errorf("response exceeds %d bytes", maxBytes) }
 	decoder := json.NewDecoder(limited)
 	if err := decoder.Decode(target); err != nil {
 		if limited.N == 0 {
-			return fmt.Errorf("response exceeds %d bytes", maxBytes)
+			return oversized()
 		}
 		return err
 	}
 	var extra struct{}
-	if err := decoder.Decode(&extra); err != io.EOF {
-		if limited.N == 0 {
-			return fmt.Errorf("response exceeds %d bytes", maxBytes)
-		}
-		if err == nil {
-			return errors.New("response contains multiple JSON values")
-		}
+	err := decoder.Decode(&extra)
+	switch {
+	case limited.N == 0:
+		return oversized()
+	case errors.Is(err, io.EOF):
+		return nil
+	case err == nil:
+		return errors.New("response contains multiple JSON values")
+	default:
 		return fmt.Errorf("invalid trailing response data: %w", err)
 	}
-	if limited.N == 0 {
-		return fmt.Errorf("response exceeds %d bytes", maxBytes)
-	}
-	return nil
 }
 
 func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error) {
@@ -1026,7 +1041,7 @@ func newoixRoutedHTTPClient() *http.Client {
 }
 
 // Only the two explicitly read-only API operations may be replayed.
-func isOixRead(req *http.Request) bool {
+func isoixRead(req *http.Request) bool {
 	return req.Method == http.MethodGet && req.URL.Path == "/api/v1/managed/flclash/direct" ||
 		req.Method == http.MethodPost && req.URL.Path == "/api/v1/information"
 }
@@ -1036,7 +1051,7 @@ func oixHTTPDo(req *http.Request) (*http.Response, error) {
 	deadline := time.Now().Add(totalTimeout)
 	var lastErr error
 	retries := 0
-	if isOixRead(req) {
+	if isoixRead(req) {
 		retries = maxRetries
 	}
 	client := oixHTTPClient
@@ -1187,16 +1202,20 @@ func applyManagedDNSConfig(raw []byte) {
 	for pattern := range config.DNS.NameServerPolicy {
 		patterns = append(patterns, pattern)
 	}
-	sort.Slice(patterns, func(i, j int) bool {
-		domainI, exactI := normalizeManagedDNSPattern(patterns[i])
-		domainJ, exactJ := normalizeManagedDNSPattern(patterns[j])
-		if exactI != exactJ {
-			return exactI
+	// Exact patterns win over wildcards, then the domain, then the raw pattern.
+	slices.SortFunc(patterns, func(a, b string) int {
+		domainA, exactA := normalizeManagedDNSPattern(a)
+		domainB, exactB := normalizeManagedDNSPattern(b)
+		if exactA != exactB {
+			if exactA {
+				return -1
+			}
+			return 1
 		}
-		if domainI != domainJ {
-			return domainI < domainJ
+		if domainA != domainB {
+			return strings.Compare(domainA, domainB)
 		}
-		return strings.ToLower(strings.TrimSpace(patterns[i])) < strings.ToLower(strings.TrimSpace(patterns[j]))
+		return strings.Compare(strings.ToLower(strings.TrimSpace(a)), strings.ToLower(strings.TrimSpace(b)))
 	})
 	matched := false
 	for _, pattern := range patterns {

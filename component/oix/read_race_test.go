@@ -92,7 +92,7 @@ func TestFetchFromClientsAuthenticationCancelsOtherAccountRead(t *testing.T) {
 	}
 }
 
-func TestOixWriteIsNeverReplayed(t *testing.T) {
+func Test_oixWriteIsNeverReplayed(t *testing.T) {
 	var calls atomic.Int32
 	setoixHTTPClientForTest(t, &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
 		calls.Add(1)
