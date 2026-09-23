@@ -17,6 +17,7 @@ import (
 	"github.com/metacubex/mihomo/component/ech/echparser"
 	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/jls"
 	"github.com/metacubex/mihomo/transport/restls"
 	"github.com/metacubex/mihomo/transport/shadowtls"
@@ -116,13 +117,21 @@ func resolveSnellECHTLSALPN(alpn, protocol string) (string, error) {
 }
 
 func resolveSnellECHTLSClientFingerprint(opt *snellECHTLSObfsOption, option SnellOption) string {
-	if opt.ClientFingerprint != "" {
-		return opt.ClientFingerprint
+	fingerprint := opt.ClientFingerprint
+	if fingerprint == "" {
+		fingerprint = option.ClientFingerprint
 	}
-	if option.ClientFingerprint != "" {
-		return option.ClientFingerprint
+	if fingerprint == "" {
+		return defaultSnellECHTLSClientFingerprint
 	}
-	return defaultSnellECHTLSClientFingerprint
+	if strings.EqualFold(fingerprint, "none") {
+		// Without a uTLS fingerprint crypto/tls copies the inner ALPN
+		// (snell-ech/1) into the ClientHelloOuter, which is sent in the clear
+		// and would identify every connection to a passive observer.
+		log.Warnln("[Snell] %s ignores client-fingerprint none, using %s", snellECHTLSALPN, defaultSnellECHTLSClientFingerprint)
+		return defaultSnellECHTLSClientFingerprint
+	}
+	return fingerprint
 }
 
 func snellECHTLSConfig(opt *snellECHTLSObfsOption) (*ech.Config, error) {

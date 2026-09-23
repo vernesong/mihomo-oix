@@ -78,6 +78,42 @@ func TestSnellECHTLSUsesRawTLSWithoutPath(t *testing.T) {
 	}
 }
 
+func TestSnellECHTLSReplacesNoneFingerprint(t *testing.T) {
+	echConfig, _, err := ech.GenECHConfig("front.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, tc := range []struct {
+		name string
+		obfs string
+		top  string
+		want string
+	}{
+		{name: "default", want: defaultSnellECHTLSClientFingerprint},
+		{name: "obfs none", obfs: "none", want: defaultSnellECHTLSClientFingerprint},
+		{name: "proxy none", top: "NONE", want: defaultSnellECHTLSClientFingerprint},
+		{name: "explicit", obfs: "firefox", want: "firefox"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			obfs := map[string]any{"mode": "ech-tls", "ech-config": echConfig}
+			if tc.obfs != "" {
+				obfs["client-fingerprint"] = tc.obfs
+			}
+			adapter, err := NewSnell(SnellOption{
+				Name: "snell", Server: "origin.example.com", Port: 443, Psk: "password", Version: 4,
+				ClientFingerprint: tc.top, ObfsOpts: obfs,
+			})
+			if err != nil {
+				t.Fatalf("NewSnell() error = %v", err)
+			}
+			defer adapter.Close()
+			if got := adapter.echTLS.ClientFingerprint; got != tc.want {
+				t.Fatalf("ClientFingerprint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
 func TestSnellECHTLSRejectsSkippedCertificateVerification(t *testing.T) {
 	echConfig, _, err := ech.GenECHConfig("front.example.com")
 	if err != nil {
