@@ -117,10 +117,15 @@ const (
 const (
 	maxRetries              = 2
 	totalTimeout            = 30 * time.Second
-	planTimeout             = 5 * time.Second
 	hedgeDelay              = 250 * time.Millisecond
 	maxManagedResponseBytes = 16 << 20
-	maxAccountResponseBytes = 1 << 20
+)
+
+// nodes=auto hands node selection to the panel: the Node Filter bound to this
+// token, or the plan's default lines when none is saved.
+const (
+	managedConfigPath  = "/api/v1/managed/flclash/direct"
+	managedConfigQuery = "nodes=auto"
 )
 
 const oixUserAgent = "OpenClash for oixCloud"
@@ -129,26 +134,6 @@ type apiResponse struct {
 	Ret    int    `json:"ret"`
 	Msg    string `json:"msg"`
 	Config string `json:"config"`
-}
-
-type planIdentity struct {
-	Code       string
-	Rank       *int
-	Name       string
-	NodeAccess []string
-}
-
-type informationData struct {
-	Plan       string   `json:"plan"`
-	PlanCode   string   `json:"plan_code"`
-	PlanRank   *int     `json:"plan_rank"`
-	NodeAccess []string `json:"node_access"`
-}
-
-type informationResponse struct {
-	Ret  int              `json:"ret"`
-	Msg  string           `json:"msg"`
-	Data *informationData `json:"data"`
 }
 
 func IsAuthError(err error) bool {
@@ -291,7 +276,7 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 
 	log.Infoln("[oixCloud] fetching provider...")
 
-	config, err := fetchBest(context.Background(), token, urls, homeDir)
+	config, err := fetchBest(context.Background(), token, urls)
 	if err != nil {
 		if IsAuthError(err) {
 			oixdns.ClearEnsured()
@@ -311,7 +296,6 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	if !ok {
 		return false, errors.New("save failed")
 	}
-	config.params.persist(homeDir)
 	oixdns.SetEnsured()
 	if providerExists {
 		log.Infoln("[oixCloud] provider [%s] already exists, file updated", ProviderFile())
@@ -395,7 +379,7 @@ func runPeriodicUpdate(ctx context.Context, dir, homeDir string) error {
 	if len(urls) == 0 {
 		return nil
 	}
-	config, err := fetchBest(ctx, token, urls, homeDir)
+	config, err := fetchBest(ctx, token, urls)
 	if err != nil {
 		return err
 	}
@@ -408,7 +392,6 @@ func runPeriodicUpdate(ctx context.Context, dir, homeDir string) error {
 	if !saveResult(dir, homeDir, config.data) {
 		return errors.New("save failed")
 	}
-	config.params.persist(homeDir)
 	log.Infoln("[oixCloud] periodic update saved to %s", filepath.Join(homeDir, dir, ProviderFile()))
 	return nil
 }
@@ -506,14 +489,13 @@ func loginWithToken(dir, homeDir, token string) (bool, error) {
 	providerUpdateMu.Lock()
 	defer providerUpdateMu.Unlock()
 
-	config, err := fetchBest(context.Background(), token, apiBaseURLs(), homeDir)
+	config, err := fetchBest(context.Background(), token, apiBaseURLs())
 	if err != nil || config == nil {
 		return false, err
 	}
 	if !saveResult(dir, homeDir, config.data) {
 		return false, errors.New("save failed")
 	}
-	config.params.persist(homeDir)
 	if err := persistToken(homeDir, token); err != nil {
 		log.Warnln("[oixCloud] persist token failed: %s", err)
 	}
@@ -538,7 +520,6 @@ func Logout() {
 	oixdns.ResetManagedDNS()
 	if homeDir != "" {
 		_ = os.Remove(tokenFilePath(homeDir))
-		clearParams(homeDir)
 		if dir != "" {
 			_ = os.Remove(filepath.Join(homeDir, dir, ProviderFile()))
 		}
@@ -550,11 +531,10 @@ func IsoixProvider(name string) bool {
 }
 
 type fetchedConfig struct {
-	data   []byte
-	params *resolvedParams
+	data []byte
 }
 
-func fetchBest(parent context.Context, token string, urls []string, homeDir string) (*fetchedConfig, error) {
+func fetchBest(parent context.Context, token string, urls []string) (*fetchedConfig, error) {
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
@@ -575,7 +555,7 @@ func fetchBest(parent context.Context, token string, urls []string, homeDir stri
 					return nil, ctx.Err()
 				}
 			}
-			return reportEmptySubscription(fetchFrom(ctx, token, baseURL, homeDir))
+			return reportEmptySubscription(fetchFrom(ctx, token, baseURL))
 		})
 	}
 	return raceConfigReads(ctx, attempts)
@@ -602,28 +582,28 @@ func raceConfigReads(ctx context.Context, attempts []func(context.Context) (*fet
 
 type oixHTTPClientContextKey struct{}
 
-func fetchFrom(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
+func fetchFrom(ctx context.Context, token, baseURL string) (*fetchedConfig, error) {
 	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
 	defer cancel()
 	clients := []*http.Client{oixHTTPClient}
 	if inner.GetTunnel() != nil {
 		clients = append([]*http.Client{oixRoutedHTTPClient}, clients...)
 	}
-	return fetchFromClients(ctx, token, baseURL, homeDir, clients)
+	return fetchFromClients(ctx, token, baseURL, clients)
 }
 
-func fetchFromClients(ctx context.Context, token, baseURL, homeDir string, clients []*http.Client) (*fetchedConfig, error) {
+func fetchFromClients(ctx context.Context, token, baseURL string, clients []*http.Client) (*fetchedConfig, error) {
 	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(clients))
 	for _, client := range clients {
 		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
 			routeCtx := context.WithValue(ctx, oixHTTPClientContextKey{}, client)
-			return reportEmptySubscription(fetchFromRoute(routeCtx, token, baseURL, homeDir))
+			return reportEmptySubscription(fetchFromRoute(routeCtx, token, baseURL))
 		})
 	}
 	return raceConfigReads(ctx, attempts)
 }
 
-func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetchedConfig, error) {
+func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig, error) {
 	if agePublicKey == "" {
 		return nil, errors.New("age key unavailable")
 	}
@@ -631,37 +611,11 @@ func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetch
 		return nil, errors.New("app secret unavailable")
 	}
 
-	planCtx, planCancel := context.WithTimeout(ctx, planTimeout)
-	plan, planErr := fetchPlanIdentity(planCtx, token, baseURL)
-	planCancel()
-
-	var params queryParams
-	var resolved *resolvedParams
-	var err error
-	if planErr == nil {
-		resolved, err = resolveParamsForPlan(homeDir, plan)
-		if err == nil {
-			params = resolved.params
-		}
-	} else {
-		if IsAuthError(planErr) {
-			return nil, planErr
-		}
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		log.Warnln("[oixCloud] account information unavailable, using current options: %s", planErr)
-		params, err = effectiveParamsWithoutPlan(homeDir)
-	}
-	if err != nil {
-		return nil, fmt.Errorf("resolve account options: %w", err)
-	}
-
 	ts := strconv.FormatInt(time.Now().Unix(), 10)
 
 	sig := sign(ts + "." + agePublicKey)
 
-	url := baseURL + "/api/v1/managed/flclash/direct" + params.query()
+	url := baseURL + managedConfigPath + "?" + managedConfigQuery
 
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
@@ -702,33 +656,7 @@ func fetchFromRoute(ctx context.Context, token, baseURL, homeDir string) (*fetch
 	if err != nil {
 		return nil, err
 	}
-	return &fetchedConfig{data: data, params: resolved}, nil
-}
-
-func fetchPlanIdentity(ctx context.Context, token, baseURL string) (planIdentity, error) {
-	url := baseURL + "/api/v1/information"
-	req, err := http.NewRequestWithContext(ctx, http.MethodPost, url, nil)
-	if err != nil {
-		return planIdentity{}, fmt.Errorf("create account request: %w", mihomoHttp.RedactError(err))
-	}
-	req.Header.Set("User-Agent", oixUserAgent)
-	req.Header.Set("Authorization", "Bearer "+token)
-
-	resp, err := oixHTTPDo(req)
-	if err != nil {
-		return planIdentity{}, fmt.Errorf("account request: %w", err)
-	}
-	defer resp.Body.Close()
-
-	if resp.StatusCode != http.StatusOK {
-		return planIdentity{}, oixStatusError(resp.StatusCode)
-	}
-
-	var apiResp informationResponse
-	if err := decodeJSONResponse(resp.Body, maxAccountResponseBytes, &apiResp); err != nil {
-		return planIdentity{}, fmt.Errorf("decode account response: %w", err)
-	}
-	return planIdentityFromResponse(apiResp)
+	return &fetchedConfig{data: data}, nil
 }
 
 func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
@@ -753,22 +681,6 @@ func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
 	default:
 		return fmt.Errorf("invalid trailing response data: %w", err)
 	}
-}
-
-func planIdentityFromResponse(apiResp informationResponse) (planIdentity, error) {
-	if apiResp.Ret != http.StatusOK {
-		return planIdentity{}, apiResponseError("account", apiResp.Ret, apiResp.Msg)
-	}
-	if apiResp.Data == nil {
-		return planIdentity{}, errors.New("account response has no data")
-	}
-
-	return planIdentity{
-		Code:       strings.ToLower(strings.TrimSpace(apiResp.Data.PlanCode)),
-		Rank:       apiResp.Data.PlanRank,
-		Name:       strings.TrimSpace(apiResp.Data.Plan),
-		NodeAccess: apiResp.Data.NodeAccess,
-	}, nil
 }
 
 func apiResponseError(scope string, ret int, msg string) error {
@@ -1040,10 +952,9 @@ func newoixRoutedHTTPClient() *http.Client {
 	return client
 }
 
-// Only the two explicitly read-only API operations may be replayed.
+// Only the explicitly read-only managed config request may be replayed.
 func isoixRead(req *http.Request) bool {
-	return req.Method == http.MethodGet && req.URL.Path == "/api/v1/managed/flclash/direct" ||
-		req.Method == http.MethodPost && req.URL.Path == "/api/v1/information"
+	return req.Method == http.MethodGet && req.URL.Path == managedConfigPath
 }
 
 func oixHTTPDo(req *http.Request) (*http.Response, error) {

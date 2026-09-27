@@ -30,14 +30,11 @@ func TestFetchFromClientsWaitsForValidEncryptedBody(t *testing.T) {
 			if req.Header.Get("Authorization") != "Bearer private-token" {
 				t.Error("lost authorization")
 			}
-			if req.URL.Path == "/api/v1/information" {
-				started <- struct{}{}
-				select {
-				case <-both:
-				case <-req.Context().Done():
-					return nil, req.Context().Err()
-				}
-				return &http.Response{StatusCode: 404, Header: make(http.Header), Body: http.NoBody}, nil
+			started <- struct{}{}
+			select {
+			case <-both:
+			case <-req.Context().Done():
+				return nil, req.Context().Err()
 			}
 			config := base64.StdEncoding.EncodeToString([]byte(A.FileHeader + "invalid encrypted content"))
 			if valid {
@@ -52,7 +49,7 @@ func TestFetchFromClientsWaitsForValidEncryptedBody(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 	defer cancel()
-	config, err := fetchFromClients(ctx, "private-token", "https://oix.test", t.TempDir(), []*http.Client{client(false), client(true)})
+	config, err := fetchFromClients(ctx, "private-token", "https://oix.test", []*http.Client{client(false), client(true)})
 	if err != nil || config == nil || string(config.data) != string(encrypted) {
 		t.Fatalf("config=%v error=%v", config, err)
 	}
@@ -79,7 +76,7 @@ func TestFetchFromClientsAuthenticationCancelsOtherAccountRead(t *testing.T) {
 			})}
 			ctx, cancel := context.WithTimeout(context.Background(), time.Second)
 			defer cancel()
-			_, err := fetchFromClients(ctx, "token", "https://oix.test", t.TempDir(), []*http.Client{pending, rejected})
+			_, err := fetchFromClients(ctx, "token", "https://oix.test", []*http.Client{pending, rejected})
 			if !IsAuthError(err) {
 				t.Fatalf("error=%v", err)
 			}
@@ -111,14 +108,25 @@ func Test_oixWriteIsNeverReplayed(t *testing.T) {
 
 func TestFetchFromClientsSharesDeadline(t *testing.T) {
 	setupSignedFetchTest(t)
+	entered := make(chan struct{}, 2)
 	client := &http.Client{Transport: roundTripFunc(func(req *http.Request) (*http.Response, error) {
+		entered <- struct{}{}
 		<-req.Context().Done()
 		return nil, req.Context().Err()
 	})}
-	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
+	ctx, cancel := context.WithTimeout(context.Background(), 200*time.Millisecond)
 	defer cancel()
-	_, err := fetchFromClients(ctx, "token", "https://oix.test", t.TempDir(), []*http.Client{client, client})
+	_, err := fetchFromClients(ctx, "token", "https://oix.test", []*http.Client{client, client})
 	if !errors.Is(err, context.DeadlineExceeded) {
 		t.Fatalf("error=%v", err)
+	}
+	// RaceReads does not join its routes; both must have read the signing
+	// credentials before the cleanup restores them.
+	for range 2 {
+		select {
+		case <-entered:
+		case <-time.After(5 * time.Second):
+			t.Fatal("route did not start before the shared deadline")
+		}
 	}
 }
