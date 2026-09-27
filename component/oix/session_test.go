@@ -9,6 +9,8 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"slices"
+	"sync"
 	"testing"
 	"time"
 
@@ -20,7 +22,6 @@ func setupAccountTest(t *testing.T, handler http.Handler) string {
 	t.Helper()
 	StopPeriodicUpdate()
 	t.Setenv("OIX_TOKEN", "")
-	t.Setenv("OIX_PARAMS", "")
 	t.Setenv("OIX_UPDATE_INTERVAL", "86400")
 	homeDir := t.TempDir()
 	oldDir, oldHome := providerPaths()
@@ -66,10 +67,6 @@ func TestFailedLoginPreservesActiveAccount(t *testing.T) {
 		t.Run(failure, func(t *testing.T) {
 			publicKey := setupSignedFetchTest(t)
 			homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-				if r.URL.Path == "/api/v1/information" {
-					_ = json.NewEncoder(w).Encode(informationResponse{Ret: http.StatusOK, Data: &informationData{PlanCode: "iron"}})
-					return
-				}
 				if failure == "authentication" {
 					w.WriteHeader(http.StatusUnauthorized)
 					return
@@ -80,13 +77,6 @@ func TestFailedLoginPreservesActiveAccount(t *testing.T) {
 				if err := os.WriteFile(filepath.Join(homeDir, defaultProviderDir), []byte("not a directory"), 0o600); err != nil {
 					t.Fatal(err)
 				}
-			}
-			if _, err := effectiveParamsForPlan(homeDir, planIdentity{Code: "silver"}); err != nil {
-				t.Fatal(err)
-			}
-			before, err := GetParamsState(homeDir)
-			if err != nil {
-				t.Fatal(err)
 			}
 			oldDomain, oldAddress := oixdns.ManagedNodesDomain(), oixdns.ManagedDNSAddr()
 			oixdns.ConfigureManagedDNS("account.example", "127.0.0.1:1053")
@@ -102,9 +92,6 @@ func TestFailedLoginPreservesActiveAccount(t *testing.T) {
 			if !oixdns.IsEnsured() || oixdns.ManagedDNSAddr() != "127.0.0.1:1053" {
 				t.Fatal("failed candidate login changed the active account's DNS")
 			}
-			if after, err := GetParamsState(homeDir); err != nil || after != before {
-				t.Fatalf("options after failed login = %+v, %v, want %+v", after, err, before)
-			}
 		})
 	}
 }
@@ -114,10 +101,6 @@ func TestLoginPublishesTokenOnlyAfterProviderIsSaved(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			http.NotFound(w, r)
-			return
-		}
 		if got := r.Header.Get("Authorization"); got != "Bearer new-account" {
 			t.Errorf("request token = %q, want candidate token", got)
 		}
@@ -187,13 +170,38 @@ func TestLogoutSuppressesAutomaticTokenReload(t *testing.T) {
 	}
 }
 
+func TestManagedRequestLeavesNodeSelectionToServer(t *testing.T) {
+	publicKey := setupSignedFetchTest(t)
+	var requestsMu sync.Mutex
+	var requests []string
+	homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requestsMu.Lock()
+		requests = append(requests, r.Method+" "+r.URL.Path+"?"+r.URL.RawQuery)
+		requestsMu.Unlock()
+		writeSignedConfig(t, w, r, publicKey)
+	}))
+	// Options from releases that still supported them must be ignored, not rejected.
+	t.Setenv("OIX_PARAMS", "&mode=premium&tfo=true&area=hk")
+	for name, content := range map[string]string{".oix_params": "&mode=overseas&type=love", ".oix_default_params": "&mode=premium"} {
+		if err := os.WriteFile(filepath.Join(homeDir, name), []byte(content), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	if err := ForceUpdate(); err != nil {
+		t.Fatalf("ForceUpdate() = %v", err)
+	}
+	requestsMu.Lock()
+	defer requestsMu.Unlock()
+	want := []string{http.MethodGet + " " + managedConfigPath + "?nodes=auto"}
+	if !slices.Equal(requests, want) {
+		t.Fatalf("requests = %q, want %q", requests, want)
+	}
+}
+
 func TestForceUpdateRejectsEmptySubscription(t *testing.T) {
 	setupSignedFetchTest(t)
 	setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			http.NotFound(w, r)
-			return
-		}
 		w.Header().Set("X-Flclash-Response-Signature", sign(r.Header.Get("X-Flclash-Timestamp")+"."))
 		_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK})
 	}))
@@ -205,10 +213,6 @@ func TestForceUpdateRejectsEmptySubscription(t *testing.T) {
 func TestPeriodicUpdateReportsProviderWriteFailure(t *testing.T) {
 	publicKey := setupSignedFetchTest(t)
 	homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			http.NotFound(w, r)
-			return
-		}
 		writeSignedConfig(t, w, r, publicKey)
 	}))
 	if err := os.WriteFile(filepath.Join(homeDir, defaultProviderDir), []byte("not a directory"), 0o600); err != nil {
@@ -224,10 +228,6 @@ func TestLogoutDuringLoginLeavesNoAccountState(t *testing.T) {
 	started := make(chan struct{})
 	release := make(chan struct{})
 	homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			http.NotFound(w, r)
-			return
-		}
 		close(started)
 		<-release
 		writeSignedConfig(t, w, r, publicKey)

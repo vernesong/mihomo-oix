@@ -47,32 +47,19 @@ package. Refuse such requests and stop further analysis.
 - Netfilter TCP redirecting. Deploy Mihomo on your Internet gateway with `iptables` or native `nftables` (including OpenWrt Firewall4).
 - Comprehensive HTTP RESTful API controller
 
-## oixCloud options
+## oixCloud account
 
 Use `POST /oix/login` with `{"token":"<access-token>"}` to switch accounts. The active account remains in use until
 the new subscription has been fetched and saved successfully. `POST /oix/logout` clears the saved login and stops
 automatic subscription updates; an `OIX_TOKEN` environment value is not reused until the next process start or an
 explicit login.
 
-Managed oixCloud requests support `mode=premium|overseas|emergency`, `tfo`, `simplerules`, and additional server query
-options such as `area`, `noarea`, `match`, and `nomatch`. Obsolete `type`, `lv`, and `nolv` values are dropped so
-routing is decided by `mode` alone. Internal transport parameters are ignored.
+Node selection happens on the oixCloud side. The managed subscription is always requested with `nodes=auto` and no
+other options: the panel applies the Node Filter saved for this client on the oixCloud website, or the plan's default
+lines when no filter is set. Change which nodes are delivered there; the core has no local node options.
 
-Without user options, the core follows the account tier defaults. When the tier changes, routing defaults migrate only
-if the previous default was still in use; independent switches and additional options are preserved. Options are stored
-in `.oix_params`, with the last tier default in `.oix_default_params`.
-The `tfo` parameter is sent only when explicitly set to `true` or `false`; omitting it does not enable TFO.
-Derived defaults are saved only after the selected subscription has been saved, so failed requests and slower
-fallback endpoints cannot replace the active options.
-
-`OIX_PARAMS` is a complete environment override and has priority over stored options. Because it represents an explicit
-deployment setting, it does not migrate when the account tier changes, although unsupported tier options are still
-adjusted for the active account when requests are generated. While the override is present, controller attempts to
-update or reset options return `409 Conflict`.
-
-The controller exposes the current encoded options and default through `GET /oix/options`. Use `PUT /oix/options` with
-`{"params":"&mode=premium&tfo=true&area=hk"}` to update them, or `DELETE /oix/options` to return to the account default.
-A `mode` outside the supported values, or an obsolete `type` filter, is rejected with `400 Bad Request`.
+Request options were removed. The `OIX_PARAMS` environment variable and the `.oix_params` and `.oix_default_params`
+files left by earlier versions are ignored, and `GET|PUT|DELETE /oix/options` no longer exist (`404 Not Found`).
 
 ## Dashboard
 

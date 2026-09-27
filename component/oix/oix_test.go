@@ -68,10 +68,6 @@ func (r *staticResolver) Invalid() bool    { return true }
 func (r *staticResolver) ClearCache()      {}
 func (r *staticResolver) ResetConnection() {}
 
-func intPointer(value int) *int {
-	return &value
-}
-
 func TestProviderDirectory(t *testing.T) {
 	homeDir := t.TempDir()
 	preferredDir := filepath.Join(homeDir, "preferred")
@@ -366,7 +362,7 @@ func Test_oixHTTPDoReplaysRequestBody(t *testing.T) {
 	})
 	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test/api/v1/information", strings.NewReader("payload"))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://oix.test"+managedConfigPath, strings.NewReader("payload"))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -399,7 +395,7 @@ func Test_oixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
 	})
 	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
 
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodPost, "https://oix.test/api/v1/information", io.NopCloser(strings.NewReader("payload")))
+	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://oix.test"+managedConfigPath, io.NopCloser(strings.NewReader("payload")))
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -416,175 +412,6 @@ type roundTripFunc func(*http.Request) (*http.Response, error)
 
 func (f roundTripFunc) RoundTrip(request *http.Request) (*http.Response, error) {
 	return f(request)
-}
-
-func TestPlanDefaultParams(t *testing.T) {
-	tests := []struct {
-		name string
-		plan planIdentity
-		want string
-	}{
-		{name: "no plan", plan: planIdentity{Code: "no_plan", Rank: intPointer(0)}, want: ""},
-		{name: "iron", plan: planIdentity{Code: "iron", Rank: intPointer(10)}, want: ""},
-		{name: "alu", plan: planIdentity{Code: "alu", Rank: intPointer(20)}, want: "&mode=emergency"},
-		{name: "bronze", plan: planIdentity{Code: "bronze", Rank: intPointer(30)}, want: "&mode=emergency"},
-		{name: "silver", plan: planIdentity{Code: "silver", Rank: intPointer(40)}, want: "&mode=premium"},
-		{name: "gold", plan: planIdentity{Code: "gold", Rank: intPointer(50)}, want: "&mode=premium"},
-		{name: "stable rank wins", plan: planIdentity{Code: "iron", Rank: intPointer(30)}, want: "&mode=emergency"},
-		{name: "explicit zero rank wins", plan: planIdentity{Code: "iron", Rank: intPointer(0)}, want: ""},
-		{name: "code fallback iron", plan: planIdentity{Code: "iron"}, want: ""},
-		{name: "code fallback alu", plan: planIdentity{Code: "alu"}, want: "&mode=emergency"},
-		{name: "code fallback silver", plan: planIdentity{Code: "silver"}, want: "&mode=premium"},
-		{name: "code fallback gold", plan: planIdentity{Code: "gold"}, want: "&mode=premium"},
-		{name: "legacy no plan", plan: planIdentity{Name: "no plan"}, want: ""},
-		{name: "legacy iron", plan: planIdentity{Name: "Pass Iron"}, want: ""},
-		{name: "legacy alu", plan: planIdentity{Name: "Pass Alu"}, want: "&mode=emergency"},
-		{name: "legacy bronze", plan: planIdentity{Name: "Pass Bronze"}, want: "&mode=emergency"},
-		{name: "node access overrides rank", plan: planIdentity{Code: "silver", Rank: intPointer(40), NodeAccess: []string{"edge", "cia", "ixp"}}, want: "&mode=emergency"},
-		{name: "fusion access overrides rank", plan: planIdentity{Code: "bronze", Rank: intPointer(30), NodeAccess: []string{"edge", "fusion"}}, want: "&mode=premium"},
-		{name: "edge access overrides rank", plan: planIdentity{Code: "silver", Rank: intPointer(40), NodeAccess: []string{"edge"}}, want: ""},
-		{name: "legacy silver", plan: planIdentity{Name: "Pass Silver"}, want: "&mode=premium"},
-	}
-
-	for _, test := range tests {
-		t.Run(test.name, func(t *testing.T) {
-			if got := defaultParamsForPlan(test.plan).encode(); got != test.want {
-				t.Fatalf("defaultParamsForPlan(%+v) = %q, want %q", test.plan, got, test.want)
-			}
-		})
-	}
-}
-
-func TestPlanIdentityFromResponseRejectsMissingData(t *testing.T) {
-	_, err := planIdentityFromResponse(informationResponse{Ret: http.StatusOK})
-	if err == nil {
-		t.Fatal("expected missing information data to be rejected")
-	}
-}
-
-func TestFetchFromFallsBackWhenPlanIdentityUnavailable(t *testing.T) {
-	t.Setenv("OIX_PARAMS", "")
-	secretKey, publicKey, err := A.GenX25519KeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	homeDir := t.TempDir()
-	if err := SetParams(homeDir, "&mode=overseas&tfo=false&area=hk"); err != nil {
-		t.Fatal(err)
-	}
-
-	oldAppSecret := AppSecret
-	oldSecretKey := ageSecretKey
-	oldPublicKey := agePublicKey
-	AppSecret = "test-secret"
-	ageSecretKey = secretKey
-	agePublicKey = publicKey
-	t.Cleanup(func() {
-		AppSecret = oldAppSecret
-		ageSecretKey = oldSecretKey
-		agePublicKey = oldPublicKey
-	})
-
-	managedCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/information":
-			http.NotFound(w, r)
-		case "/api/v1/managed/flclash/direct":
-			managedCalls++
-			if got := r.URL.Query().Get("mode"); got != "overseas" {
-				t.Errorf("mode = %q, want overseas", got)
-			}
-			if got := r.URL.Query().Get("tfo"); got != "false" {
-				t.Errorf("tfo = %q, want false", got)
-			}
-			if got := r.URL.Query().Get("area"); got != "hk" {
-				t.Errorf("area = %q, want hk", got)
-			}
-			encrypted, err := A.EncryptBytes([]byte("proxies: []"), publicKey)
-			if err != nil {
-				t.Error(err)
-				return
-			}
-			config := base64.StdEncoding.EncodeToString(encrypted)
-			timestamp := r.Header.Get("X-Flclash-Timestamp")
-			w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
-			_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
-		default:
-			http.NotFound(w, r)
-		}
-	}))
-	t.Cleanup(server.Close)
-
-	setoixHTTPClientForTest(t, server.Client())
-
-	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
-	if err != nil {
-		t.Fatalf("fetchFrom() error = %v", err)
-	}
-	if managedCalls != 1 {
-		t.Fatalf("managed endpoint calls = %d, want 1", managedCalls)
-	}
-	plaintext, err := A.DecryptBytes(result.data, secretKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	if strings.TrimSpace(string(plaintext)) != "proxies: []" {
-		t.Fatalf("provider = %q", plaintext)
-	}
-}
-
-func TestFetchFromStopsWhenAccountAuthenticationRejected(t *testing.T) {
-	secretKey, publicKey, err := A.GenX25519KeyPair()
-	if err != nil {
-		t.Fatal(err)
-	}
-	homeDir := t.TempDir()
-	oldHomeDir := C.Path.HomeDir()
-	C.SetHomeDir(homeDir)
-	oldAppSecret := AppSecret
-	oldSecretKey := ageSecretKey
-	oldPublicKey := agePublicKey
-	AppSecret = "test-secret"
-	ageSecretKey = secretKey
-	agePublicKey = publicKey
-	t.Cleanup(func() {
-		C.SetHomeDir(oldHomeDir)
-		AppSecret = oldAppSecret
-		ageSecretKey = oldSecretKey
-		agePublicKey = oldPublicKey
-	})
-	providerPayload, err := A.EncryptBytes([]byte("proxies:\n  - name: simulated-node\n    type: direct\n"), publicKey)
-	if err != nil {
-		t.Fatal(err)
-	}
-	config := base64.StdEncoding.EncodeToString(providerPayload)
-
-	managedCalls := 0
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			w.WriteHeader(http.StatusUnauthorized)
-			return
-		}
-		managedCalls++
-		if got := r.Header.Get("X-Flclash-Age-Pubkey"); got != publicKey {
-			t.Errorf("age public key = %q, want generated key", got)
-		}
-		timestamp := r.Header.Get("X-Flclash-Timestamp")
-		w.Header().Set("X-Flclash-Response-Signature", sign(timestamp+"."+config))
-		_ = json.NewEncoder(w).Encode(apiResponse{Ret: http.StatusOK, Config: config})
-	}))
-	t.Cleanup(server.Close)
-
-	setoixHTTPClientForTest(t, server.Client())
-
-	result, err := fetchFrom(context.Background(), "token", server.URL, homeDir)
-	if !IsAuthError(err) || result != nil {
-		t.Fatalf("result=%v error=%v, want authentication failure", result, err)
-	}
-	if managedCalls != 0 {
-		t.Fatalf("managed calls=%d, want none after account rejection", managedCalls)
-	}
 }
 
 func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
@@ -605,25 +432,19 @@ func TestFetchFromRejectsManagedAuthenticationFailure(t *testing.T) {
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch r.URL.Path {
-		case "/api/v1/information":
-			_ = json.NewEncoder(w).Encode(informationResponse{
-				Ret:  http.StatusOK,
-				Data: &informationData{PlanCode: "iron"},
-			})
-		case "/api/v1/managed/flclash/direct":
-			_ = json.NewEncoder(w).Encode(apiResponse{
-				Ret: http.StatusUnauthorized,
-				Msg: "denied",
-			})
-		default:
+		if r.URL.Path != managedConfigPath {
 			http.NotFound(w, r)
+			return
 		}
+		_ = json.NewEncoder(w).Encode(apiResponse{
+			Ret: http.StatusUnauthorized,
+			Msg: "denied",
+		})
 	}))
 	t.Cleanup(server.Close)
 	setoixHTTPClientForTest(t, server.Client())
 
-	_, err = fetchFrom(context.Background(), "invalid-token", server.URL, t.TempDir())
+	_, err = fetchFrom(context.Background(), "invalid-token", server.URL)
 	if !IsAuthError(err) {
 		t.Fatalf("fetchFrom() error = %v, want authentication failure", err)
 	}
@@ -674,10 +495,6 @@ func TestPeriodicUpdateUsesProviderUpdateLock(t *testing.T) {
 
 	lockObserved := make(chan bool, 1)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if r.URL.Path == "/api/v1/information" {
-			http.NotFound(w, r)
-			return
-		}
 		locked := !providerUpdateMu.TryLock()
 		if !locked {
 			providerUpdateMu.Unlock()
@@ -776,9 +593,7 @@ func TestLogoutWinsOverConcurrentForceUpdate(t *testing.T) {
 	releaseManaged := make(chan struct{})
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
-		case "/api/v1/information":
-			http.NotFound(w, r)
-		case "/api/v1/managed/flclash/direct":
+		case managedConfigPath:
 			close(managedStarted)
 			<-releaseManaged
 			encrypted, encryptErr := A.EncryptBytes([]byte("proxies: []"), publicKey)
@@ -1203,13 +1018,9 @@ func TestEnsureRejectsAuthenticationWithoutWaitingForUnanimity(t *testing.T) {
 	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
 	ApiDomains = "auth.oix.test,unavailable.oix.test"
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		status := http.StatusNotFound
-		if request.URL.Path != "/api/v1/information" {
-			if request.URL.Host == "auth.oix.test" {
-				status = http.StatusUnauthorized
-			} else {
-				status = http.StatusForbidden
-			}
+		status := http.StatusForbidden
+		if request.URL.Host == "auth.oix.test" {
+			status = http.StatusUnauthorized
 		}
 		return &http.Response{
 			StatusCode: status,
