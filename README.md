@@ -55,8 +55,8 @@ automatic subscription updates; an `OIX_TOKEN` environment value is not reused u
 explicit login.
 
 Node selection happens on the oixCloud side. The managed subscription is always requested with `nodes=auto` and no
-other options: the panel applies the Node Filter saved for this client on the oixCloud website, or the plan's default
-lines when no filter is set. Change which nodes are delivered there; the core has no local node options.
+other options: the panel applies the Node Filter saved for this client on the oixCloud website, or Smart Selection
+when no filter is set. Change which nodes are delivered there; the core has no local node options.
 
 Request options were removed. The `OIX_PARAMS` environment variable and the `.oix_params` and `.oix_default_params`
 files left by earlier versions are ignored, and `GET|PUT|DELETE /oix/options` no longer exist (`404 Not Found`).
