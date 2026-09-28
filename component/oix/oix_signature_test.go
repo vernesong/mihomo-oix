@@ -83,6 +83,9 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 					w.WriteHeader(http.StatusForbidden)
 					return
 				}
+				if got := r.Header.Get("X-oixCloud-Client"); got != "openclash" {
+					t.Errorf("X-oixCloud-Client = %q, want openclash", got)
+				}
 				if !hmac.Equal([]byte(sign(timestamp+"."+pubkey)), []byte(signature)) {
 					w.WriteHeader(http.StatusForbidden)
 					_, _ = w.Write([]byte("forbidden"))
