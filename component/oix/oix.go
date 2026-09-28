@@ -130,6 +130,12 @@ const (
 
 const oixUserAgent = "OpenClash for oixCloud"
 
+// The panel tells official clients apart by this header, not by the User-Agent.
+const (
+	oixClientHeader = "X-oixCloud-Client"
+	oixClientID     = "openclash"
+)
+
 type apiResponse struct {
 	Ret    int    `json:"ret"`
 	Msg    string `json:"msg"`
@@ -622,6 +628,7 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 		return nil, fmt.Errorf("create request: %w", mihomoHttp.RedactError(err))
 	}
 	req.Header.Set("User-Agent", oixUserAgent)
+	req.Header.Set(oixClientHeader, oixClientID)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
 	req.Header.Set("X-Flclash-Signature", sig)
