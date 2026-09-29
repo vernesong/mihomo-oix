@@ -79,6 +79,13 @@ func ParseWithPath(path string) (*config.Config, error) {
 
 // ParseWithBytes config with buffer
 func ParseWithBytes(buf []byte) (*config.Config, error) {
+	if oix.ProfileMode() {
+		composed, err := oix.ComposeProfile(buf)
+		if err != nil {
+			return nil, err
+		}
+		buf = composed
+	}
 	return config.Parse(buf)
 }
 
@@ -320,6 +327,10 @@ func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvi
 }
 
 func updateoixProvider(cfg *config.Config) {
+	if oix.ProfileMode() {
+		oix.StartProfileUpdates()
+		return
+	}
 	name := oix.ProviderFile()
 
 	preferredPath := ""
@@ -585,6 +596,7 @@ func closeSmart() {
 
 func Shutdown() {
 	oix.StopPeriodicUpdate()
+	oix.StopProfileUpdates()
 	listener.Cleanup()
 	if err := tproxy.CleanupTProxyFirewall(); err != nil {
 		log.Warnln("[TPROXY] Cleanup firewall: %s", err)

@@ -52,6 +52,8 @@ var (
 	ageSecretKey                  string
 	oixToken                      string
 	oixProviderName               string
+	oixClient                     string
+	oixProfile                    bool
 	externalUI                    string
 	externalController            string
 	externalControllerTLS         string
@@ -83,6 +85,8 @@ func init() {
 	flag.StringVar(&secret, "secret", os.Getenv("CLASH_OVERRIDE_SECRET"), "override secret for RESTful API")
 	flag.StringVar(&oixToken, "oix-token", os.Getenv("OIX_TOKEN"), "specify OIX token for managed subscription")
 	flag.StringVar(&oixProviderName, "oix-provider-name", os.Getenv("OIX_PROVIDER_NAME"), "specify OIX provider name (default: oixCloud)")
+	flag.BoolVar(&oixProfile, "oix-profile", os.Getenv("OIX_PROFILE") == "1", "run the oixCloud managed config as the whole configuration; the config file only overrides it")
+	flag.StringVar(&oixClient, "oix-client", os.Getenv("OIX_CLIENT"), "declare this client to oixCloud: openclash (default) or oixclash")
 	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
 	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
@@ -95,7 +99,7 @@ func legacySubcommand(args []string) (string, []string, bool) {
 		return "", nil, false
 	}
 	switch args[1] {
-	case "convert-ruleset", "generate", "age":
+	case "convert-ruleset", "generate", "age", "oix":
 		return args[1], args[2:], true
 	default:
 		return "", nil, false
@@ -131,6 +135,8 @@ func main() {
 			generator.Main(args)
 		case "age":
 			age.Main(args)
+		case "oix":
+			os.Exit(oix.CLI(args, os.Stdin, os.Stdout))
 		}
 		return
 	}
@@ -169,6 +175,14 @@ func main() {
 
 	if oixProviderName != "" {
 		oix.SetProviderName(oixProviderName)
+	}
+
+	oix.SetProfileMode(oixProfile)
+
+	if oixClient != "" {
+		if err := oix.SetClient(oixClient); err != nil {
+			log.Fatalln("%s", err)
+		}
 	}
 
 	if oixToken != "" {

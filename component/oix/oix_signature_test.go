@@ -273,3 +273,72 @@ func TestFetchBestTreatsAuthenticationAsAuthoritative(t *testing.T) {
 		t.Fatalf("unanimous endpoint errors = %v, want auth failure", err)
 	}
 }
+
+func setClientForTest(t *testing.T, id string) {
+	t.Helper()
+	clientMu.Lock()
+	previous := clientID
+	clientID = id
+	clientMu.Unlock()
+	t.Cleanup(func() {
+		clientMu.Lock()
+		clientID = previous
+		clientMu.Unlock()
+	})
+}
+
+func TestFetchFromDeclaresConfiguredClient(t *testing.T) {
+	cases := []struct {
+		name    string
+		setup   func(t *testing.T)
+		wantID  string
+		wantUA  string
+		wantErr bool
+	}{
+		{name: "default", setup: func(t *testing.T) { setClientForTest(t, "") }, wantID: "openclash", wantUA: "OpenClash for oixCloud"},
+		{name: "set", setup: func(t *testing.T) {
+			setClientForTest(t, "")
+			if err := SetClient(" OixClash "); err != nil {
+				t.Fatal(err)
+			}
+		}, wantID: "oixclash", wantUA: "oixClash"},
+		{name: "environment", setup: func(t *testing.T) {
+			setClientForTest(t, "")
+			t.Setenv("OIX_CLIENT", "oixclash")
+		}, wantID: "oixclash", wantUA: "oixClash"},
+		{name: "unknown environment falls back", setup: func(t *testing.T) {
+			setClientForTest(t, "")
+			t.Setenv("OIX_CLIENT", "someone-else")
+		}, wantID: "openclash", wantUA: "OpenClash for oixCloud"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			setupSignedFetchTest(t)
+			tc.setup(t)
+
+			var gotID, gotUA string
+			server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+				gotID = r.Header.Get("X-oixCloud-Client")
+				gotUA = r.Header.Get("User-Agent")
+				w.WriteHeader(http.StatusForbidden)
+			}))
+			t.Cleanup(server.Close)
+			setoixHTTPClientForTest(t, server.Client())
+
+			_, _ = fetchFrom(context.Background(), "token", server.URL)
+			if gotID != tc.wantID || gotUA != tc.wantUA {
+				t.Fatalf("client = %q / %q, want %q / %q", gotID, gotUA, tc.wantID, tc.wantUA)
+			}
+		})
+	}
+}
+
+func TestSetClientRejectsUnknownClient(t *testing.T) {
+	setClientForTest(t, "oixclash")
+	if err := SetClient("anywhere"); err == nil {
+		t.Fatal("SetClient accepted a client the panel does not know")
+	}
+	if id, _ := currentClient(); id != "oixclash" {
+		t.Fatalf("rejected SetClient changed the client to %q", id)
+	}
+}
