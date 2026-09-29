@@ -151,9 +151,8 @@ jobs:
       run: |
         export SKIP_CONCURRENT_TEST=1
         export SKIP_INTEROP_TEST=1
-        go test ./...
-        echo "---test with_gvisor---"
-        go test ./... -tags "with_gvisor" -count=1
+        # The test workflow covers the default build on Linux amd64.
+        go test -tags with_gvisor ./... -count=1
 
     - name: Test Linux firewall backends
       if: ${{ matrix.jobs.test == 'test' }}

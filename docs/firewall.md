@@ -71,8 +71,9 @@ CGO_ENABLED=0 SKIP_CONCURRENT_TEST=1 SKIP_INTEROP_TEST=1 go test -tags with_gvis
 go test -race ./listener/tproxy ./config ./hub/executor
 ```
 
-上面的全量命令与现有发布 CI 一致，跳过单独的高并发与外部互操作测试；
-它们不属于本次防火墙场景覆盖范围
+Linux amd64 的默认构建由 Test 工作流验证，`with_gvisor` 构建由发布工作流验证，
+两边不重复跑同一构建配置；其他五种系统／架构各跑一次 `with_gvisor` 全量测试
+上面的本地全量命令跳过单独的高并发与外部互操作测试；它们不属于防火墙场景覆盖范围
 
 真实内核测试对原生 nftables 和 iptables-legacy 使用同一组 TCP/UDP、DNS、
 LAN/WAN、默认 lo、网关 NAT、mark、重载和清理场景
