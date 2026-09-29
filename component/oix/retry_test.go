@@ -15,8 +15,9 @@ func setRetryDelaysForTest(t *testing.T, delays ...time.Duration) {
 	oldDelays, oldEvery := retryDelays, retryEvery
 	retryDelays, retryEvery = delays, time.Hour
 	t.Cleanup(func() {
+		StopPeriodicUpdate()
+		StopProfileUpdates()
 		retryDelays, retryEvery = oldDelays, oldEvery
-		ensureRetry.Store(false)
 		profileRetry.Store(false)
 	})
 }
@@ -39,37 +40,35 @@ func TestTemporaryFailuresExcludeTheAccount(t *testing.T) {
 			t.Errorf("%v must not be retried early", err)
 		}
 	}
-	for _, err := range []error{&RejectedError{Reason: "timestamp_expired"}, errProfileStale, os.ErrDeadlineExceeded} {
+	for _, err := range []error{&rejectedError{Reason: "timestamp_expired"}, errProfileStale, os.ErrDeadlineExceeded} {
 		if !isTemporary(err) {
 			t.Errorf("%v must be retried early", err)
 		}
 	}
 }
 
-func rejectingPanel(t *testing.T, rejection string) (*atomic.Bool, *atomic.Int32, string) {
+// rejectingPanel answers with status and reason until switched to serving a
+// signed config.
+func rejectingPanel(t *testing.T, status int, reason string) (rejecting *atomic.Bool, requests *atomic.Int32, homeDir string) {
 	t.Helper()
 	publicKey := setupSignedFetchTest(t)
-	var rejecting atomic.Bool
-	var requests atomic.Int32
+	rejecting, requests = new(atomic.Bool), new(atomic.Int32)
 	rejecting.Store(true)
-	homeDir := setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+	homeDir = setupAccountTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		requests.Add(1)
 		if rejecting.Load() {
-			if strings.HasPrefix(rejection, "timestamp_") {
-				w.Header().Set("X-Managed-Auth-Error", rejection)
-				w.WriteHeader(http.StatusForbidden)
-			} else {
-				w.WriteHeader(http.StatusUnauthorized)
+			if reason != "" {
+				w.Header().Set("X-Managed-Auth-Error", reason)
 			}
+			w.WriteHeader(status)
 			return
 		}
 		writeSignedConfig(t, w, r, publicKey)
 	}))
-	return &rejecting, &requests, homeDir
+	return rejecting, requests, homeDir
 }
 
-func waitFor(t *testing.T, condition func() bool) bool {
-	t.Helper()
+func waitFor(condition func() bool) bool {
 	deadline := time.Now().Add(3 * time.Second)
 	for time.Now().Before(deadline) {
 		if condition() {
@@ -81,30 +80,32 @@ func waitFor(t *testing.T, condition func() bool) bool {
 }
 
 func TestPeriodicUpdateRetriesSoonAfterATemporaryFailure(t *testing.T) {
-	rejecting, _, homeDir := rejectingPanel(t, "timestamp_expired")
+	rejecting, _, homeDir := rejectingPanel(t, http.StatusForbidden, "timestamp_expired")
 	setRetryDelaysForTest(t, 20*time.Millisecond)
 
-	if _, err := Ensure(defaultProviderDir, homeDir, false); !IsClockSkew(err) {
+	_, err := Ensure(defaultProviderDir, homeDir, false)
+	if !isClockSkew(err) {
 		t.Fatalf("Ensure() error = %v, want a clock rejection", err)
 	}
 	rejecting.Store(false)
-	StartPeriodicUpdate(defaultProviderDir, homeDir)
+	StartPeriodicUpdate(defaultProviderDir, homeDir, err)
 
 	provider := filepath.Join(homeDir, defaultProviderDir, ProviderFile())
-	if !waitFor(t, func() bool { _, err := os.Stat(provider); return err == nil }) {
+	if !waitFor(func() bool { _, err := os.Stat(provider); return err == nil }) {
 		t.Fatal("the provider was not fetched soon after the clock recovered")
 	}
 }
 
 func TestPeriodicUpdateKeepsItsPaceAfterARejectedToken(t *testing.T) {
-	_, requests, homeDir := rejectingPanel(t, "")
+	_, requests, homeDir := rejectingPanel(t, http.StatusUnauthorized, "")
 	setRetryDelaysForTest(t, 20*time.Millisecond)
 
-	if _, err := Ensure(defaultProviderDir, homeDir, false); !IsAuthError(err) {
+	_, err := Ensure(defaultProviderDir, homeDir, false)
+	if !IsAuthError(err) {
 		t.Fatalf("Ensure() error = %v, want an auth failure", err)
 	}
 	before := requests.Load()
-	StartPeriodicUpdate(defaultProviderDir, homeDir)
+	StartPeriodicUpdate(defaultProviderDir, homeDir, err)
 	time.Sleep(200 * time.Millisecond)
 	if got := requests.Load(); got != before {
 		t.Fatalf("a refused token was retried %d times; retrying cannot fix it", got-before)
@@ -128,7 +129,6 @@ func TestProfileUpdatesRetrySoonAfterFallingBack(t *testing.T) {
 	reloads := make(chan struct{}, 8)
 	SetProfileReloader(func() { reloads <- struct{}{} })
 	t.Cleanup(func() { SetProfileReloader(nil) })
-	t.Cleanup(StopProfileUpdates)
 	panel.status.Store(http.StatusOK)
 	panel.content.Store(strings.Replace(testProfile, "mixed-port: 7777", "mixed-port: 7778", 1))
 	StartProfileUpdates()

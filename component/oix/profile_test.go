@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"strings"
@@ -105,12 +104,7 @@ func setupProfileTest(t *testing.T) (*profilePanel, string) {
 	panel := &profilePanel{}
 	panel.status.Store(http.StatusOK)
 	panel.content.Store(testProfile)
-	server := httptest.NewTLSServer(panel)
-	t.Cleanup(server.Close)
-	setoixHTTPClientForTest(t, server.Client())
-	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
-	ApiDomains, SpareApiDomain = server.URL, ""
-	t.Cleanup(func() { ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain })
+	servePanelForTest(t, panel)
 	return panel, homeDir
 }
 
@@ -153,8 +147,9 @@ func TestComposeProfileAppliesLocalOverrides(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !isAgeArmored(saved) || bytes.Contains(saved, []byte("node-a")) {
-		t.Fatal("the saved profile must stay encrypted")
+	data, owned := bytes.CutPrefix(saved, profileHeader("profile-token"))
+	if !owned || !isAgeArmored(data) || bytes.Contains(saved, []byte("node-a")) || bytes.Contains(saved, []byte("profile-token")) {
+		t.Fatal("the saved profile must stay encrypted and name its token only by a digest")
 	}
 	if info, _ := os.Stat(filepath.Join(homeDir, profileFileName)); info.Mode().Perm() != 0o600 {
 		t.Fatalf("profile permissions = %v", info.Mode().Perm())
@@ -183,21 +178,42 @@ func TestComposeProfileReusesAFreshCopy(t *testing.T) {
 	}
 }
 
-func TestComposeProfileFallsBackToTheSavedCopy(t *testing.T) {
+func TestSavedProfileServesOnlyItsOwnToken(t *testing.T) {
 	panel, homeDir := setupProfileTest(t)
 	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
 		t.Fatal(err)
 	}
-	ageProfile(t, homeDir)
-	oixdns.ClearEnsured()
-	panel.status.Store(http.StatusBadGateway)
-
-	composed, err := ComposeProfile([]byte(testOverlay))
-	if err != nil || !bytes.Contains(composed, []byte("node-a")) {
-		t.Fatalf("ComposeProfile() = %v, want the saved copy", err)
+	SetToken("another-account")
+	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
+		t.Fatal(err)
 	}
-	if !oixdns.IsEnsured() {
-		t.Fatal("the saved copy must restore managed node DNS")
+	if got := panel.requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want a fetch for the other account", got)
+	}
+
+	ageProfile(t, homeDir)
+	SetToken("third-account")
+	panel.status.Store(http.StatusForbidden)
+	panel.rejection.Store("timestamp_expired")
+	if _, err := ComposeProfile([]byte(testOverlay)); !isClockSkew(err) {
+		t.Fatalf("error = %v, want the rejection rather than another account's copy", err)
+	}
+}
+
+func TestProfileSavedInTheFutureIsStale(t *testing.T) {
+	panel, homeDir := setupProfileTest(t)
+	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
+		t.Fatal(err)
+	}
+	future := time.Now().Add(time.Hour)
+	if err := os.Chtimes(filepath.Join(homeDir, profileFileName), future, future); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
+		t.Fatal(err)
+	}
+	if got := panel.requests.Load(); got != 2 {
+		t.Fatalf("requests = %d, want a fetch when the clock went back", got)
 	}
 }
 
@@ -277,8 +293,45 @@ func TestProfileLoginSwitchesAccountsOnlyAfterFetching(t *testing.T) {
 	}
 
 	Logout()
-	if _, err := os.Stat(filepath.Join(homeDir, profileFileName)); !os.IsNotExist(err) {
-		t.Fatal("logout left the profile behind")
+	for _, name := range []string{profileFileName, ".oix_token"} {
+		if _, err := os.Stat(filepath.Join(homeDir, name)); !os.IsNotExist(err) {
+			t.Fatalf("logout left %s behind", name)
+		}
+	}
+	composed, err := ComposeProfile([]byte(testOverlay))
+	if err != nil || string(composed) != testOverlay {
+		t.Fatalf("after logout: %q, %v; want the local config alone", composed, err)
+	}
+}
+
+func TestStoppingDuringAReloadStartsNoOtherUpdater(t *testing.T) {
+	panel, _ := setupProfileTest(t)
+	t.Setenv("OIX_UPDATE_INTERVAL", "1")
+	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
+		t.Fatal(err)
+	}
+	reloading, release := make(chan struct{}), make(chan struct{})
+	SetProfileReloader(func() {
+		close(reloading)
+		<-release
+		StartProfileUpdates() // what applying the reloaded config does
+	})
+	t.Cleanup(func() { SetProfileReloader(nil) })
+	panel.content.Store(strings.Replace(testProfile, "mixed-port: 7777", "mixed-port: 7778", 1))
+	StartProfileUpdates()
+
+	select {
+	case <-reloading:
+	case <-time.After(5 * time.Second):
+		t.Fatal("the changed profile was not reloaded")
+	}
+	time.AfterFunc(50*time.Millisecond, func() { close(release) })
+	StopProfileUpdates()
+	profileUpdaterMu.Lock()
+	running := profileCancel != nil
+	profileUpdaterMu.Unlock()
+	if running {
+		t.Fatal("the reload restarted the updater that was being stopped")
 	}
 }
 

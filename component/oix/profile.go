@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"fmt"
 	"os"
@@ -40,7 +41,7 @@ var (
 	profileMu     sync.Mutex
 	profileDigest [sha256.Size]byte
 	// profileRetry records that the profile in use is a saved copy kept after a
-	// temporary failure.
+	// temporary failure, so the updater starts with a quick retry.
 	profileRetry atomic.Bool
 
 	profileUpdaterMu sync.Mutex
@@ -66,18 +67,24 @@ func profilePath() string {
 }
 
 // ComposeProfile returns the managed config with the local overrides applied.
+// After an explicit logout the local config runs alone.
 func ComposeProfile(overlay []byte) ([]byte, error) {
-	plain, err := loadProfile(context.Background(), false)
+	plain, stale, err := loadProfile(context.Background(), false)
+	if errors.Is(err, ErrNoToken) && signedOut() {
+		log.Infoln("[oixCloud] signed out, running the local config only")
+		return overlay, nil
+	}
 	if err != nil {
 		return nil, err
 	}
+	profileRetry.Store(stale)
 	return mergeProfile(plain, overlay)
 }
 
 // loadProfile uses a copy saved within profileFreshness unless forced, and
-// falls back to any saved copy when the panel cannot be reached. The panel's
-// verdict on the token is final.
-func loadProfile(ctx context.Context, force bool) ([]byte, error) {
+// falls back to any saved copy, reported as stale, when the panel cannot be
+// reached. The panel's verdict on the token is final.
+func loadProfile(ctx context.Context, force bool) (plain []byte, stale bool, err error) {
 	profileMu.Lock()
 	defer profileMu.Unlock()
 
@@ -85,17 +92,17 @@ func loadProfile(ctx context.Context, force bool) ([]byte, error) {
 	token := getToken()
 	if token == "" {
 		oixdns.ClearEnsured()
-		return nil, ErrNoToken
+		return nil, false, ErrNoToken
 	}
 	path := profilePath()
 	if !force {
-		if plain, ok := readProfile(path, profileFreshness); ok {
-			return plain, nil
+		if plain, ok := readProfile(path, token, profileFreshness); ok {
+			return plain, false, nil
 		}
 	}
 	urls := apiBaseURLs()
 	if len(urls) == 0 {
-		return nil, ErrNoDomains
+		return nil, false, ErrNoDomains
 	}
 	config, err := fetchBest(ctx, token, urls)
 	if err == nil && config == nil {
@@ -104,46 +111,54 @@ func loadProfile(ctx context.Context, force bool) ([]byte, error) {
 	if err != nil {
 		if IsAuthError(err) || errors.Is(err, ErrNoSubscription) {
 			oixdns.ClearEnsured()
-			return nil, err
+			return nil, false, err
 		}
-		if plain, ok := readProfile(path, 0); ok {
+		if plain, ok := readProfile(path, token, 0); ok {
 			log.Warnln("[oixCloud] profile fetch failed, using the saved copy: %s", err)
-			profileRetry.Store(true)
-			return plain, nil
+			return plain, true, nil
 		}
-		return nil, err
+		return nil, false, err
 	}
-	profileRetry.Store(false)
-	plain, err := age.DecryptBytes(config.data, ageSecretKey)
-	if err != nil {
-		return nil, errors.New("invalid encrypted profile")
-	}
-	if err := writePrivateFile(path, config.data); err != nil {
+	if err := saveProfile(path, token, config.data); err != nil {
 		log.Warnln("[oixCloud] save profile failed: %s", err)
 	}
-	useProfile(plain)
-	return plain, nil
+	useProfile(config.plain)
+	return config.plain, false, nil
 }
 
-// readProfile returns the saved profile if it decrypts and, when maxAge is
-// set, was saved within maxAge.
-func readProfile(path string, maxAge time.Duration) ([]byte, bool) {
+// The saved profile starts with a digest of the token it was fetched with, so
+// a copy is never used for another account.
+func profileHeader(token string) []byte {
+	sum := sha256.Sum256([]byte("oixCloud profile\x00" + token))
+	return []byte("oix-profile-owner: " + hex.EncodeToString(sum[:16]) + "\n")
+}
+
+func saveProfile(path, token string, data []byte) error {
+	return writePrivateFile(path, append(profileHeader(token), data...))
+}
+
+func readProfile(path, token string, maxAge time.Duration) ([]byte, bool) {
 	info, err := os.Lstat(path)
 	if err != nil || !info.Mode().IsRegular() {
 		return nil, false
 	}
-	if maxAge > 0 && time.Since(info.ModTime()) > maxAge {
+	// a clock set back after the save must not keep the copy fresh
+	if elapsed := time.Since(info.ModTime()); maxAge > 0 && (elapsed < 0 || elapsed > maxAge) {
 		return nil, false
 	}
 	raw, err := readPrivateFile(path)
-	if err != nil || !isAgeArmored(raw) {
+	if err != nil {
+		return nil, false
+	}
+	data, ok := bytes.CutPrefix(raw, profileHeader(token))
+	if !ok || !isAgeArmored(data) {
 		return nil, false
 	}
 	secretKey, _ := ageKeyPair()
 	if secretKey == "" {
 		return nil, false
 	}
-	plain, err := age.DecryptBytes(raw, secretKey)
+	plain, err := age.DecryptBytes(data, secretKey)
 	if err != nil {
 		return nil, false
 	}
@@ -188,10 +203,11 @@ func refreshProfile(ctx context.Context) (bool, error) {
 	profileMu.Lock()
 	previous := profileDigest
 	profileMu.Unlock()
-	if _, err := loadProfile(ctx, true); err != nil {
+	_, stale, err := loadProfile(ctx, true)
+	if err != nil {
 		return false, err
 	}
-	if profileRetry.Load() {
+	if stale {
 		return false, errProfileStale
 	}
 	profileMu.Lock()
@@ -211,60 +227,46 @@ func StartProfileUpdates() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	profileCancel, profileDone = cancel, done
-	failures := 0
-	if profileRetry.Load() {
-		failures = 1
-	}
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(retryDelay(interval, failures))
-		defer timer.Stop()
-		for {
-			select {
-			case <-ctx.Done():
-				return
-			case <-timer.C:
-				changed, err := refreshProfile(ctx)
-				if isTemporary(err) {
-					failures++
-				} else {
-					failures = 0
+		runUpdater(ctx, interval, profileRetry.Load(), func() error {
+			changed, err := refreshProfile(ctx)
+			if err != nil || !changed || ctx.Err() != nil {
+				// loadProfile already logged the fallback itself
+				if err != nil && ctx.Err() == nil && !errors.Is(err, errProfileStale) {
+					log.Warnln("[oixCloud] profile update failed: %s", err)
 				}
-				timer.Reset(retryDelay(interval, failures))
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					// loadProfile already logged the fallback itself
-					if !errors.Is(err, errProfileStale) {
-						log.Warnln("[oixCloud] profile update failed: %s", err)
-					}
-					continue
-				}
-				if !changed {
-					continue
-				}
-				profileUpdaterMu.Lock()
-				reload := profileReloader
-				profileUpdaterMu.Unlock()
-				if reload != nil {
-					log.Infoln("[oixCloud] profile changed, reloading")
-					go reload()
-				}
+				return err
 			}
-		}
+			profileUpdaterMu.Lock()
+			reload := profileReloader
+			profileUpdaterMu.Unlock()
+			if reload != nil {
+				log.Infoln("[oixCloud] profile changed, reloading")
+				reload()
+			}
+			return nil
+		})
 	}()
 }
 
+// StopProfileUpdates waits for the updater, including a reload it is running.
+// The updater stays registered until then, so that reload does not start
+// another one.
 func StopProfileUpdates() {
 	profileUpdaterMu.Lock()
 	cancel, done := profileCancel, profileDone
-	profileCancel, profileDone = nil, nil
 	profileUpdaterMu.Unlock()
-	if cancel != nil {
-		cancel()
-		<-done
+	if cancel == nil {
+		return
 	}
+	cancel()
+	<-done
+	profileUpdaterMu.Lock()
+	if profileDone == done {
+		profileCancel, profileDone = nil, nil
+	}
+	profileUpdaterMu.Unlock()
 }
 
 // loginProfile validates a candidate token by fetching its profile and only
@@ -277,19 +279,14 @@ func loginProfile(token string) (bool, error) {
 	if err != nil || config == nil {
 		return false, err
 	}
-	plain, err := age.DecryptBytes(config.data, ageSecretKey)
-	if err != nil {
-		return false, errors.New("invalid encrypted profile")
-	}
-	homeDir := C.Path.HomeDir()
-	if err := writePrivateFile(profilePath(), config.data); err != nil {
+	if err := saveProfile(profilePath(), token, config.data); err != nil {
 		return false, err
 	}
-	if err := persistToken(homeDir, token); err != nil {
+	if err := persistToken(C.Path.HomeDir(), token); err != nil {
 		log.Warnln("[oixCloud] persist token failed: %s", err)
 	}
 	SetToken(token)
-	useProfile(plain)
+	useProfile(config.plain)
 	profileRetry.Store(false)
 	return true, nil
 }

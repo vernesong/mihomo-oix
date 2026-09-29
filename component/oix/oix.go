@@ -22,7 +22,6 @@ import (
 	"strconv"
 	"strings"
 	"sync"
-	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/component/age"
@@ -33,6 +32,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/listener/inner"
 	"github.com/metacubex/mihomo/log"
+
 	"gopkg.in/yaml.v3"
 )
 
@@ -110,6 +110,13 @@ func HasToken() bool {
 	return getToken() != ""
 }
 
+// signedOut reports an explicit logout, as opposed to never having had a token.
+func signedOut() bool {
+	tokenMu.RLock()
+	defer tokenMu.RUnlock()
+	return loggedOut
+}
+
 const (
 	defaultProviderFile = "oixCloud"
 	defaultProviderDir  = "proxy_providers"
@@ -182,27 +189,23 @@ func IsAuthError(err error) bool {
 	return errors.Is(err, ErrAuthFailed)
 }
 
-var ErrRequestRejected = errors.New("managed request rejected")
-
-// RejectedError is a managed config refusal about the request itself, such as
+// rejectedError is a managed config refusal about the request itself, such as
 // a timestamp outside the panel's window after a cold boot. The token may be
 // fine, so callers retry and keep what they have instead of signing out.
-type RejectedError struct {
+type rejectedError struct {
 	Reason string
 }
 
-func (e *RejectedError) Error() string {
-	if IsClockSkew(e) {
+func (e *rejectedError) clockSkew() bool {
+	return strings.HasPrefix(e.Reason, "timestamp_")
+}
+
+// Front ends such as the Merlin plugin match "check the device clock".
+func (e *rejectedError) Error() string {
+	if e.clockSkew() {
 		return fmt.Sprintf("managed request rejected: %s (check the device clock)", e.Reason)
 	}
 	return "managed request rejected: " + e.Reason
-}
-
-func (e *RejectedError) Unwrap() error { return ErrRequestRejected }
-
-func IsClockSkew(err error) bool {
-	var rejected *RejectedError
-	return errors.As(err, &rejected) && strings.HasPrefix(rejected.Reason, "timestamp_")
 }
 
 // Reasons the panel sends in X-Managed-Auth-Error for a request it could not
@@ -221,7 +224,7 @@ var requestRejections = map[string]bool{
 func managedStatusError(resp *http.Response) error {
 	if resp.StatusCode == http.StatusForbidden {
 		if reason := strings.TrimSpace(resp.Header.Get("X-Managed-Auth-Error")); requestRejections[reason] {
-			return &RejectedError{Reason: reason}
+			return &rejectedError{Reason: reason}
 		}
 	}
 	return oixStatusError(resp.StatusCode)
@@ -364,7 +367,6 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	log.Infoln("[oixCloud] fetching provider...")
 
 	config, err := fetchBest(context.Background(), token, urls)
-	ensureRetry.Store(isTemporary(err))
 	if err != nil {
 		if IsAuthError(err) {
 			oixdns.ClearEnsured()
@@ -422,15 +424,10 @@ var (
 	retryEvery  = time.Hour
 )
 
-// ensureRetry records that the last Ensure failed temporarily, so the
-// periodic update that follows starts with a quick retry.
-var ensureRetry atomic.Bool
-
 func isTemporary(err error) bool {
 	return err != nil && !IsAuthError(err) && !IsConfigError(err) && !errors.Is(err, ErrNoSubscription)
 }
 
-// retryDelay is the wait after the given number of consecutive temporary failures.
 func retryDelay(interval time.Duration, failures int) time.Duration {
 	delay := interval
 	switch {
@@ -453,7 +450,37 @@ func updateInterval() time.Duration {
 	return defaultUpdateInterval
 }
 
-func StartPeriodicUpdate(dir, homeDir string) {
+// runUpdater calls update every interval, and sooner after temporary
+// failures, until ctx is done. retrySoon starts with a quick retry.
+func runUpdater(ctx context.Context, interval time.Duration, retrySoon bool, update func() error) {
+	failures := 0
+	if retrySoon {
+		failures = 1
+	}
+	timer := time.NewTimer(retryDelay(interval, failures))
+	defer timer.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			return
+		case <-timer.C:
+		}
+		err := update()
+		if ctx.Err() != nil {
+			return
+		}
+		if isTemporary(err) {
+			failures++
+		} else {
+			failures = 0
+		}
+		timer.Reset(retryDelay(interval, failures))
+	}
+}
+
+// StartPeriodicUpdate keeps the provider file up to date; lastErr is the
+// result of the fetch that preceded it, so a temporary failure is retried soon.
+func StartPeriodicUpdate(dir, homeDir string, lastErr error) {
 	interval := updateInterval()
 
 	ctx, cancel := context.WithCancel(context.Background())
@@ -464,36 +491,15 @@ func StartPeriodicUpdate(dir, homeDir string) {
 	periodicDone = done
 	periodicDir = dir
 	periodicHome = homeDir
-
-	failures := 0
-	if ensureRetry.Load() {
-		failures = 1
-	}
 	go func() {
 		defer close(done)
-		timer := time.NewTimer(retryDelay(interval, failures))
-		defer timer.Stop()
-		for {
-			select {
-			case <-timer.C:
-				err := runPeriodicUpdate(ctx, dir, homeDir)
-				if err != nil {
-					if ctx.Err() != nil {
-						return
-					}
-					log.Warnln("[oixCloud] periodic update failed: %s", err)
-				}
-				ensureRetry.Store(isTemporary(err))
-				if isTemporary(err) {
-					failures++
-				} else {
-					failures = 0
-				}
-				timer.Reset(retryDelay(interval, failures))
-			case <-ctx.Done():
-				return
+		runUpdater(ctx, interval, isTemporary(lastErr), func() error {
+			err := runPeriodicUpdate(ctx, dir, homeDir)
+			if err != nil && ctx.Err() == nil {
+				log.Warnln("[oixCloud] periodic update failed: %s", err)
 			}
-		}
+			return err
+		})
 	}()
 	periodicMu.Unlock()
 }
@@ -617,7 +623,7 @@ func Login(token string) (bool, error) {
 	if ok, err := loginWithToken(dir, homeDir, token); err != nil || !ok {
 		return ok, err
 	}
-	StartPeriodicUpdate(dir, homeDir)
+	StartPeriodicUpdate(dir, homeDir, nil)
 	return true, nil
 }
 
@@ -637,7 +643,6 @@ func loginWithToken(dir, homeDir, token string) (bool, error) {
 	}
 	SetToken(token)
 	oixdns.SetEnsured()
-	ensureRetry.Store(false)
 	return true, nil
 }
 
@@ -652,6 +657,10 @@ func Logout() {
 	StopPeriodicUpdate()
 	removeProfile()
 	dir, homeDir := providerPaths()
+	if ProfileMode() {
+		// the provider paths are never set in profile mode
+		homeDir = C.Path.HomeDir()
+	}
 	providerUpdateMu.Lock()
 	defer providerUpdateMu.Unlock()
 	oixdns.ClearEnsured()
@@ -669,7 +678,8 @@ func IsoixProvider(name string) bool {
 }
 
 type fetchedConfig struct {
-	data []byte
+	data  []byte // age-encrypted, as saved to disk
+	plain []byte
 }
 
 func fetchBest(parent context.Context, token string, urls []string) (*fetchedConfig, error) {
@@ -792,11 +802,11 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 	if apiResp.Config == "" {
 		return nil, nil
 	}
-	data, err := decodeArmoredConfig(apiResp.Config)
+	data, plain, err := decodeArmoredConfig(apiResp.Config)
 	if err != nil {
 		return nil, err
 	}
-	return &fetchedConfig{data: data}, nil
+	return &fetchedConfig{data: data, plain: plain}, nil
 }
 
 func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
@@ -839,25 +849,25 @@ func oixStatusError(status int) error {
 	return err
 }
 
-func decodeArmoredConfig(encoded string) ([]byte, error) {
-	raw, err := base64.StdEncoding.DecodeString(encoded)
+func decodeArmoredConfig(encoded string) (raw, plain []byte, err error) {
+	raw, err = base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, fmt.Errorf("decode config: %w", err)
+		return nil, nil, fmt.Errorf("decode config: %w", err)
 	}
 	if !isAgeArmored(raw) {
-		return nil, errors.New("config not encrypted")
+		return nil, nil, errors.New("config not encrypted")
 	}
-	plain, err := age.DecryptBytes(raw, ageSecretKey)
+	plain, err = age.DecryptBytes(raw, ageSecretKey)
 	if err != nil {
-		return nil, errors.New("invalid encrypted config")
+		return nil, nil, errors.New("invalid encrypted config")
 	}
 	var schema struct {
 		Proxies []map[string]any `yaml:"proxies"`
 	}
 	if err := yaml.Unmarshal(plain, &schema); err != nil || schema.Proxies == nil {
-		return nil, errors.New("invalid managed provider config")
+		return nil, nil, errors.New("invalid managed provider config")
 	}
-	return raw, nil
+	return raw, plain, nil
 }
 
 func sign(message string) string {
@@ -926,10 +936,17 @@ type oixHostResolver interface {
 
 type oixBootstrapResolver struct {
 	servers []string
+	// system is asked only when every server failed, for networks that
+	// block outside DNS; a core without its own DNS yet, or the oix
+	// subcommand, has nothing else.
+	system interface {
+		LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error)
+	}
 }
 
 var oixBootstrapHostResolver oixHostResolver = &oixBootstrapResolver{
 	servers: []string{"223.5.5.5:53", "119.29.29.29:53"},
+	system:  net.DefaultResolver,
 }
 
 func (r *oixBootstrapResolver) LookupIP(ctx context.Context, host string) ([]netip.Addr, error) {
@@ -945,6 +962,21 @@ func (r *oixBootstrapResolver) LookupIPv6(ctx context.Context, host string) ([]n
 }
 
 func (r *oixBootstrapResolver) lookup(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	addresses, err := r.lookupServers(ctx, network, host)
+	if err == nil || r.system == nil || ctx.Err() != nil {
+		return addresses, err
+	}
+	addresses, systemErr := r.system.LookupNetIP(ctx, network, host)
+	if systemErr == nil && len(addresses) > 0 {
+		return addresses, nil
+	}
+	if systemErr == nil {
+		systemErr = resolver.ErrIPNotFound
+	}
+	return nil, errors.Join(err, systemErr)
+}
+
+func (r *oixBootstrapResolver) lookupServers(ctx context.Context, network, host string) ([]netip.Addr, error) {
 	if len(r.servers) == 0 {
 		return nil, resolver.ErrIPNotFound
 	}

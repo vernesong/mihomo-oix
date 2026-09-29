@@ -25,28 +25,28 @@ const (
 )
 
 var (
-	ErrRateLimited = errors.New("rate limited")
-	ErrPanelServer = errors.New("panel server error")
+	errRateLimited = errors.New("rate limited")
+	errPanelServer = errors.New("panel server error")
 )
 
-// PanelError is a refusal the panel explained in its own words, already in
+// panelError is a refusal the panel explained in its own words, already in
 // the requested language, so callers can show Msg to the user as is.
-type PanelError struct {
+type panelError struct {
 	Ret int
 	Msg string
 	err error
 }
 
-func (e *PanelError) Error() string {
+func (e *panelError) Error() string {
 	if e.Msg != "" {
 		return e.Msg
 	}
 	return fmt.Sprintf("panel rejected the request (ret=%d)", e.Ret)
 }
 
-func (e *PanelError) Unwrap() error { return e.err }
+func (e *panelError) Unwrap() error { return e.err }
 
-type Account struct {
+type accountInfo struct {
 	Plan        string `json:"plan"`
 	PlanTime    string `json:"plan_time"`
 	PlanRank    int    `json:"plan_rank"`
@@ -57,9 +57,9 @@ type Account struct {
 	TokenClient string `json:"token_client"`
 }
 
-// LoginWithPassword signs in as the current client and returns its token,
+// loginWithPassword signs in as the current client and returns its token,
 // which the panel reuses for every device of the same client.
-func LoginWithPassword(ctx context.Context, email, password string) (string, *Account, error) {
+func loginWithPassword(ctx context.Context, email, password string) (string, *accountInfo, error) {
 	form := url.Values{}
 	form.Set("email", strings.TrimSpace(email))
 	form.Set("passwd", password)
@@ -75,7 +75,7 @@ func LoginWithPassword(ctx context.Context, email, password string) (string, *Ac
 	return token, parseAccount(data), nil
 }
 
-func Information(ctx context.Context, token string) (*Account, error) {
+func accountInformation(ctx context.Context, token string) (*accountInfo, error) {
 	data, err := accountRequest(ctx, informationPath, normalizeToken(token), nil)
 	if err != nil {
 		return nil, err
@@ -83,9 +83,9 @@ func Information(ctx context.Context, token string) (*Account, error) {
 	return parseAccount(data), nil
 }
 
-// Rebind trades a sign-in token another official client obtained for this
+// rebindToken trades a sign-in token another official client obtained for this
 // client's own one; the old token stays with its client.
-func Rebind(ctx context.Context, token string) (string, error) {
+func rebindToken(ctx context.Context, token string) (string, error) {
 	data, err := accountRequest(ctx, rebindPath, normalizeToken(token), nil)
 	if err != nil {
 		return "", err
@@ -97,8 +97,10 @@ func Rebind(ctx context.Context, token string) (string, error) {
 	return rebound, nil
 }
 
-// accountRequest tries the next API domain only when no panel answered;
-// a panel's JSON verdict is final.
+// accountRequest tries the next API domain only when no panel answered. The
+// panel answers every request with HTTP 200 and puts its verdict, which is
+// final, in ret; another status comes from something in between, such as a
+// CDN or a captive portal.
 func accountRequest(ctx context.Context, path, token string, form url.Values) (map[string]any, error) {
 	urls := apiBaseURLs()
 	if len(urls) == 0 {
@@ -144,14 +146,11 @@ func accountRequestOnce(ctx context.Context, target, token string, form url.Valu
 		return nil, true, fmt.Errorf("server request: %w", mihomoHttp.RedactError(err))
 	}
 	defer resp.Body.Close()
-	if resp.StatusCode >= http.StatusInternalServerError {
-		return nil, true, fmt.Errorf("%w: HTTP %d", ErrPanelServer, resp.StatusCode)
+	if resp.StatusCode == http.StatusTooManyRequests {
+		return nil, false, &panelError{Ret: resp.StatusCode, err: errRateLimited}
 	}
 	if resp.StatusCode != http.StatusOK {
-		if resp.StatusCode == http.StatusTooManyRequests {
-			return nil, false, &PanelError{Ret: resp.StatusCode, err: ErrRateLimited}
-		}
-		return nil, false, oixStatusError(resp.StatusCode)
+		return nil, true, fmt.Errorf("%w: HTTP %d", errPanelServer, resp.StatusCode)
 	}
 
 	var envelope map[string]any
@@ -171,29 +170,29 @@ func accountRequestOnce(ctx context.Context, target, token string, form url.Valu
 		}
 		return data, false, nil
 	}
-	return nil, false, panelError(ret, stringField(envelope, "msg"), envelope, data)
+	return nil, false, panelRefusal(ret, stringField(envelope, "msg"), envelope, data)
 }
 
-func panelError(ret int, msg string, envelope, data map[string]any) error {
+func panelRefusal(ret int, msg string, envelope, data map[string]any) error {
 	retryAfter, _ := intField(envelope, "retry_after")
 	if retryAfter == 0 && data != nil {
 		retryAfter, _ = intField(data, "retry_after")
 	}
 	switch {
 	case ret == http.StatusTooManyRequests || (ret == http.StatusForbidden && retryAfter > 0):
-		return &PanelError{Ret: ret, Msg: msg, err: ErrRateLimited}
+		return &panelError{Ret: ret, Msg: msg, err: errRateLimited}
 	case ret == http.StatusUnauthorized || ret == http.StatusForbidden:
-		return &PanelError{Ret: ret, Msg: msg, err: ErrAuthFailed}
+		return &panelError{Ret: ret, Msg: msg, err: ErrAuthFailed}
 	case ret >= http.StatusInternalServerError:
-		return fmt.Errorf("%w (ret=%d): %s", ErrPanelServer, ret, msg)
+		return fmt.Errorf("%w (ret=%d): %s", errPanelServer, ret, msg)
 	default:
-		return &PanelError{Ret: ret, Msg: msg}
+		return &panelError{Ret: ret, Msg: msg}
 	}
 }
 
-func parseAccount(data map[string]any) *Account {
+func parseAccount(data map[string]any) *accountInfo {
 	rank, _ := intField(data, "plan_rank")
-	return &Account{
+	return &accountInfo{
 		Plan:        stringField(data, "plan"),
 		PlanTime:    stringField(data, "plan_time"),
 		PlanRank:    rank,

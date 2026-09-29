@@ -72,32 +72,37 @@ files left by earlier versions are ignored, and `GET|PUT|DELETE /oix/options` no
 
 Every panel request declares the client in `X-oixCloud-Client`, and the panel issues one sign-in token per client and
 account, with its own Node Filter. OpenClash builds send `openclash`, the default. The Asus Merlin plugin sets
-`OIX_CLIENT=oixclash` or `-oix-client oixclash`; any other value is refused at startup.
+`OIX_CLIENT=oixclash` or `-oix-client oixclash`; any other value is refused at startup, and `mihomo oix` refuses it
+too (it reads `OIX_CLIENT` only).
 
 ### Profile mode
 
 With `OIX_PROFILE=1` or `-oix-profile`, the managed config is the whole configuration, as in FlClash: proxies, groups,
 rules and DNS come from the panel, and the `-f` config file only overrides it. Mappings are merged key by key and other
 values replace the managed ones, so a local `dns` can change the listener and keep the panel's nameservers. The managed
-config is saved age-encrypted as `.oix_profile` in the home directory and decrypted in memory only. A copy younger than
-ten minutes is reused, an unreachable panel falls back to the saved copy, and a refused token is final. It is refreshed
-every `OIX_UPDATE_INTERVAL` seconds (a day by default) and reloaded when it changed. No managed provider is added in
-this mode.
+config is saved age-encrypted as `.oix_profile` in the home directory, marked with a digest of the token it belongs
+to, and decrypted in memory only. A copy of the same token younger than ten minutes is reused, an unreachable panel
+falls back to that token's saved copy, and a refused token is final. It is refreshed every `OIX_UPDATE_INTERVAL`
+seconds (a day by default) and reloaded when it changed; updates and account changes reload one at a time. After
+`POST /oix/logout` the `-f` config runs alone. No managed provider is added in this mode.
 
 ### Router builds
 
 Releases also carry `linux-armv7-router` and `linux-arm64-router` builds for the Asus Merlin plugin. They leave out the
-gVisor TUN stack, which the plugin never uses, and build with `with_low_memory` for half-size relay buffers: the armv7
-binary drops from about 57 MB to 48 MB, which the router keeps in RAM.
+gVisor TUN stack, which the plugin never uses, together with the Tailscale outbound and WireGuard's `gvisor` IP stack
+that depend on it (the managed config uses neither), and build with `with_low_memory` for half-size relay buffers: the
+armv7 binary drops from about 57 MB to 48 MB, which the router keeps in RAM.
 
 ### Sign-in from scripts
 
 `mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout (or `key=value`
-lines with `-format lines`, for shells without a JSON parser), so credentials
-stay out of the process list. `login` takes `{"email","password"}` and returns this client's token; `account` takes
+lines with `-format lines`, for shells without a JSON parser), so credentials stay out of the process list. `login` takes `{"email","password"}` and returns this client's token; `account` takes
 `{"token"}`, returns the plan and traffic, and trades a token signed in by another official client for this client's
 own, as the other clients do. The exit status is 0 on success, 2 when the panel refused the credentials or the token,
 3 when it asked to wait, and 1 otherwise; errors carry a `code`, and network failures never include the panel address.
+The panel answers with HTTP 200 and a `ret` field, so any other status is taken for something in between, such as a
+CDN, and the next panel domain is tried. Panel hostnames resolve through public DNS first and the system resolver
+last.
 
 ## Dashboard
 

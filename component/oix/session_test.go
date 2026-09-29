@@ -6,7 +6,6 @@ import (
 	"encoding/json"
 	"errors"
 	"net/http"
-	"net/http/httptest"
 	"os"
 	"path/filepath"
 	"slices"
@@ -27,14 +26,12 @@ func setupAccountTest(t *testing.T, handler http.Handler) string {
 	oldDir, oldHome := providerPaths()
 	oldToken := CurrentToken()
 	oldEnsured := oixdns.IsEnsured()
-	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
 	SetProviderPaths(defaultProviderDir, homeDir)
 	SetToken("previous-account")
 	t.Cleanup(func() {
 		StopPeriodicUpdate()
 		SetProviderPaths(oldDir, oldHome)
 		SetToken(oldToken)
-		ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain
 		if oldEnsured {
 			oixdns.SetEnsured()
 		} else {
@@ -42,10 +39,7 @@ func setupAccountTest(t *testing.T, handler http.Handler) string {
 		}
 	})
 
-	server := httptest.NewTLSServer(handler)
-	t.Cleanup(server.Close)
-	setoixHTTPClientForTest(t, server.Client())
-	ApiDomains, SpareApiDomain = server.URL, ""
+	servePanelForTest(t, handler)
 	return homeDir
 }
 

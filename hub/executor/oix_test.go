@@ -46,7 +46,7 @@ func TestShutdownStopsOIXUpdates(t *testing.T) {
 		}
 	}()
 	oix.ApiDomains = "https://" + listener.Addr().String()
-	oix.StartPeriodicUpdate("providers", homeDir)
+	oix.StartPeriodicUpdate("providers", homeDir, nil)
 	select {
 	case <-accepted:
 	case <-time.After(5 * time.Second):
