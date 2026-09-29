@@ -4,7 +4,10 @@ import (
 	"context"
 	"encoding/json"
 	"errors"
+	"flag"
+	"fmt"
 	"io"
+	"strconv"
 	"strings"
 )
 
@@ -33,11 +36,25 @@ type cliOutput struct {
 }
 
 func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
+	format := "json"
 	write := func(out cliOutput) {
+		if format == "lines" {
+			writeLines(stdout, out)
+			return
+		}
 		_ = json.NewEncoder(stdout).Encode(out)
 	}
-	if len(args) != 1 || (args[0] != "login" && args[0] != "account") {
-		write(cliOutput{Code: "usage", Error: "usage: mihomo oix login|account < request.json"})
+	usage := cliOutput{Code: "usage", Error: "usage: mihomo oix login|account [-format json|lines] < request.json"}
+	if len(args) == 0 || (args[0] != "login" && args[0] != "account") {
+		write(usage)
+		return ExitFailed
+	}
+	flags := flag.NewFlagSet("oix "+args[0], flag.ContinueOnError)
+	flags.SetOutput(io.Discard)
+	flags.StringVar(&format, "format", "json", "")
+	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || (format != "json" && format != "lines") {
+		format = "json"
+		write(usage)
 		return ExitFailed
 	}
 	var in cliInput
@@ -115,4 +132,31 @@ func describeCLIError(err error) (code string, status int, message string) {
 		return code, status, panelErr.Msg
 	}
 	return code, status, err.Error()
+}
+
+// writeLines prints key=value lines for shells without a JSON parser; values
+// never span lines, so `sed -n 's/^token=//p'` reads them without eval.
+func writeLines(w io.Writer, out cliOutput) {
+	line := func(key, value string) {
+		if value != "" {
+			value = strings.NewReplacer("\r", " ", "\n", " ").Replace(value)
+			_, _ = fmt.Fprintf(w, "%s=%s\n", key, value)
+		}
+	}
+	line("token", out.Token)
+	if out.Rebound {
+		line("rebound", "1")
+	}
+	if a := out.Account; a != nil {
+		line("plan", a.Plan)
+		line("plan_time", a.PlanTime)
+		line("plan_rank", strconv.Itoa(a.PlanRank))
+		line("used", a.Used)
+		line("traffic", a.Traffic)
+		line("unused", a.Unused)
+		line("today_used", a.TodayUsed)
+		line("token_client", a.TokenClient)
+	}
+	line("code", out.Code)
+	line("error", out.Error)
 }

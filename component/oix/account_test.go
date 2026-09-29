@@ -220,6 +220,7 @@ func TestCLIValidatesTheRequest(t *testing.T) {
 	}{
 		{[]string{}, `{}`},
 		{[]string{"logout"}, `{}`},
+		{[]string{"login", "extra"}, `{}`},
 		{[]string{"login"}, `not json`},
 		{[]string{"login"}, `{"email":"user@example.com"}`},
 		{[]string{"account"}, `{"token":"  "}`},
@@ -231,5 +232,33 @@ func TestCLIValidatesTheRequest(t *testing.T) {
 		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || status != ExitFailed || out.Code != "usage" {
 			t.Fatalf("CLI(%v, %q) = %d %q", tc.args, tc.input, status, stdout.String())
 		}
+	}
+}
+
+func TestCLIPrintsLinesForShells(t *testing.T) {
+	setupPanelTest(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path == loginPath {
+			writePanelJSON(w, map[string]any{"ret": 200, "data": map[string]any{"token": "signed-in", "plan": "Pro\nPlus", "plan_rank": 20}})
+			return
+		}
+		writePanelJSON(w, map[string]any{"ret": 403, "msg": "密码\n错误"})
+	}))
+
+	var stdout bytes.Buffer
+	status := CLI([]string{"login", "-format", "lines"}, strings.NewReader(`{"email":"a@b.c","password":"x"}`), &stdout)
+	want := "token=signed-in\nplan=Pro Plus\nplan_rank=20\n"
+	if status != ExitOK || stdout.String() != want {
+		t.Fatalf("lines = %d %q, want %q", status, stdout.String(), want)
+	}
+
+	stdout.Reset()
+	status = CLI([]string{"account", "-format=lines"}, strings.NewReader(`{"token":"t"}`), &stdout)
+	if status != ExitRejected || stdout.String() != "code=rejected\nerror=密码 错误\n" {
+		t.Fatalf("lines = %d %q", status, stdout.String())
+	}
+
+	stdout.Reset()
+	if status := CLI([]string{"login", "-format", "xml"}, strings.NewReader(`{}`), &stdout); status != ExitFailed || !strings.Contains(stdout.String(), `"code":"usage"`) {
+		t.Fatalf("bad format = %d %q", status, stdout.String())
 	}
 }
