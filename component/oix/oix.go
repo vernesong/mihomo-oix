@@ -22,6 +22,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/metacubex/mihomo/component/age"
@@ -363,6 +364,7 @@ func Ensure(dir, homeDir string, providerExists bool) (bool, error) {
 	log.Infoln("[oixCloud] fetching provider...")
 
 	config, err := fetchBest(context.Background(), token, urls)
+	ensureRetry.Store(isTemporary(err))
 	if err != nil {
 		if IsAuthError(err) {
 			oixdns.ClearEnsured()
@@ -412,6 +414,35 @@ func ensureFromDisk(dir, homeDir string) {
 
 const defaultUpdateInterval = 24 * time.Hour
 
+// Temporary failures are retried well before the next regular update, so a
+// router that started before NTP synced or before its WAN came up gets its
+// nodes within minutes instead of a day later.
+var (
+	retryDelays = []time.Duration{time.Minute, 5 * time.Minute, 15 * time.Minute}
+	retryEvery  = time.Hour
+)
+
+// ensureRetry records that the last Ensure failed temporarily, so the
+// periodic update that follows starts with a quick retry.
+var ensureRetry atomic.Bool
+
+func isTemporary(err error) bool {
+	return err != nil && !IsAuthError(err) && !IsConfigError(err) && !errors.Is(err, ErrNoSubscription)
+}
+
+// retryDelay is the wait after the given number of consecutive temporary failures.
+func retryDelay(interval time.Duration, failures int) time.Duration {
+	delay := interval
+	switch {
+	case failures <= 0:
+	case failures <= len(retryDelays):
+		delay = retryDelays[failures-1]
+	default:
+		delay = retryEvery
+	}
+	return min(delay, interval)
+}
+
 func updateInterval() time.Duration {
 	if s := os.Getenv("OIX_UPDATE_INTERVAL"); s != "" {
 		const maxIntervalSeconds = int64(^uint64(0)>>1) / int64(time.Second)
@@ -434,19 +465,31 @@ func StartPeriodicUpdate(dir, homeDir string) {
 	periodicDir = dir
 	periodicHome = homeDir
 
+	failures := 0
+	if ensureRetry.Load() {
+		failures = 1
+	}
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		timer := time.NewTimer(retryDelay(interval, failures))
+		defer timer.Stop()
 		for {
 			select {
-			case <-ticker.C:
-				if err := runPeriodicUpdate(ctx, dir, homeDir); err != nil {
+			case <-timer.C:
+				err := runPeriodicUpdate(ctx, dir, homeDir)
+				if err != nil {
 					if ctx.Err() != nil {
 						return
 					}
 					log.Warnln("[oixCloud] periodic update failed: %s", err)
 				}
+				ensureRetry.Store(isTemporary(err))
+				if isTemporary(err) {
+					failures++
+				} else {
+					failures = 0
+				}
+				timer.Reset(retryDelay(interval, failures))
 			case <-ctx.Done():
 				return
 			}
@@ -594,6 +637,7 @@ func loginWithToken(dir, homeDir, token string) (bool, error) {
 	}
 	SetToken(token)
 	oixdns.SetEnsured()
+	ensureRetry.Store(false)
 	return true, nil
 }
 

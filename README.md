@@ -56,8 +56,10 @@ explicit login.
 
 A 403 whose `X-Managed-Auth-Error` concerns the request rather than the token (a timestamp outside the panel's
 window, a signature or key problem, an unconfigured panel) does not count as a failed sign-in: the managed nodes and
-the saved profile stay in use and the next update retries. A router that starts before NTP has synced therefore
-recovers by itself; the error says to check the device clock.
+the saved profile stay in use and the update is retried after 1, 5 and 15 minutes, then hourly until it succeeds,
+never less often than `OIX_UPDATE_INTERVAL`. An unreachable panel is retried the same way. A router that starts before
+NTP has synced therefore recovers within minutes; the error says to check the device clock. A refused token or a
+missing plan waits for the regular interval, since retrying cannot fix it.
 
 Node selection happens on the oixCloud side. The managed subscription is always requested with `nodes=auto` and no
 other options: the panel applies the Node Filter saved for this client on the oixCloud website, or Smart Selection

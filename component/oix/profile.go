@@ -31,10 +31,17 @@ const (
 	profileFreshness = 10 * time.Minute
 )
 
+// errProfileStale reports a refresh that fell back to the saved copy; it is
+// temporary, so the updater retries soon.
+var errProfileStale = errors.New("the panel could not be reached, the saved profile stays in use")
+
 var (
 	profileMode   atomic.Bool
 	profileMu     sync.Mutex
 	profileDigest [sha256.Size]byte
+	// profileRetry records that the profile in use is a saved copy kept after a
+	// temporary failure.
+	profileRetry atomic.Bool
 
 	profileUpdaterMu sync.Mutex
 	profileCancel    context.CancelFunc
@@ -101,10 +108,12 @@ func loadProfile(ctx context.Context, force bool) ([]byte, error) {
 		}
 		if plain, ok := readProfile(path, 0); ok {
 			log.Warnln("[oixCloud] profile fetch failed, using the saved copy: %s", err)
+			profileRetry.Store(true)
 			return plain, nil
 		}
 		return nil, err
 	}
+	profileRetry.Store(false)
 	plain, err := age.DecryptBytes(config.data, ageSecretKey)
 	if err != nil {
 		return nil, errors.New("invalid encrypted profile")
@@ -182,6 +191,9 @@ func refreshProfile(ctx context.Context) (bool, error) {
 	if _, err := loadProfile(ctx, true); err != nil {
 		return false, err
 	}
+	if profileRetry.Load() {
+		return false, errProfileStale
+	}
 	profileMu.Lock()
 	defer profileMu.Unlock()
 	return !bytes.Equal(previous[:], profileDigest[:]), nil
@@ -199,21 +211,34 @@ func StartProfileUpdates() {
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
 	profileCancel, profileDone = cancel, done
+	failures := 0
+	if profileRetry.Load() {
+		failures = 1
+	}
 	go func() {
 		defer close(done)
-		ticker := time.NewTicker(interval)
-		defer ticker.Stop()
+		timer := time.NewTimer(retryDelay(interval, failures))
+		defer timer.Stop()
 		for {
 			select {
 			case <-ctx.Done():
 				return
-			case <-ticker.C:
+			case <-timer.C:
 				changed, err := refreshProfile(ctx)
+				if isTemporary(err) {
+					failures++
+				} else {
+					failures = 0
+				}
+				timer.Reset(retryDelay(interval, failures))
 				if err != nil {
 					if ctx.Err() != nil {
 						return
 					}
-					log.Warnln("[oixCloud] profile update failed: %s", err)
+					// loadProfile already logged the fallback itself
+					if !errors.Is(err, errProfileStale) {
+						log.Warnln("[oixCloud] profile update failed: %s", err)
+					}
 					continue
 				}
 				if !changed {
@@ -265,6 +290,7 @@ func loginProfile(token string) (bool, error) {
 	}
 	SetToken(token)
 	useProfile(plain)
+	profileRetry.Store(false)
 	return true, nil
 }
 
@@ -273,5 +299,6 @@ func removeProfile() {
 	profileMu.Lock()
 	defer profileMu.Unlock()
 	profileDigest = [sha256.Size]byte{}
+	profileRetry.Store(false)
 	_ = os.Remove(profilePath())
 }
