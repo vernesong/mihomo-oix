@@ -79,7 +79,8 @@ this mode.
 
 ### Sign-in from scripts
 
-`mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout, so credentials
+`mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout (or `key=value`
+lines with `-format lines`, for shells without a JSON parser), so credentials
 stay out of the process list. `login` takes `{"email","password"}` and returns this client's token; `account` takes
 `{"token"}`, returns the plan and traffic, and trades a token signed in by another official client for this client's
 own, as the other clients do. The exit status is 0 on success, 2 when the panel refused the credentials or the token,
