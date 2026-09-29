@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"sync/atomic"
 	"testing"
@@ -151,7 +152,8 @@ func TestComposeProfileAppliesLocalOverrides(t *testing.T) {
 	if !owned || !isAgeArmored(data) || bytes.Contains(saved, []byte("node-a")) || bytes.Contains(saved, []byte("profile-token")) {
 		t.Fatal("the saved profile must stay encrypted and name its token only by a digest")
 	}
-	if info, _ := os.Stat(filepath.Join(homeDir, profileFileName)); info.Mode().Perm() != 0o600 {
+	// permission bits are not portable on Windows
+	if info, _ := os.Stat(filepath.Join(homeDir, profileFileName)); runtime.GOOS != "windows" && info.Mode().Perm() != 0o600 {
 		t.Fatalf("profile permissions = %v", info.Mode().Perm())
 	}
 	if !oixdns.IsEnsured() || oixdns.ManagedDNSAddr() != "127.0.0.1:5353" {
