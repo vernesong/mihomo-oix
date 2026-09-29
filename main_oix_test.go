@@ -36,7 +36,7 @@ func TestLegacySubcommandClassification(t *testing.T) {
 			wantOK:   true,
 		},
 		{
-			name:     "oix account",
+			name:     "oix login",
 			args:     []string{"mihomo", "oix", "login"},
 			wantName: "oix",
 			wantRest: []string{"login"},

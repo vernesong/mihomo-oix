@@ -23,6 +23,7 @@ import (
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	R "github.com/metacubex/mihomo/component/resolver"
 	C "github.com/metacubex/mihomo/constant"
+
 	D "github.com/miekg/dns"
 )
 
@@ -339,6 +340,25 @@ func Test_oixBootstrapResolverRejectsEmptyServerList(t *testing.T) {
 	}
 }
 
+type systemLookupFunc func(ctx context.Context, network, host string) ([]netip.Addr, error)
+
+func (f systemLookupFunc) LookupNetIP(ctx context.Context, network, host string) ([]netip.Addr, error) {
+	return f(ctx, network, host)
+}
+
+func Test_oixBootstrapResolverFallsBackToTheSystemResolver(t *testing.T) {
+	want := netip.MustParseAddr("192.0.2.7")
+	var asked string
+	bootstrap := &oixBootstrapResolver{system: systemLookupFunc(func(_ context.Context, network, host string) ([]netip.Addr, error) {
+		asked = network + " " + host
+		return []netip.Addr{want}, nil
+	})}
+	addresses, err := bootstrap.LookupIPv4(context.Background(), "api.oix.test")
+	if err != nil || len(addresses) != 1 || addresses[0] != want || asked != "ip4 api.oix.test" {
+		t.Fatalf("lookup = %v, %v (asked %q), want the system answer", addresses, err, asked)
+	}
+}
+
 func Test_oixHTTPDoReplaysRequestBody(t *testing.T) {
 	var calls int
 	var bodies []string
@@ -462,7 +482,7 @@ func TestPeriodicLifecycleConcurrent(t *testing.T) {
 		waitGroup.Add(1)
 		go func() {
 			defer waitGroup.Done()
-			StartPeriodicUpdate("providers", t.TempDir())
+			StartPeriodicUpdate("providers", t.TempDir(), nil)
 			StopPeriodicUpdate()
 		}()
 	}
@@ -507,7 +527,7 @@ func TestPeriodicUpdateUsesProviderUpdateLock(t *testing.T) {
 	ApiDomains = server.URL
 	SpareApiDomain = ""
 
-	StartPeriodicUpdate("providers", t.TempDir())
+	StartPeriodicUpdate("providers", t.TempDir(), nil)
 	locked := false
 	select {
 	case locked = <-lockObserved:
@@ -663,7 +683,7 @@ func TestStartPeriodicUpdateIgnoresOverflowingInterval(t *testing.T) {
 		SetProviderPaths(oldDir, oldHomeDir)
 	})
 
-	StartPeriodicUpdate("providers", t.TempDir())
+	StartPeriodicUpdate("providers", t.TempDir(), nil)
 	StopPeriodicUpdate()
 }
 
@@ -951,7 +971,7 @@ func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return http.DefaultTransport.RoundTrip(clone)
 }
 
-func setupEnsureFetchFailure(t *testing.T, status int, rejection ...string) (homeDir string) {
+func setupEnsureFetchFailure(t *testing.T, status int, rejection string) (homeDir string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	secretKey, publicKey, err := A.GenX25519KeyPair()
@@ -983,8 +1003,8 @@ func setupEnsureFetchFailure(t *testing.T, status int, rejection ...string) (hom
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
-		if len(rejection) > 0 {
-			w.Header().Set("X-Managed-Auth-Error", rejection[0])
+		if rejection != "" {
+			w.Header().Set("X-Managed-Auth-Error", rejection)
 		}
 		w.WriteHeader(status)
 	}))
@@ -1007,7 +1027,7 @@ func setupEnsureFetchFailure(t *testing.T, status int, rejection ...string) (hom
 }
 
 func TestEnsureKeepsManagedDNSWhenFetchFailsWithCachedProvider(t *testing.T) {
-	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound, "")
 
 	if _, err := Ensure(defaultProviderDir, homeDir, true); err == nil {
 		t.Fatal("Ensure() expected fetch error")
@@ -1018,7 +1038,7 @@ func TestEnsureKeepsManagedDNSWhenFetchFailsWithCachedProvider(t *testing.T) {
 }
 
 func TestEnsureRejectsAuthenticationWithoutWaitingForUnanimity(t *testing.T) {
-	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound, "")
 	ApiDomains = "auth.oix.test,unavailable.oix.test"
 	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
 		status := http.StatusForbidden
@@ -1044,7 +1064,7 @@ func TestEnsureRejectsAuthenticationWithoutWaitingForUnanimity(t *testing.T) {
 }
 
 func TestEnsureRejectsInvalidCachedProvider(t *testing.T) {
-	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound)
+	homeDir := setupEnsureFetchFailure(t, http.StatusNotFound, "")
 	providerPath := filepath.Join(homeDir, defaultProviderDir, ProviderFile())
 	if err := os.WriteFile(providerPath, []byte("invalid"), 0o600); err != nil {
 		t.Fatal(err)
@@ -1059,7 +1079,7 @@ func TestEnsureRejectsInvalidCachedProvider(t *testing.T) {
 }
 
 func TestEnsureSkipsManagedDNSOnAuthFailure(t *testing.T) {
-	homeDir := setupEnsureFetchFailure(t, http.StatusUnauthorized)
+	homeDir := setupEnsureFetchFailure(t, http.StatusUnauthorized, "")
 
 	_, err := Ensure(defaultProviderDir, homeDir, true)
 	if !IsAuthError(err) {

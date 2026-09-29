@@ -117,26 +117,6 @@ func TestFetchFromSignatureMatchesServerContract(t *testing.T) {
 	})
 }
 
-func TestFetchFromForbiddenIsAuthError(t *testing.T) {
-	setupSignedFetchTest(t)
-
-	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		w.WriteHeader(http.StatusForbidden)
-		_, _ = w.Write([]byte("forbidden"))
-	}))
-	t.Cleanup(server.Close)
-
-	setoixHTTPClientForTest(t, server.Client())
-
-	_, err := fetchFrom(context.Background(), "token", server.URL)
-	if err == nil {
-		t.Fatal("expected error")
-	}
-	if !IsAuthError(err) {
-		t.Fatalf("HTTP 403 must be treated as auth error, got %v", err)
-	}
-}
-
 func TestFetchBestAcceptsAPIBaseURLTrailingSlash(t *testing.T) {
 	publicKey := setupSignedFetchTest(t)
 	server := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

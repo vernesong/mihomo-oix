@@ -5,7 +5,6 @@ import (
 	"sync"
 
 	"github.com/metacubex/mihomo/component/oix"
-	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/hub/executor"
 
 	"github.com/metacubex/chi"
@@ -21,17 +20,6 @@ func oixRouter() http.Handler {
 	r.Post("/login", oixLogin)
 	r.Post("/logout", oixLogout)
 	return r
-}
-
-// reloadConfig re-reads the configuration file so an account change takes
-// effect, including the providers it selects.
-func reloadConfig() error {
-	cfg, err := executor.ParseWithPath(C.Path.Config())
-	if err != nil {
-		return err
-	}
-	executor.ApplyConfig(cfg, false)
-	return nil
 }
 
 func oixLogin(w http.ResponseWriter, r *http.Request) {
@@ -68,7 +56,7 @@ func oixLogin(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := reloadConfig(); err != nil {
+	if err := executor.ReloadConfig(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return
@@ -83,7 +71,7 @@ func oixLogout(w http.ResponseWriter, r *http.Request) {
 
 	oix.Logout()
 
-	if err := reloadConfig(); err != nil {
+	if err := executor.ReloadConfig(); err != nil {
 		render.Status(r, http.StatusServiceUnavailable)
 		render.JSON(w, r, newError(err.Error()))
 		return

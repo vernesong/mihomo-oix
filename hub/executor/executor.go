@@ -328,7 +328,9 @@ func updateProxies(proxies map[string]C.Proxy, providers map[string]P.ProxyProvi
 
 func updateoixProvider(cfg *config.Config) {
 	if oix.ProfileMode() {
-		oix.StartProfileUpdates()
+		if oix.HasToken() {
+			oix.StartProfileUpdates()
+		}
 		return
 	}
 	name := oix.ProviderFile()
@@ -354,7 +356,7 @@ func updateoixProvider(cfg *config.Config) {
 		return
 	}
 
-	oix.StartPeriodicUpdate(dir, C.Path.HomeDir())
+	oix.StartPeriodicUpdate(dir, C.Path.HomeDir(), err)
 }
 
 func updateRules(rules []C.Rule, subRules map[string][]C.Rule, ruleProviders map[string]P.RuleProvider) {

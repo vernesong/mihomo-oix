@@ -11,6 +11,11 @@ import (
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 )
 
+func isClockSkew(err error) bool {
+	var rejected *rejectedError
+	return errors.As(err, &rejected) && rejected.clockSkew()
+}
+
 func TestFetchFromSeparatesRequestRejectionsFromTokenFailures(t *testing.T) {
 	cases := []struct {
 		status    int
@@ -40,10 +45,11 @@ func TestFetchFromSeparatesRequestRejectionsFromTokenFailures(t *testing.T) {
 			setoixHTTPClientForTest(t, server.Client())
 
 			_, err := fetchFrom(context.Background(), "token", server.URL)
-			if IsAuthError(err) != tc.wantAuth || IsClockSkew(err) != tc.wantClock {
-				t.Fatalf("HTTP %d %q: error = %v, auth=%v clock=%v", tc.status, tc.reason, err, IsAuthError(err), IsClockSkew(err))
+			if IsAuthError(err) != tc.wantAuth || isClockSkew(err) != tc.wantClock {
+				t.Fatalf("HTTP %d %q: error = %v, auth=%v clock=%v", tc.status, tc.reason, err, IsAuthError(err), isClockSkew(err))
 			}
-			if !tc.wantAuth && !errors.Is(err, ErrRequestRejected) {
+			var rejected *rejectedError
+			if !tc.wantAuth && !errors.As(err, &rejected) {
 				t.Fatalf("error = %v, want a request rejection", err)
 			}
 			if tc.wantClock && !strings.Contains(err.Error(), "check the device clock") {
@@ -59,7 +65,7 @@ func TestEnsureKeepsTheProviderWhenTheClockIsOff(t *testing.T) {
 	homeDir := setupEnsureFetchFailure(t, http.StatusForbidden, "timestamp_expired")
 
 	_, err := Ensure(defaultProviderDir, homeDir, true)
-	if IsAuthError(err) || !IsClockSkew(err) {
+	if IsAuthError(err) || !isClockSkew(err) {
 		t.Fatalf("Ensure() error = %v, want a clock rejection", err)
 	}
 	if !oixdns.IsEnsured() {
@@ -72,7 +78,7 @@ func TestComposeProfileSurvivesTheClockBeingOff(t *testing.T) {
 	panel.status.Store(http.StatusForbidden)
 	panel.rejection.Store("timestamp_expired")
 
-	if _, err := ComposeProfile([]byte(testOverlay)); IsAuthError(err) || !IsClockSkew(err) {
+	if _, err := ComposeProfile([]byte(testOverlay)); IsAuthError(err) || !isClockSkew(err) {
 		t.Fatalf("no saved copy: error = %v, want a clock rejection", err)
 	}
 
@@ -81,11 +87,13 @@ func TestComposeProfileSurvivesTheClockBeingOff(t *testing.T) {
 		t.Fatal(err)
 	}
 	ageProfile(t, homeDir)
+	oixdns.ClearEnsured()
 	panel.status.Store(http.StatusForbidden)
-	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
+	composed, err := ComposeProfile([]byte(testOverlay))
+	if err != nil || !strings.Contains(string(composed), "node-a") {
 		t.Fatalf("saved copy: error = %v, want the saved copy", err)
 	}
 	if !oixdns.IsEnsured() {
-		t.Fatal("managed node DNS was switched off because of the clock")
+		t.Fatal("the saved copy must restore managed node DNS")
 	}
 }

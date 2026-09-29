@@ -12,7 +12,8 @@ import (
 	"testing"
 )
 
-func setupPanelTest(t *testing.T, handler http.Handler) *httptest.Server {
+// servePanelForTest points every panel request at handler.
+func servePanelForTest(t *testing.T, handler http.Handler) *httptest.Server {
 	t.Helper()
 	server := httptest.NewTLSServer(handler)
 	t.Cleanup(server.Close)
@@ -20,8 +21,13 @@ func setupPanelTest(t *testing.T, handler http.Handler) *httptest.Server {
 	oldAPIDomains, oldSpareDomain := ApiDomains, SpareApiDomain
 	ApiDomains, SpareApiDomain = server.URL, ""
 	t.Cleanup(func() { ApiDomains, SpareApiDomain = oldAPIDomains, oldSpareDomain })
-	setClientForTest(t, "oixclash")
 	return server
+}
+
+func setupPanelTest(t *testing.T, handler http.Handler) *httptest.Server {
+	t.Helper()
+	setClientForTest(t, "oixclash")
+	return servePanelForTest(t, handler)
 }
 
 func writePanelJSON(w http.ResponseWriter, body any) {
@@ -71,10 +77,10 @@ func TestLoginWithPasswordSignsInAsTheClient(t *testing.T) {
 	}))
 
 	status, out := runCLI(t, "login", map[string]string{"email": " user@example.com ", "password": "p@ss word"})
-	if status != ExitOK || out.Token != "signed-in" {
+	if status != exitOK || out.Token != "signed-in" {
 		t.Fatalf("login = %d %+v", status, out)
 	}
-	want := Account{Plan: "Pro", PlanTime: "2026-12-31 00:00:00", PlanRank: 20, Used: "1.5 GB", Traffic: "100 GB", Unused: "98.5 GB", TodayUsed: "0", TokenClient: "oixclash"}
+	want := accountInfo{Plan: "Pro", PlanTime: "2026-12-31 00:00:00", PlanRank: 20, Used: "1.5 GB", Traffic: "100 GB", Unused: "98.5 GB", TodayUsed: "0", TokenClient: "oixclash"}
 	if out.Account == nil || *out.Account != want {
 		t.Fatalf("account = %+v, want %+v", out.Account, want)
 	}
@@ -89,20 +95,20 @@ func TestLoginReportsThePanelVerdict(t *testing.T) {
 		wantErr    error
 		wantMsg    string
 	}{
-		{"wrong password", map[string]any{"ret": 403, "msg": "邮箱或者密码错误"}, ExitRejected, "rejected", ErrAuthFailed, "邮箱或者密码错误"},
-		{"invalid input", map[string]any{"ret": "400", "msg": "邮箱格式不正确"}, ExitRejected, "rejected", nil, "邮箱格式不正确"},
-		{"throttled", map[string]any{"ret": 429, "msg": "请稍后再试"}, ExitThrottled, "rate_limited", ErrRateLimited, "请稍后再试"},
-		{"locked with retry", map[string]any{"ret": 403, "msg": "10 分钟后再试", "data": map[string]any{"retry_after": 600}}, ExitThrottled, "rate_limited", ErrRateLimited, "10 分钟后再试"},
-		{"server failure", map[string]any{"ret": 500, "msg": "internal"}, ExitFailed, "server", ErrPanelServer, "the oixCloud panel failed to answer"},
+		{"wrong password", map[string]any{"ret": 403, "msg": "邮箱或者密码错误"}, exitRejected, "rejected", ErrAuthFailed, "邮箱或者密码错误"},
+		{"invalid input", map[string]any{"ret": "400", "msg": "邮箱格式不正确"}, exitRejected, "rejected", nil, "邮箱格式不正确"},
+		{"throttled", map[string]any{"ret": 429, "msg": "请稍后再试"}, exitThrottled, "rate_limited", errRateLimited, "请稍后再试"},
+		{"locked with retry", map[string]any{"ret": 403, "msg": "10 分钟后再试", "data": map[string]any{"retry_after": 600}}, exitThrottled, "rate_limited", errRateLimited, "10 分钟后再试"},
+		{"server failure", map[string]any{"ret": 500, "msg": "internal"}, exitFailed, "server", errPanelServer, "the oixCloud panel failed to answer"},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
 			setupPanelTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 				writePanelJSON(w, tc.body)
 			}))
-			_, _, err := LoginWithPassword(context.Background(), "user@example.com", "secret")
+			_, _, err := loginWithPassword(context.Background(), "user@example.com", "secret")
 			if err == nil || (tc.wantErr != nil && !errors.Is(err, tc.wantErr)) {
-				t.Fatalf("LoginWithPassword error = %v, want %v", err, tc.wantErr)
+				t.Fatalf("loginWithPassword error = %v, want %v", err, tc.wantErr)
 			}
 			status, out := runCLI(t, "login", map[string]string{"email": "user@example.com", "password": "secret"})
 			if status != tc.wantStatus || out.Code != tc.wantCode || out.Error != tc.wantMsg || out.Token != "" {
@@ -120,7 +126,8 @@ func TestAccountRequestsTryTheSpareDomainOnlyWithoutAnAnswer(t *testing.T) {
 	}))
 	t.Cleanup(spare.Close)
 
-	for _, primaryStatus := range []int{http.StatusBadGateway, http.StatusOK} {
+	// the panel always answers HTTP 200; a 403 page comes from a CDN or a portal
+	for _, primaryStatus := range []int{http.StatusBadGateway, http.StatusForbidden, http.StatusOK} {
 		spareRequests.Store(0)
 		setupPanelTest(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 			if primaryStatus != http.StatusOK {
@@ -132,7 +139,7 @@ func TestAccountRequestsTryTheSpareDomainOnlyWithoutAnAnswer(t *testing.T) {
 		// Both test servers trust the same httptest certificate.
 		SpareApiDomain = spare.URL
 
-		token, _, err := LoginWithPassword(context.Background(), "user@example.com", "secret")
+		token, _, err := loginWithPassword(context.Background(), "user@example.com", "secret")
 		if primaryStatus == http.StatusOK {
 			if err == nil || spareRequests.Load() != 0 {
 				t.Fatalf("a JSON verdict must be final: token=%q err=%v spare=%d", token, err, spareRequests.Load())
@@ -178,7 +185,7 @@ func TestAccountTakesOverTokensOfOtherClients(t *testing.T) {
 			}))
 
 			status, out := runCLI(t, "account", map[string]string{"token": " Bearer pasted "})
-			if status != ExitOK || out.Token != tc.wantToken || out.Rebound != tc.wantRebound || rebinds.Load() != tc.wantRebinds {
+			if status != exitOK || out.Token != tc.wantToken || out.Rebound != tc.wantRebound || rebinds.Load() != tc.wantRebinds {
 				t.Fatalf("account = %d %+v, rebinds %d", status, out, rebinds.Load())
 			}
 			if out.Account == nil || out.Account.Plan != "Pro" {
@@ -193,7 +200,7 @@ func TestAccountRejectsAnInvalidToken(t *testing.T) {
 		writePanelJSON(w, map[string]any{"ret": 401, "msg": "登录已失效"})
 	}))
 	status, out := runCLI(t, "account", map[string]string{"token": "expired"})
-	if status != ExitRejected || out.Code != "rejected" || out.Error != "登录已失效" || out.Token != "" {
+	if status != exitRejected || out.Code != "rejected" || out.Error != "登录已失效" || out.Token != "" {
 		t.Fatalf("account = %d %+v", status, out)
 	}
 }
@@ -204,7 +211,7 @@ func TestCLIKeepsThePanelAddressOutOfErrors(t *testing.T) {
 	server.Close()
 
 	status, out := runCLI(t, "account", map[string]string{"token": "token"})
-	if status != ExitFailed || out.Code != "network" {
+	if status != exitFailed || out.Code != "network" {
 		t.Fatalf("account = %d %+v", status, out)
 	}
 	host := address[:strings.LastIndex(address, ":")]
@@ -225,13 +232,25 @@ func TestCLIValidatesTheRequest(t *testing.T) {
 		{[]string{"login"}, `{"email":"user@example.com"}`},
 		{[]string{"account"}, `{"token":"  "}`},
 	}
+	t.Setenv("OIX_CLIENT", "")
 	for _, tc := range cases {
 		var stdout bytes.Buffer
 		status := CLI(tc.args, strings.NewReader(tc.input), &stdout)
 		var out cliOutput
-		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || status != ExitFailed || out.Code != "usage" {
+		if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || status != exitFailed || out.Code != "usage" {
 			t.Fatalf("CLI(%v, %q) = %d %q", tc.args, tc.input, status, stdout.String())
 		}
+	}
+}
+
+func TestCLIRefusesAnUnknownClient(t *testing.T) {
+	setClientForTest(t, "")
+	t.Setenv("OIX_CLIENT", "oixclsah")
+	var stdout bytes.Buffer
+	status := CLI([]string{"account"}, strings.NewReader(`{"token":"t"}`), &stdout)
+	var out cliOutput
+	if err := json.Unmarshal(stdout.Bytes(), &out); err != nil || status != exitFailed || out.Code != "usage" {
+		t.Fatalf("CLI = %d %q, want a usage error instead of signing in as OpenClash", status, stdout.String())
 	}
 }
 
@@ -247,18 +266,18 @@ func TestCLIPrintsLinesForShells(t *testing.T) {
 	var stdout bytes.Buffer
 	status := CLI([]string{"login", "-format", "lines"}, strings.NewReader(`{"email":"a@b.c","password":"x"}`), &stdout)
 	want := "token=signed-in\nplan=Pro Plus\nplan_rank=20\n"
-	if status != ExitOK || stdout.String() != want {
+	if status != exitOK || stdout.String() != want {
 		t.Fatalf("lines = %d %q, want %q", status, stdout.String(), want)
 	}
 
 	stdout.Reset()
 	status = CLI([]string{"account", "-format=lines"}, strings.NewReader(`{"token":"t"}`), &stdout)
-	if status != ExitRejected || stdout.String() != "code=rejected\nerror=密码 错误\n" {
+	if status != exitRejected || stdout.String() != "code=rejected\nerror=密码 错误\n" {
 		t.Fatalf("lines = %d %q", status, stdout.String())
 	}
 
 	stdout.Reset()
-	if status := CLI([]string{"login", "-format", "xml"}, strings.NewReader(`{}`), &stdout); status != ExitFailed || !strings.Contains(stdout.String(), `"code":"usage"`) {
+	if status := CLI([]string{"login", "-format", "xml"}, strings.NewReader(`{}`), &stdout); status != exitFailed || !strings.Contains(stdout.String(), `"code":"usage"`) {
 		t.Fatalf("bad format = %d %q", status, stdout.String())
 	}
 }

@@ -7,6 +7,7 @@ import (
 	"flag"
 	"fmt"
 	"io"
+	"os"
 	"strconv"
 	"strings"
 )
@@ -15,10 +16,10 @@ import (
 // Merlin plugin: one JSON object on stdin, one on stdout, and an exit status to
 // branch on. Credentials stay out of argv and the environment.
 const (
-	ExitOK        = 0
-	ExitFailed    = 1 // network, server or usage
-	ExitRejected  = 2 // the panel refused the credentials or the token
-	ExitThrottled = 3
+	exitOK        = 0
+	exitFailed    = 1 // network, server or usage
+	exitRejected  = 2 // the panel refused the credentials or the token
+	exitThrottled = 3
 )
 
 type cliInput struct {
@@ -28,11 +29,11 @@ type cliInput struct {
 }
 
 type cliOutput struct {
-	Token   string   `json:"token,omitempty"`
-	Rebound bool     `json:"rebound,omitempty"`
-	Account *Account `json:"account,omitempty"`
-	Code    string   `json:"code,omitempty"`
-	Error   string   `json:"error,omitempty"`
+	Token   string       `json:"token,omitempty"`
+	Rebound bool         `json:"rebound,omitempty"`
+	Account *accountInfo `json:"account,omitempty"`
+	Code    string       `json:"code,omitempty"`
+	Error   string       `json:"error,omitempty"`
 }
 
 func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
@@ -47,7 +48,7 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 	usage := cliOutput{Code: "usage", Error: "usage: mihomo oix login|account [-format json|lines] < request.json"}
 	if len(args) == 0 || (args[0] != "login" && args[0] != "account") {
 		write(usage)
-		return ExitFailed
+		return exitFailed
 	}
 	flags := flag.NewFlagSet("oix "+args[0], flag.ContinueOnError)
 	flags.SetOutput(io.Discard)
@@ -55,12 +56,19 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 	if err := flags.Parse(args[1:]); err != nil || flags.NArg() != 0 || (format != "json" && format != "lines") {
 		format = "json"
 		write(usage)
-		return ExitFailed
+		return exitFailed
+	}
+	// the flags that validate it for the core are not parsed for subcommands
+	if id := os.Getenv("OIX_CLIENT"); id != "" {
+		if err := SetClient(id); err != nil {
+			write(cliOutput{Code: "usage", Error: err.Error()})
+			return exitFailed
+		}
 	}
 	var in cliInput
 	if err := json.NewDecoder(io.LimitReader(stdin, 64<<10)).Decode(&in); err != nil {
 		write(cliOutput{Code: "usage", Error: "request must be a JSON object"})
-		return ExitFailed
+		return exitFailed
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), totalTimeout)
@@ -71,14 +79,14 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 	case "login":
 		if strings.TrimSpace(in.Email) == "" || in.Password == "" {
 			write(cliOutput{Code: "usage", Error: "email and password are required"})
-			return ExitFailed
+			return exitFailed
 		}
-		out.Token, out.Account, err = LoginWithPassword(ctx, in.Email, in.Password)
+		out.Token, out.Account, err = loginWithPassword(ctx, in.Email, in.Password)
 	case "account":
 		token := normalizeToken(in.Token)
 		if token == "" {
 			write(cliOutput{Code: "usage", Error: "token is required"})
-			return ExitFailed
+			return exitFailed
 		}
 		out.Token, out.Rebound, out.Account, err = ownAccount(ctx, token)
 	}
@@ -88,14 +96,14 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 		return status
 	}
 	write(out)
-	return ExitOK
+	return exitOK
 }
 
 // ownAccount checks a token and, like the other official clients, trades one
 // signed in by another client for this client's own, so node filters stay
 // per client. Website tokens cannot be traded and keep working as they are.
-func ownAccount(ctx context.Context, token string) (string, bool, *Account, error) {
-	account, err := Information(ctx, token)
+func ownAccount(ctx context.Context, token string) (string, bool, *accountInfo, error) {
+	account, err := accountInformation(ctx, token)
 	if err != nil {
 		return "", false, nil, err
 	}
@@ -103,7 +111,7 @@ func ownAccount(ctx context.Context, token string) (string, bool, *Account, erro
 	if account.TokenClient == "" || account.TokenClient == client {
 		return token, false, account, nil
 	}
-	rebound, err := Rebind(ctx, token)
+	rebound, err := rebindToken(ctx, token)
 	if err != nil {
 		return token, false, account, nil
 	}
@@ -113,20 +121,20 @@ func ownAccount(ctx context.Context, token string) (string, bool, *Account, erro
 
 // Transport errors are reduced to a code: their text carries the panel's address.
 func describeCLIError(err error) (code string, status int, message string) {
-	var panelErr *PanelError
+	var panelErr *panelError
 	switch {
-	case errors.Is(err, ErrRateLimited):
-		code, status = "rate_limited", ExitThrottled
+	case errors.Is(err, errRateLimited):
+		code, status = "rate_limited", exitThrottled
 	case errors.As(err, &panelErr), errors.Is(err, ErrAuthFailed):
-		code, status = "rejected", ExitRejected
-	case errors.Is(err, ErrPanelServer):
-		return "server", ExitFailed, "the oixCloud panel failed to answer"
+		code, status = "rejected", exitRejected
+	case errors.Is(err, errPanelServer):
+		return "server", exitFailed, "the oixCloud panel failed to answer"
 	case errors.Is(err, ErrNoDomains):
-		return "unavailable", ExitFailed, "this build has no oixCloud panel configured"
+		return "unavailable", exitFailed, "this build has no oixCloud panel configured"
 	case errors.Is(err, context.DeadlineExceeded):
-		return "timeout", ExitFailed, "timed out reaching the oixCloud panel"
+		return "timeout", exitFailed, "timed out reaching the oixCloud panel"
 	default:
-		return "network", ExitFailed, "cannot reach the oixCloud panel"
+		return "network", exitFailed, "cannot reach the oixCloud panel"
 	}
 	if panelErr != nil && panelErr.Msg != "" {
 		return code, status, panelErr.Msg
