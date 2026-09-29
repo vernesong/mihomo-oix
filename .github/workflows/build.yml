@@ -45,6 +45,9 @@ jobs:
           - { goos: linux, goarch: arm, goarm: '5', output: armv5 }
           - { goos: linux, goarch: arm, goarm: '6', output: armv6, debian: armel, rpm: armv6hl} 
           - { goos: linux, goarch: arm, goarm: '7', output: armv7, debian: armhf, rpm: armv7hl, pacman: armv7hl}
+          # Router builds for the Asus Merlin plugin: no TUN stack, smaller relay buffers
+          - { goos: linux, goarch: arm, goarm: '7', output: armv7-router, tags: with_low_memory }
+          - { goos: linux, goarch: arm64, output: arm64-router, tags: with_low_memory }
           - { goos: linux, goarch: mips, gomips: hardfloat, output: mips-hardfloat }
           - { goos: linux, goarch: mips, gomips: softfloat, output: mips-softfloat }
           - { goos: linux, goarch: mipsle, gomips: hardfloat, output: mipsle-hardfloat }
@@ -219,7 +222,7 @@ jobs:
         GOMIPS: ${{matrix.jobs.gomips}}
       run: |
         go env
-        go build -v -buildvcs=false -tags "with_gvisor" -trimpath -ldflags "\
+        go build -v -buildvcs=false -tags "${{ matrix.jobs.tags || 'with_gvisor' }}" -trimpath -ldflags "\
           ${BUILDTAG} \
           -X 'github.com/metacubex/mihomo/constant.Version=${VERSION}' \
           -X 'github.com/metacubex/mihomo/constant.BuildTime=${BUILDTIME}' \

@@ -82,6 +82,12 @@ ten minutes is reused, an unreachable panel falls back to the saved copy, and a 
 every `OIX_UPDATE_INTERVAL` seconds (a day by default) and reloaded when it changed. No managed provider is added in
 this mode.
 
+### Router builds
+
+Releases also carry `linux-armv7-router` and `linux-arm64-router` builds for the Asus Merlin plugin. They leave out the
+gVisor TUN stack, which the plugin never uses, and build with `with_low_memory` for half-size relay buffers: the armv7
+binary drops from about 57 MB to 48 MB, which the router keeps in RAM.
+
 ### Sign-in from scripts
 
 `mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout (or `key=value`
