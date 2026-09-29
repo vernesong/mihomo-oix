@@ -181,6 +181,51 @@ func IsAuthError(err error) bool {
 	return errors.Is(err, ErrAuthFailed)
 }
 
+var ErrRequestRejected = errors.New("managed request rejected")
+
+// RejectedError is a managed config refusal about the request itself, such as
+// a timestamp outside the panel's window after a cold boot. The token may be
+// fine, so callers retry and keep what they have instead of signing out.
+type RejectedError struct {
+	Reason string
+}
+
+func (e *RejectedError) Error() string {
+	if IsClockSkew(e) {
+		return fmt.Sprintf("managed request rejected: %s (check the device clock)", e.Reason)
+	}
+	return "managed request rejected: " + e.Reason
+}
+
+func (e *RejectedError) Unwrap() error { return ErrRequestRejected }
+
+func IsClockSkew(err error) bool {
+	var rejected *RejectedError
+	return errors.As(err, &rejected) && strings.HasPrefix(rejected.Reason, "timestamp_")
+}
+
+// Reasons the panel sends in X-Managed-Auth-Error for a request it could not
+// accept whatever the token; dedicated_token_required is about the token.
+var requestRejections = map[string]bool{
+	"timestamp_missing":   true,
+	"timestamp_invalid":   true,
+	"timestamp_expired":   true,
+	"signature_missing":   true,
+	"signature_mismatch":  true,
+	"age_pubkey_missing":  true,
+	"age_pubkey_invalid":  true,
+	"server_unconfigured": true,
+}
+
+func managedStatusError(resp *http.Response) error {
+	if resp.StatusCode == http.StatusForbidden {
+		if reason := strings.TrimSpace(resp.Header.Get("X-Managed-Auth-Error")); requestRejections[reason] {
+			return &RejectedError{Reason: reason}
+		}
+	}
+	return oixStatusError(resp.StatusCode)
+}
+
 func IsConfigError(err error) bool {
 	return errors.Is(err, ErrNoToken) || errors.Is(err, ErrNoDomains)
 }
@@ -685,7 +730,7 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
-		return nil, oixStatusError(resp.StatusCode)
+		return nil, managedStatusError(resp)
 	}
 
 	var apiResp apiResponse

@@ -54,6 +54,11 @@ the new subscription has been fetched and saved successfully. `POST /oix/logout`
 automatic subscription updates; an `OIX_TOKEN` environment value is not reused until the next process start or an
 explicit login.
 
+A 403 whose `X-Managed-Auth-Error` concerns the request rather than the token (a timestamp outside the panel's
+window, a signature or key problem, an unconfigured panel) does not count as a failed sign-in: the managed nodes and
+the saved profile stay in use and the next update retries. A router that starts before NTP has synced therefore
+recovers by itself; the error says to check the device clock.
+
 Node selection happens on the oixCloud side. The managed subscription is always requested with `nodes=auto` and no
 other options: the panel applies the Node Filter saved for this client on the oixCloud website, or Smart Selection
 when no filter is set. Change which nodes are delivered there; the core has no local node options.

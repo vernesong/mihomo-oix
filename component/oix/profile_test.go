@@ -47,14 +47,18 @@ dns:
 `
 
 type profilePanel struct {
-	requests atomic.Int32
-	status   atomic.Int32
-	content  atomic.Value
+	requests  atomic.Int32
+	status    atomic.Int32
+	rejection atomic.Value
+	content   atomic.Value
 }
 
 func (p *profilePanel) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	p.requests.Add(1)
 	if status := int(p.status.Load()); status != http.StatusOK {
+		if reason, _ := p.rejection.Load().(string); reason != "" {
+			w.Header().Set("X-Managed-Auth-Error", reason)
+		}
 		w.WriteHeader(status)
 		return
 	}
