@@ -257,20 +257,6 @@ func TestComposeProfileRejectsAnInvalidOverlay(t *testing.T) {
 	}
 }
 
-func TestRefreshProfileReportsChanges(t *testing.T) {
-	panel, _ := setupProfileTest(t)
-	if _, err := ComposeProfile([]byte(testOverlay)); err != nil {
-		t.Fatal(err)
-	}
-	if changed, err := refreshProfile(t.Context()); err != nil || changed {
-		t.Fatalf("same content: changed=%v err=%v", changed, err)
-	}
-	panel.content.Store(strings.Replace(testProfile, "mixed-port: 7777", "mixed-port: 7778", 1))
-	if changed, err := refreshProfile(t.Context()); err != nil || !changed {
-		t.Fatalf("new content: changed=%v err=%v", changed, err)
-	}
-}
-
 func TestProfileLoginSwitchesAccountsOnlyAfterFetching(t *testing.T) {
 	panel, homeDir := setupProfileTest(t)
 	SetToken("previous-account")

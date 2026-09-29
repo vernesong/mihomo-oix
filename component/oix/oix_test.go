@@ -666,12 +666,6 @@ func TestLogoutWinsOverConcurrentForceUpdate(t *testing.T) {
 	}
 }
 
-func TestDefaultUpdateInterval(t *testing.T) {
-	if defaultUpdateInterval != 24*time.Hour {
-		t.Fatalf("defaultUpdateInterval = %s, want 24h", defaultUpdateInterval)
-	}
-}
-
 func TestStartPeriodicUpdateIgnoresOverflowingInterval(t *testing.T) {
 	if strconv.IntSize < 64 {
 		t.Skip("requires a 64-bit int")

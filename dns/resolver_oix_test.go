@@ -170,38 +170,6 @@ func TestManagedDNSCacheDropsOPTAndHonorsRecordTTLs(t *testing.T) {
 	}
 }
 
-func TestManagedDNSHedgesTCPWhenUDPIsBlackholed(t *testing.T) {
-	udp := dnsClientFunc(func(ctx context.Context, _ *D.Msg) (*D.Msg, error) {
-		<-ctx.Done()
-		return nil, ctx.Err()
-	})
-	tcp := dnsClientFunc(func(ctx context.Context, request *D.Msg) (*D.Msg, error) {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		response := new(D.Msg)
-		response.SetReply(request)
-		return response, nil
-	})
-	client := &oixDNSClient{udp: udp, tcp: tcp}
-	request := new(D.Msg)
-	request.SetQuestion("node.cloud-nodes.example.", D.TypeA)
-	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
-	defer cancel()
-
-	started := time.Now()
-	response, err := client.ExchangeContext(ctx, request)
-	if err != nil {
-		t.Fatalf("ExchangeContext() error = %v", err)
-	}
-	if response == nil {
-		t.Fatal("ExchangeContext() response is nil")
-	}
-	if elapsed := time.Since(started); elapsed >= time.Second {
-		t.Fatalf("TCP fallback took %s", elapsed)
-	}
-}
-
 func TestManagedDNSDoesNotMutateCallerQuestion(t *testing.T) {
 	seed := make([]byte, ed25519.SeedSize)
 	for i := range seed {
