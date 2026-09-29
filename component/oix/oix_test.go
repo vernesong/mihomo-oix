@@ -951,7 +951,7 @@ func (rt rewriteTransport) RoundTrip(req *http.Request) (*http.Response, error) 
 	return http.DefaultTransport.RoundTrip(clone)
 }
 
-func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
+func setupEnsureFetchFailure(t *testing.T, status int, rejection ...string) (homeDir string) {
 	t.Helper()
 	homeDir = t.TempDir()
 	secretKey, publicKey, err := A.GenX25519KeyPair()
@@ -983,6 +983,9 @@ func setupEnsureFetchFailure(t *testing.T, status int) (homeDir string) {
 	})
 
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		if len(rejection) > 0 {
+			w.Header().Set("X-Managed-Auth-Error", rejection[0])
+		}
 		w.WriteHeader(status)
 	}))
 	t.Cleanup(server.Close)
