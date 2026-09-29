@@ -966,7 +966,7 @@ func parseProxies(cfg *RawConfig) (proxies map[string]C.Proxy, providersMap map[
 	var AllProviders []string
 	oix.LoadPersistedToken(C.Path.HomeDir())
 	managedProviderName := ""
-	if oix.HasToken() {
+	if oix.HasToken() && !oix.ProfileMode() {
 		managedProviderName = oix.ProviderFile()
 		if managedProviderName == provider.ReservedName {
 			return nil, nil, fmt.Errorf("can not use reserved provider name `%s` for OIX", managedProviderName)

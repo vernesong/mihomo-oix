@@ -36,6 +36,13 @@ func TestLegacySubcommandClassification(t *testing.T) {
 			wantOK:   true,
 		},
 		{
+			name:     "oix account",
+			args:     []string{"mihomo", "oix", "login"},
+			wantName: "oix",
+			wantRest: []string{"login"},
+			wantOK:   true,
+		},
+		{
 			name:   "main flags",
 			args:   []string{"mihomo", "-v"},
 			wantOK: false,

@@ -61,6 +61,30 @@ when no filter is set. Change which nodes are delivered there; the core has no l
 Request options were removed. The `OIX_PARAMS` environment variable and the `.oix_params` and `.oix_default_params`
 files left by earlier versions are ignored, and `GET|PUT|DELETE /oix/options` no longer exist (`404 Not Found`).
 
+### Client identity
+
+Every panel request declares the client in `X-oixCloud-Client`, and the panel issues one sign-in token per client and
+account, with its own Node Filter. OpenClash builds send `openclash`, the default. The Asus Merlin plugin sets
+`OIX_CLIENT=oixclash` or `-oix-client oixclash`; any other value is refused at startup.
+
+### Profile mode
+
+With `OIX_PROFILE=1` or `-oix-profile`, the managed config is the whole configuration, as in FlClash: proxies, groups,
+rules and DNS come from the panel, and the `-f` config file only overrides it. Mappings are merged key by key and other
+values replace the managed ones, so a local `dns` can change the listener and keep the panel's nameservers. The managed
+config is saved age-encrypted as `.oix_profile` in the home directory and decrypted in memory only. A copy younger than
+ten minutes is reused, an unreachable panel falls back to the saved copy, and a refused token is final. It is refreshed
+every `OIX_UPDATE_INTERVAL` seconds (a day by default) and reloaded when it changed. No managed provider is added in
+this mode.
+
+### Sign-in from scripts
+
+`mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout, so credentials
+stay out of the process list. `login` takes `{"email","password"}` and returns this client's token; `account` takes
+`{"token"}`, returns the plan and traffic, and trades a token signed in by another official client for this client's
+own, as the other clients do. The exit status is 0 on success, 2 when the panel refused the credentials or the token,
+3 when it asked to wait, and 1 otherwise; errors carry a `code`, and network failures never include the panel address.
+
 ## Dashboard
 
 A web dashboard with first-class support for this project has been created; it can be checked out at [metacubexd](https://github.com/MetaCubeX/metacubexd).

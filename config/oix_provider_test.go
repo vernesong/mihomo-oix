@@ -135,3 +135,22 @@ func TestParseProxiesAppliesOIXDefaultsBeforeValidation(t *testing.T) {
 		t.Fatal("parsing mutated the original provider configuration")
 	}
 }
+
+func TestParseProxiesLeavesProfileNodesToTheManagedConfig(t *testing.T) {
+	oldToken := oix.CurrentToken()
+	oix.SetToken("test-token")
+	oix.SetProfileMode(true)
+	t.Setenv("OIX_TOKEN", "")
+	t.Cleanup(func() {
+		oix.SetProfileMode(false)
+		oix.SetToken(oldToken)
+	})
+
+	_, providers, err := parseProxies(DefaultRawConfig())
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, ok := providers[oix.ProviderFile()]; ok {
+		t.Fatal("profile mode added the managed provider; the profile already carries the nodes")
+	}
+}

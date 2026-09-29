@@ -128,13 +128,48 @@ const (
 	managedConfigQuery = "nodes=auto"
 )
 
-const oixUserAgent = "OpenClash for oixCloud"
-
 // The panel tells official clients apart by this header, not by the User-Agent.
-const (
-	oixClientHeader = "X-oixCloud-Client"
-	oixClientID     = "openclash"
+const oixClientHeader = "X-oixCloud-Client"
+
+// Clients that ship this core, keyed by the ID the panel knows them by. A panel that does not
+// know the header falls back to the first legacy name in the User-Agent, so a new client's
+// User-Agent must not contain "oixCloud", which is the iOS app's name there.
+var oixClients = map[string]string{
+	"openclash": "OpenClash for oixCloud",
+	"oixclash":  "oixClash",
+}
+
+const defaultClientID = "openclash"
+
+var (
+	clientMu sync.RWMutex
+	clientID string
 )
+
+func SetClient(id string) error {
+	id = strings.ToLower(strings.TrimSpace(id))
+	if _, ok := oixClients[id]; !ok {
+		return fmt.Errorf("unknown oixCloud client %q", id)
+	}
+	clientMu.Lock()
+	clientID = id
+	clientMu.Unlock()
+	return nil
+}
+
+// currentClient falls back to OIX_CLIENT, then to OpenClash, whose builds never set either.
+func currentClient() (id, userAgent string) {
+	clientMu.RLock()
+	id = clientID
+	clientMu.RUnlock()
+	if id == "" {
+		id = strings.ToLower(strings.TrimSpace(os.Getenv("OIX_CLIENT")))
+	}
+	if _, ok := oixClients[id]; !ok {
+		id = defaultClientID
+	}
+	return id, oixClients[id]
+}
 
 type apiResponse struct {
 	Ret    int    `json:"ret"`
@@ -332,14 +367,18 @@ func ensureFromDisk(dir, homeDir string) {
 
 const defaultUpdateInterval = 24 * time.Hour
 
-func StartPeriodicUpdate(dir, homeDir string) {
-	interval := defaultUpdateInterval
+func updateInterval() time.Duration {
 	if s := os.Getenv("OIX_UPDATE_INTERVAL"); s != "" {
 		const maxIntervalSeconds = int64(^uint64(0)>>1) / int64(time.Second)
 		if seconds, err := strconv.ParseInt(s, 10, 64); err == nil && seconds > 0 && seconds <= maxIntervalSeconds {
-			interval = time.Duration(seconds) * time.Second
+			return time.Duration(seconds) * time.Second
 		}
 	}
+	return defaultUpdateInterval
+}
+
+func StartPeriodicUpdate(dir, homeDir string) {
+	interval := updateInterval()
 
 	ctx, cancel := context.WithCancel(context.Background())
 	done := make(chan struct{})
@@ -477,6 +516,9 @@ func Login(token string) (bool, error) {
 	if token == "" {
 		return false, ErrNoToken
 	}
+	if ProfileMode() {
+		return loginProfile(token)
+	}
 	dir, homeDir := providerPaths()
 	if dir == "" {
 		return false, errors.New("oix provider not initialized")
@@ -519,6 +561,7 @@ func Logout() {
 	loggedOut = true
 	tokenMu.Unlock()
 	StopPeriodicUpdate()
+	removeProfile()
 	dir, homeDir := providerPaths()
 	providerUpdateMu.Lock()
 	defer providerUpdateMu.Unlock()
@@ -627,8 +670,9 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 	if err != nil {
 		return nil, fmt.Errorf("create request: %w", mihomoHttp.RedactError(err))
 	}
-	req.Header.Set("User-Agent", oixUserAgent)
-	req.Header.Set(oixClientHeader, oixClientID)
+	client, userAgent := currentClient()
+	req.Header.Set("User-Agent", userAgent)
+	req.Header.Set(oixClientHeader, client)
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)
 	req.Header.Set("X-Flclash-Signature", sig)
