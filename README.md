@@ -86,6 +86,16 @@ falls back to that token's saved copy, and a refused token is final. It is refre
 seconds (a day by default) and reloaded when it changed; updates and account changes reload one at a time. After
 `POST /oix/logout` the `-f` config runs alone. No managed provider is added in this mode.
 
+### Account rules
+
+`mihomo oix rules` reads the signed-in account's custom rules; `mihomo oix save-rules` updates the same text used by
+`/user/rule`. Both use Bearer-authenticated panel APIs (`POST /api/v1/rules` and `/api/v1/rules/save`). Pass the token
+through `OIX_TOKEN` or stdin JSON. Saving requires `rules_base64` and the `revision` returned by the read, so an older
+editor cannot overwrite a newer website edit. JSON output includes `rules`; `-format lines` emits `rules_base64` and
+`revision`. The router editor supports 8192 UTF-8 bytes; larger account rules must be edited on the website and are
+never truncated. Account rules are inserted by the panel before its default rules, then distributed to all clients
+using those subscriptions. Saving does not by itself reload a running core; the front end must refresh the profile.
+
 ### Router builds
 
 Releases also carry `linux-armv7-router` and `linux-arm64-router` builds for the Asus Merlin plugin. They leave out the

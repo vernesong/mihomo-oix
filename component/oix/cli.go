@@ -12,9 +12,9 @@ import (
 	"strings"
 )
 
-// CLI serves `mihomo oix login|account` for shell front ends such as the Asus
+// CLI serves `mihomo oix login|account|rules|save-rules` for shell front ends such as the Asus
 // Merlin plugin: one JSON object on stdin, one on stdout, and an exit status to
-// branch on. Credentials stay out of argv and the environment.
+// branch on. Passwords stay on stdin; rule commands also accept OIX_TOKEN.
 const (
 	exitOK        = 0
 	exitFailed    = 1 // network, server or usage
@@ -23,13 +23,16 @@ const (
 )
 
 type cliInput struct {
-	Email    string `json:"email"`
-	Password string `json:"password"`
-	Token    string `json:"token"`
+	Email       string  `json:"email"`
+	Password    string  `json:"password"`
+	Token       string  `json:"token"`
+	RulesBase64 *string `json:"rules_base64"`
+	Revision    string  `json:"revision"`
 }
 
 type cliOutput struct {
 	Token   string       `json:"token,omitempty"`
+	Rules   *ruleState   `json:"rules,omitempty"`
 	Rebound bool         `json:"rebound,omitempty"`
 	Account *accountInfo `json:"account,omitempty"`
 	Code    string       `json:"code,omitempty"`
@@ -45,8 +48,8 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 		}
 		_ = json.NewEncoder(stdout).Encode(out)
 	}
-	usage := cliOutput{Code: "usage", Error: "usage: mihomo oix login|account [-format json|lines] < request.json"}
-	if len(args) == 0 || (args[0] != "login" && args[0] != "account") {
+	usage := cliOutput{Code: "usage", Error: "usage: mihomo oix login|account|rules|save-rules [-format json|lines] < request.json"}
+	if len(args) == 0 || (args[0] != "login" && args[0] != "account" && args[0] != "rules" && args[0] != "save-rules") {
 		write(usage)
 		return exitFailed
 	}
@@ -82,6 +85,20 @@ func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
 			return exitFailed
 		}
 		out.Token, out.Account, err = loginWithPassword(ctx, in.Email, in.Password)
+	case "rules", "save-rules":
+		token := normalizeToken(in.Token)
+		if token == "" {
+			token = normalizeToken(os.Getenv("OIX_TOKEN"))
+		}
+		if token == "" {
+			write(cliOutput{Code: "usage", Error: "token is required"})
+			return exitFailed
+		}
+		if args[0] == "rules" {
+			out.Rules, err = readAccountRules(ctx, token)
+		} else {
+			out.Rules, err = saveAccountRules(ctx, token, in.RulesBase64, in.Revision)
+		}
 	case "account":
 		token := normalizeToken(in.Token)
 		if token == "" {
@@ -123,6 +140,10 @@ func ownAccount(ctx context.Context, token string) (string, bool, *accountInfo, 
 func describeCLIError(err error) (code string, status int, message string) {
 	var panelErr *panelError
 	switch {
+	case errors.Is(err, errRulesInput):
+		return "rules_input", exitFailed, err.Error()
+	case errors.Is(err, errRulesTooLarge):
+		return "rules_too_large", exitFailed, "规则超过路由器可编辑的 8192 字节，请到面板 /user/rule 编辑"
 	case errors.Is(err, errRateLimited):
 		code, status = "rate_limited", exitThrottled
 	case errors.As(err, &panelErr), errors.Is(err, ErrAuthFailed):
@@ -164,6 +185,9 @@ func writeLines(w io.Writer, out cliOutput) {
 		line("unused", a.Unused)
 		line("today_used", a.TodayUsed)
 		line("token_client", a.TokenClient)
+	}
+	if r := out.Rules; r != nil {
+		_, _ = fmt.Fprintf(w, "rules_base64=%s\nrevision=%s\n", r.encoded(), r.Revision)
 	}
 	line("code", out.Code)
 	line("error", out.Error)
