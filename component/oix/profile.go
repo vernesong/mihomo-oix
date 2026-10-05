@@ -169,6 +169,7 @@ func readProfile(path, token string, maxAge time.Duration) ([]byte, bool) {
 func useProfile(plain []byte) {
 	profileDigest = sha256.Sum256(plain)
 	applyManagedDNSConfig(plain)
+	rememberProfileDNS(plain)
 	oixdns.SetEnsured()
 }
 
@@ -296,6 +297,7 @@ func removeProfile() {
 	profileMu.Lock()
 	defer profileMu.Unlock()
 	profileDigest = [sha256.Size]byte{}
+	profileDNS.Store(nil)
 	profileRetry.Store(false)
 	_ = os.Remove(profilePath())
 }
