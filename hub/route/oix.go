@@ -19,7 +19,19 @@ func oixRouter() http.Handler {
 	r := chi.NewRouter()
 	r.Post("/login", oixLogin)
 	r.Post("/logout", oixLogout)
+	r.Get("/profile/dns", oixProfileDNS)
 	return r
+}
+
+func oixProfileDNS(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Cache-Control", "no-store")
+	dns, ok := oix.GetProfileDNS()
+	if !ok {
+		render.Status(r, http.StatusConflict)
+		render.JSON(w, r, newError("managed profile DNS is not available"))
+		return
+	}
+	render.JSON(w, r, dns)
 }
 
 func oixLogin(w http.ResponseWriter, r *http.Request) {
