@@ -2,6 +2,7 @@ package outbound
 
 import (
 	"context"
+	"crypto/sha256"
 	"encoding/base64"
 	"errors"
 	"fmt"
@@ -9,6 +10,7 @@ import (
 	"os"
 	"strconv"
 	"strings"
+	"sync/atomic"
 	"time"
 
 	N "github.com/metacubex/mihomo/common/net"
@@ -23,7 +25,10 @@ import (
 	"github.com/metacubex/mihomo/transport/shadowtls"
 	obfs "github.com/metacubex/mihomo/transport/simple-obfs"
 	"github.com/metacubex/mihomo/transport/snell"
+	quicDialer "github.com/metacubex/mihomo/transport/tuic/common"
 	"github.com/metacubex/mihomo/transport/vmess"
+
+	"github.com/metacubex/quic-go"
 	"github.com/metacubex/tls"
 	utls "github.com/metacubex/utls"
 )
@@ -40,6 +45,9 @@ type Snell struct {
 	echTLS                *vmess.TLSConfig
 	echTLSIdentityVersion int
 	echTLSLegacyFallback  bool
+	echTLSTransport       string
+	http3                 *snell.HTTP3Client
+	http3RetryAfter       atomic.Int64
 	identity              bool
 	version               int
 	reuse                 bool
@@ -60,6 +68,7 @@ type SnellOption struct {
 }
 
 type snellECHTLSObfsOption struct {
+	Transport         string `obfs:"transport,omitempty"`
 	ALPN              string `obfs:"alpn,omitempty"`
 	Protocol          string `obfs:"protocol,omitempty"`
 	IdentityVersion   int    `obfs:"identity-version,omitempty"`
@@ -88,9 +97,12 @@ func snellECHTLSHost(opt *snellECHTLSObfsOption, server string) string {
 	return server
 }
 
-const defaultSnellECHTLSClientFingerprint = "chrome"
-const snellECHTLSSessionCacheCapacity = 32
-const snellECHTLSPreconnectTimeout = 10 * time.Second
+const (
+	defaultSnellECHTLSClientFingerprint = "chrome"
+	snellECHTLSSessionCacheCapacity     = 32
+	snellECHTLSPreconnectTimeout        = 10 * time.Second
+)
+
 const (
 	snellECHTLSALPN         = "snell-ech/1"
 	snellECHTLSPreviousALPN = "oix-snell/1"
@@ -238,6 +250,9 @@ func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell
 
 // StreamConnContext implements C.ProxyAdapter
 func (s *Snell) StreamConnContext(ctx context.Context, c net.Conn, metadata *C.Metadata) (net.Conn, error) {
+	if s.echTLSTransport == "h3" {
+		return nil, errors.New("snell HTTP/3 requires a UDP dialer; a TCP stream cannot carry QUIC")
+	}
 	c, err := s.streamConnContext(ctx, c)
 	if err != nil {
 		return nil, err
@@ -283,17 +298,15 @@ func (s *Snell) DialContext(ctx context.Context, metadata *C.Metadata) (_ C.Conn
 		return NewConn(c, s), err
 	}
 
-	c, err := s.dialer.DialContext(ctx, "tcp", s.addr)
+	c, err := s.dialSnell(ctx)
 	if err != nil {
-		return nil, fmt.Errorf("%s connect error: %w", s.addr, err)
+		return nil, err
 	}
-
-	defer func(c net.Conn) {
-		safeConnClose(c, err)
-	}(c)
-
-	c, err = s.StreamConnContext(ctx, c, metadata)
-	return NewConn(c, s), err
+	if err = s.writeHeaderContext(ctx, c, metadata); err != nil {
+		_ = c.Close()
+		return nil, err
+	}
+	return NewConn(c, s), nil
 }
 
 // ListenPacketContext implements C.ProxyAdapter
@@ -301,7 +314,7 @@ func (s *Snell) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 	if err = s.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
-	c, err := s.dialer.DialContext(ctx, "tcp", s.addr)
+	c, err := s.dialSnell(ctx)
 	if err != nil {
 		return nil, err
 	}
@@ -310,7 +323,7 @@ func (s *Snell) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 		safeConnClose(c, err)
 	}(c)
 
-	c, err = s.StreamConnContext(ctx, c, metadata)
+	err = s.writeHeaderContext(ctx, c, metadata)
 	if err != nil {
 		return nil, err
 	}
@@ -331,6 +344,62 @@ func (s *Snell) ProxyInfo() C.ProxyInfo {
 	return info
 }
 
+func (s *Snell) Close() error {
+	if s.http3 != nil {
+		return s.http3.Close()
+	}
+	return s.Base.Close()
+}
+
+func (s *Snell) dialSnell(ctx context.Context) (*snell.Snell, error) {
+	if s.http3 != nil && (s.echTLSTransport == "h3" || time.Now().UnixNano() >= s.http3RetryAfter.Load()) {
+		timeout := snellECHTLSPreconnectTimeout
+		if s.echTLSTransport == "auto" {
+			timeout = 2 * time.Second
+		}
+		h3ctx, cancel := context.WithTimeout(ctx, timeout)
+		conn, exporter, err := s.http3.Open(h3ctx)
+		cancel()
+		if err == nil {
+			return snell.StreamConnWithExporterIdentity(conn, s.psk, s.version, exporter), nil
+		}
+		if s.echTLSTransport == "h3" || ctx.Err() != nil {
+			return nil, err
+		}
+		// A failed H3 establishment sent no Snell data. Use verified TCP for
+		// this request and avoid delaying every new request on blocked UDP.
+		s.http3RetryAfter.Store(time.Now().Add(30 * time.Second).UnixNano())
+	}
+	conn, err := s.dialer.DialContext(ctx, "tcp", s.addr)
+	if err != nil {
+		return nil, err
+	}
+	stream, err := s.streamConnContext(ctx, conn)
+	if err != nil {
+		_ = conn.Close()
+	}
+	return stream, err
+}
+
+func (s *Snell) dialHTTP3(ctx context.Context) (*quic.Conn, error) {
+	config, err := s.echTLS.ToStdConfig()
+	if err != nil {
+		return nil, err
+	}
+	config.MinVersion = tls.VersionTLS13
+	config.NextProtos = []string{"h3"}
+	if err = s.echTLS.ECH.ClientHandle(ctx, config); err != nil {
+		return nil, err
+	}
+	_, conn, err := quicDialer.DialQuic(ctx, s.addr, s.DialOptions(), s.dialer, config, &quic.Config{
+		HandshakeIdleTimeout: 10 * time.Second, MaxIdleTimeout: 30 * time.Second,
+		KeepAlivePeriod: 10 * time.Second, MaxIncomingStreams: -1, MaxIncomingUniStreams: 3,
+		InitialStreamReceiveWindow: 64 * 1024, MaxStreamReceiveWindow: 256 * 1024,
+		InitialConnectionReceiveWindow: 1024 * 1024, MaxConnectionReceiveWindow: 4 * 1024 * 1024,
+	}, quicDialer.DialQuicOption{})
+	return conn, err
+}
+
 func NewSnell(option SnellOption) (*Snell, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
 	psk := []byte(option.Psk)
@@ -348,6 +417,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	echTLSIdentityVersion := 2
 	echTLSLegacyFallback := false
 	echTLSPreconnect := 0
+	echTLSTransport := "tcp"
 	switch obfsOption.Mode {
 	case "tls", "http", "":
 		break
@@ -424,6 +494,18 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		if opt.IdentityVersion != 1 && opt.IdentityVersion != 2 {
 			return nil, fmt.Errorf("snell %s unsupported identity version: %d", addr, opt.IdentityVersion)
 		}
+		if opt.Transport != "" {
+			echTLSTransport = opt.Transport
+		}
+		switch echTLSTransport {
+		case "tcp":
+		case "h3", "auto":
+			if opt.IdentityVersion != 2 || opt.LegacyFallback {
+				return nil, errors.New("snell HTTP/3 requires identity-version 2 without legacy-fallback")
+			}
+		default:
+			return nil, fmt.Errorf("unsupported snell ech-tls transport: %s", echTLSTransport)
+		}
 		if opt.Preconnect < 0 || opt.Preconnect > 4 {
 			return nil, fmt.Errorf("snell %s preconnect must be between 0 and 4", addr)
 		}
@@ -473,6 +555,9 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	if requiresSnellV4Identity(obfsOption.Mode) && option.Version == snell.Version4 {
 		option.Identity = true
 	}
+	if echTLSTransport != "tcp" && option.Version != snell.Version4 {
+		return nil, errors.New("snell HTTP/3 requires version 4")
+	}
 	reuse := option.Version == snell.Version2 || (option.Version == snell.Version4 && option.Reuse)
 	switch option.Version {
 	case snell.Version1, snell.Version2:
@@ -506,22 +591,21 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		echTLS:                echTLSOpt,
 		echTLSIdentityVersion: echTLSIdentityVersion,
 		echTLSLegacyFallback:  echTLSLegacyFallback,
+		echTLSTransport:       echTLSTransport,
 		identity:              option.Identity,
 		version:               option.Version,
 		reuse:                 reuse,
 	}
 	s.dialer = option.NewDialer(s.DialOptions())
+	if echTLSTransport != "tcp" {
+		hash := sha256.Sum256(psk)
+		s.http3 = &snell.HTTP3Client{Host: echTLSOpt.Host, Path: fmt.Sprintf("/ws-tunnel-%x", hash[:12]), Dial: s.dialHTTP3}
+	}
 
 	if s.reuse {
 		s.pool = snell.NewPool(func(ctx context.Context) (*snell.Snell, error) {
-			c, err := s.dialer.DialContext(ctx, "tcp", addr)
+			sc, err := s.dialSnell(ctx)
 			if err != nil {
-				return nil, err
-			}
-
-			sc, err := s.streamConnContext(ctx, c)
-			if err != nil {
-				_ = c.Close()
 				return nil, err
 			}
 			if s.version == snell.Version4 {
