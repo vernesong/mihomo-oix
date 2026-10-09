@@ -208,3 +208,14 @@ func TestSnellHTTP3Options(t *testing.T) {
 		}
 	}
 }
+
+func TestSnellHTTP3ReceiveWindows(t *testing.T) {
+	config := snellHTTP3QUICConfig()
+	if config.MaxStreamReceiveWindow != 4*1024*1024 || config.MaxConnectionReceiveWindow != 16*1024*1024 {
+		t.Fatalf("receive windows: stream %d, connection %d", config.MaxStreamReceiveWindow, config.MaxConnectionReceiveWindow)
+	}
+	// A stream that is never read keeps its initial window.
+	if config.InitialStreamReceiveWindow != 64*1024 || config.InitialConnectionReceiveWindow != 1024*1024 {
+		t.Fatalf("initial windows: stream %d, connection %d", config.InitialStreamReceiveWindow, config.InitialConnectionReceiveWindow)
+	}
+}
