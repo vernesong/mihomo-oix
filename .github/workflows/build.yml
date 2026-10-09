@@ -36,11 +36,10 @@ jobs:
         jobs:
           - { goos: linux, goarch: '386', go386: sse2, output: '386', debian: i386, rpm: i386}
           - { goos: linux, goarch: '386', go386: softfloat, output: '386-softfloat' }
-          - { goos: linux, goarch: amd64, goamd64: v1, output: amd64-compatible} # old style file name will be removed in next released
-          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64, debian: amd64, rpm: x86_64, pacman: x86_64, tarball: tarball}
-          - { goos: linux, goarch: amd64, goamd64: v1, output: amd64-v1, debian: amd64, rpm: x86_64, pacman: x86_64, test: test }
+          # Keep legacy filenames as aliases without compiling the same target twice.
+          - { goos: linux, goarch: amd64, goamd64: v1, output: amd64-v1, alias: amd64-compatible, debian: amd64, rpm: x86_64, pacman: x86_64, test: test }
           - { goos: linux, goarch: amd64, goamd64: v2, output: amd64-v2, debian: amd64, rpm: x86_64, pacman: x86_64}
-          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64-v3, debian: amd64, rpm: x86_64, pacman: x86_64}
+          - { goos: linux, goarch: amd64, goamd64: v3, output: amd64-v3, alias: amd64, debian: amd64, rpm: x86_64, pacman: x86_64, tarball: tarball}
           - { goos: linux, goarch: arm64, output: arm64, debian: arm64, rpm: aarch64, pacman: aarch64}  
           - { goos: linux, goarch: arm, goarm: '5', output: armv5 }
           - { goos: linux, goarch: arm, goarm: '6', output: armv6, debian: armel, rpm: armv6hl} 
@@ -62,29 +61,23 @@ jobs:
 
           # Go 1.26 with special patch can work on macOS 10.13 High Sierra
           # https://github.com/MetaCubeX/go/commits/release-branch.go1.26/
-          - { goos: darwin, goarch: amd64, goamd64: v1, output: amd64-compatible } # old style file name will be removed in next released
-          - { goos: darwin, goarch: amd64, goamd64: v3, output: amd64 }
-          - { goos: darwin, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: darwin, goarch: amd64, goamd64: v1, output: amd64-v1, alias: amd64-compatible }
           - { goos: darwin, goarch: amd64, goamd64: v2, output: amd64-v2 }
-          - { goos: darwin, goarch: amd64, goamd64: v3, output: amd64-v3 }
+          - { goos: darwin, goarch: amd64, goamd64: v3, output: amd64-v3, alias: amd64 }
           - { goos: darwin, goarch: arm64, output: arm64 }
 
           # Go 1.26 with special patch can work on Windows 7
           # https://github.com/MetaCubeX/go/commits/release-branch.go1.26/
           - { goos: windows, goarch: '386', output: '386' }
-          - { goos: windows, goarch: amd64, goamd64: v1, output: amd64-compatible } # old style file name will be removed in next released
-          - { goos: windows, goarch: amd64, goamd64: v3, output: amd64 }
-          - { goos: windows, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: windows, goarch: amd64, goamd64: v1, output: amd64-v1, alias: amd64-compatible }
           - { goos: windows, goarch: amd64, goamd64: v2, output: amd64-v2 }
-          - { goos: windows, goarch: amd64, goamd64: v3, output: amd64-v3 }
+          - { goos: windows, goarch: amd64, goamd64: v3, output: amd64-v3, alias: amd64 }
           - { goos: windows, goarch: arm64, output: arm64 }
 
           - { goos: freebsd, goarch: '386', output: '386' }
-          - { goos: freebsd, goarch: amd64, goamd64: v1, output: amd64-compatible } # old style file name will be removed in next released
-          - { goos: freebsd, goarch: amd64, goamd64: v3, output: amd64 }
-          - { goos: freebsd, goarch: amd64, goamd64: v1, output: amd64-v1 }
+          - { goos: freebsd, goarch: amd64, goamd64: v1, output: amd64-v1, alias: amd64-compatible }
           - { goos: freebsd, goarch: amd64, goamd64: v2, output: amd64-v2 }
-          - { goos: freebsd, goarch: amd64, goamd64: v3, output: amd64-v3 }
+          - { goos: freebsd, goarch: amd64, goamd64: v3, output: amd64-v3, alias: amd64 }
           - { goos: freebsd, goarch: arm64, output: arm64 }
 
           - { goos: android, goarch: '386', ndk: i686-linux-android34, output: '386' }
@@ -288,6 +281,26 @@ jobs:
           -p "mihomo-${{matrix.jobs.goos}}-${{matrix.jobs.output}}-${VERSION}.pkg.tar.zst" \
           --architecture ${{ matrix.jobs.pacman }} \
           mihomo=/usr/bin/mihomo
+
+    - name: Package legacy filenames
+      if: ${{ matrix.jobs.alias != '' }}
+      run: |
+        source="mihomo-${{ matrix.jobs.goos }}-${{ matrix.jobs.output }}"
+        target="mihomo-${{ matrix.jobs.goos }}-${{ matrix.jobs.alias }}"
+        if [ "${{ matrix.jobs.goos }}" = "windows" ]; then
+          cp mihomo.exe "${target}.exe"
+          zip -r "${target}-${VERSION}.zip" "${target}.exe"
+        else
+          cp mihomo "$target"
+          gzip -c "$target" > "${target}-${VERSION}.gz"
+          rm "$target"
+        fi
+        # Only the legacy Linux amd64 (v3) target shipped distribution packages.
+        if [ "${{ matrix.jobs.goos }}" = "linux" ] && [ "${{ matrix.jobs.alias }}" = "amd64" ]; then
+          for extension in deb rpm pkg.tar.zst; do
+            cp "${source}-${VERSION}.${extension}" "${target}-${VERSION}.${extension}"
+          done
+        fi
 
     - name: Pack Golang Toolchain
       if: ${{ matrix.jobs.goversion == '' && matrix.jobs.tarball == 'tarball' }}
