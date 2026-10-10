@@ -421,3 +421,24 @@ func (zeroChunkConn) SetReadDeadline(time.Time) error {
 func (zeroChunkConn) SetWriteDeadline(time.Time) error {
 	return nil
 }
+
+func TestPoolGetContextKeepsIdleConnectionForCanceledContext(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	idle := &Snell{Conn: &recordingConn{}}
+	pool.put(idle)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := pool.GetContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetContext() error = %v, want context.Canceled", err)
+	}
+	got, err := pool.pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != idle {
+		t.Fatal("a canceled request took the idle connection")
+	}
+}
