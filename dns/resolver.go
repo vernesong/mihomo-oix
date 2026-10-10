@@ -239,6 +239,12 @@ func (r *Resolver) exchangeWithoutCache(ctx context.Context, m *D.Msg) (msg *D.M
 			result, cache, err = batchExchange(ctx, matched, m)
 			return
 		}
+		// Domain filters select an upstream regardless of the question type,
+		// including HTTPS/SVCB records used alongside A/AAAA by browsers.
+		if r.shouldOnlyQueryFallback(m) {
+			result, cache, err = batchExchange(ctx, r.fallback, m)
+			return
+		}
 		result, cache, err = batchExchange(ctx, r.main, m)
 		return
 	}

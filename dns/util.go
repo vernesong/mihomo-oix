@@ -49,10 +49,10 @@ func updateTTL(records []D.RR, ttl uint32) {
 // the returned msg is a copy of the original msg, so it can be modified without affecting the original msg.
 func getMsgFromCache(c dnsCache, q D.Question) (*D.Msg, time.Time, bool) {
 	msg, expireTime, hit := c.GetWithExpire(q.String())
-	if msg != nil {
-		msg = msg.Copy() // never modify the original msg
+	if !hit || msg == nil {
+		return nil, time.Time{}, false
 	}
-	return msg, expireTime, hit
+	return msg.Copy(), expireTime, true // never modify the original msg
 }
 
 // putMsgToCache puts a dns message into the cache.
@@ -80,6 +80,13 @@ func putMsgToCache(c dnsCache, q D.Question, msg *D.Msg) {
 		ttl = minimalTTL(lo.Concat(msg.Answer, msg.Ns, msg.Extra))
 	}
 	if ttl == 0 {
+		// A successful refresh supersedes any stale answer even when the new
+		// response cannot be cached. Both cache backends support a nil marker;
+		// getMsgFromCache treats it as a miss. Avoid allocating entries for
+		// uncacheable responses that have never been cached.
+		if _, _, hit := c.GetWithExpire(q.String()); hit {
+			c.SetWithExpire(q.String(), nil, time.Time{})
+		}
 		return
 	}
 
@@ -376,10 +383,10 @@ func msgToHTTPSRRInfo(msg *D.Msg) string {
 
 	collect(msg.Answer)
 
-	//TODO: Do we need to process the data in msg.Extra?
+	// TODO: Do we need to process the data in msg.Extra?
 	//      If so, do we need to validate whether the domain names within it match our request?
 	//      To simplify the problem, let's ignore it for now.
-	//collect(msg.Extra)
+	// collect(msg.Extra)
 
 	if len(alpns) == 0 && publicName == "" && !hasIPv4 && !hasIPv6 {
 		return ""
