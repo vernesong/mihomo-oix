@@ -352,24 +352,31 @@ func (s *Snell) Close() error {
 }
 
 func (s *Snell) dialSnell(ctx context.Context) (*snell.Snell, error) {
-	if s.http3 != nil && (s.echTLSTransport == "h3" || time.Now().UnixNano() >= s.http3RetryAfter.Load()) {
-		timeout := snellECHTLSPreconnectTimeout
-		if s.echTLSTransport == "auto" {
-			timeout = 2 * time.Second
-		}
-		h3ctx, cancel := context.WithTimeout(ctx, timeout)
-		conn, exporter, err := s.http3.Open(h3ctx)
-		cancel()
-		if err == nil {
-			return snell.StreamConnWithExporterIdentity(conn, s.psk, s.version, exporter), nil
-		}
-		if s.echTLSTransport == "h3" || ctx.Err() != nil {
-			return nil, err
-		}
-		// A failed H3 establishment sent no Snell data. Use verified TCP for
-		// this request and avoid delaying every new request on blocked UDP.
-		s.http3RetryAfter.Store(time.Now().Add(30 * time.Second).UnixNano())
+	if s.http3 == nil {
+		return s.dialSnellTCP(ctx)
 	}
+	timeout := snellHTTP3Timeout(s.echTLSTransport)
+	if s.echTLSTransport == "h3" {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		return s.openSnellHTTP3(ctx)
+	}
+	if time.Now().UnixNano() < s.http3RetryAfter.Load() {
+		return s.dialSnellTCP(ctx)
+	}
+	return raceSnellTransports(ctx, snellHTTP3FallbackDelayFor(s.http3.SmoothedRTT()), timeout,
+		s.openSnellHTTP3, s.dialSnellTCP, s.recordSnellHTTP3Result)
+}
+
+func (s *Snell) openSnellHTTP3(ctx context.Context) (*snell.Snell, error) {
+	conn, exporter, err := s.http3.Open(ctx)
+	if err != nil {
+		return nil, err
+	}
+	return snell.StreamConnWithExporterIdentity(conn, s.psk, s.version, exporter), nil
+}
+
+func (s *Snell) dialSnellTCP(ctx context.Context) (*snell.Snell, error) {
 	conn, err := s.dialer.DialContext(ctx, "tcp", s.addr)
 	if err != nil {
 		return nil, err
@@ -607,7 +614,10 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	s.dialer = option.NewDialer(s.DialOptions())
 	if echTLSTransport != "tcp" {
 		hash := sha256.Sum256(psk)
-		s.http3 = &snell.HTTP3Client{Host: echTLSOpt.Host, Path: fmt.Sprintf("/ws-tunnel-%x", hash[:12]), Dial: s.dialHTTP3}
+		s.http3 = &snell.HTTP3Client{
+			Host: echTLSOpt.Host, Path: fmt.Sprintf("/ws-tunnel-%x", hash[:12]),
+			Dial: s.dialHTTP3, DialTimeout: snellHTTP3Timeout(echTLSTransport),
+		}
 	}
 
 	if s.reuse {
