@@ -657,3 +657,109 @@ func TestHTTP3OpenRetriesOnlyOnce(t *testing.T) {
 		waitHTTP3SessionClosed(t, conn, time.Second, "rejecting session")
 	}
 }
+
+// With the server's stream limit used up OpenStreamSync waits for credit that may
+// never come; a session whose limit stays exhausted must not hold new Opens until
+// their deadline while a second session would serve them.
+func TestHTTP3OpenDialsNewSessionWhenStreamLimitStaysExhausted(t *testing.T) {
+	client, accepted, _ := newHTTP3ServerFixture(t, nil, &quic.Config{MaxIncomingStreams: 2}, nil)
+	client.OpenTimeout = 200 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	full := currentHTTP3Session(client)
+	start := time.Now()
+	third, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatalf("open with the stream limit used up: %v after %v", err, time.Since(start))
+	}
+	if elapsed := time.Since(start); elapsed < client.OpenTimeout || elapsed > 2*time.Second {
+		t.Fatalf("open took %v, want the open timeout plus a dial", elapsed)
+	}
+	if accepted.Load() != 2 {
+		t.Fatalf("opened %d QUIC sessions", accepted.Load())
+	}
+	assertHTTP3Echo(t, third, "second session")
+	assertHTTP3Echo(t, first, "exhausted session keeps its streams")
+	assertHTTP3Echo(t, second, "exhausted session keeps its streams")
+	requireHTTP3SessionOpen(t, full, "exhausted session")
+	fourth, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if accepted.Load() != 2 || currentHTTP3Session(client) == full {
+		t.Fatalf("new opens did not move to the second session: %d sessions", accepted.Load())
+	}
+	_ = fourth.Close()
+	_ = third.Close()
+	_ = first.Close()
+	requireHTTP3SessionOpen(t, full, "exhausted session with a stream left")
+	_ = second.Close()
+	waitHTTP3SessionClosed(t, full, time.Second, "exhausted session without streams")
+}
+
+// Credit that arrives while Open waits for it is no reason to leave the session.
+func TestHTTP3OpenWaitsForStreamCreditWithinTheTimeout(t *testing.T) {
+	client, accepted, _ := newHTTP3ServerFixture(t, nil, &quic.Config{MaxIncomingStreams: 1}, nil)
+	client.OpenTimeout = 2 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.AfterFunc(100*time.Millisecond, func() { _ = first.Close() })
+	second, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	assertHTTP3Echo(t, second, "credit arrived")
+	if accepted.Load() != 1 {
+		t.Fatalf("opened %d QUIC sessions", accepted.Load())
+	}
+}
+
+func TestHTTP3OpenKeepsCallerDeadlineBelowTheOpenTimeout(t *testing.T) {
+	client, accepted, _ := newHTTP3ServerFixture(t, nil, &quic.Config{MaxIncomingStreams: 1}, nil)
+	client.OpenTimeout = 5 * time.Second
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	held, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer held.Close()
+	short, stop := context.WithTimeout(ctx, 200*time.Millisecond)
+	defer stop()
+	if _, _, err = client.Open(short); !errors.Is(err, context.DeadlineExceeded) {
+		t.Fatalf("open past the caller deadline: %v", err)
+	}
+	if accepted.Load() != 1 || currentHTTP3Session(client) == nil {
+		t.Fatal("a caller's own deadline retired the session")
+	}
+}
+
+func TestHTTP3OpenTimeoutDefaultsToAtLeastOneSecond(t *testing.T) {
+	client, _, _ := newHTTP3Fixture(t, nil)
+	stream, _, err := client.Open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	session := currentHTTP3Session(client)
+	if got := client.openTimeout(session); got != time.Second {
+		t.Fatalf("default open timeout %v on a loopback session", got)
+	}
+	client.OpenTimeout = 3 * time.Second
+	if got := client.openTimeout(session); got != 3*time.Second {
+		t.Fatalf("configured open timeout %v", got)
+	}
+}

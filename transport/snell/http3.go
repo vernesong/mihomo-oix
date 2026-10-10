@@ -25,6 +25,9 @@ type HTTP3Client struct {
 	Dial func(context.Context) (*quic.Conn, error)
 	// DialTimeout bounds a session dial, which no single Open cancels; zero is 10 s.
 	DialTimeout time.Duration
+	// OpenTimeout bounds how long Open waits for the peer to grant a stream before
+	// it moves to a new session; zero is five smoothed round trips, at least 1 s.
+	OpenTimeout time.Duration
 	mu          sync.Mutex
 	closed      bool
 	pending     *http3Dial
@@ -131,8 +134,9 @@ func (c *HTTP3Client) SmoothedRTT() time.Duration {
 
 // Open completes Extended CONNECT before returning a stream. It never sends
 // Snell authentication or business data on a failed / retried transport. A
-// session that refuses the request before the server processed it (it is
-// draining) is retired and the request is made once more on a fresh one.
+// session that refuses the request before the server processed it (draining,
+// or no stream credit within OpenTimeout) is retired and the request is made
+// once more on a fresh one.
 func (c *HTTP3Client) Open(ctx context.Context) (net.Conn, []byte, error) {
 	stream, exporter, retry, err := c.open(ctx)
 	if retry && ctx.Err() == nil {
@@ -166,7 +170,9 @@ func (c *HTTP3Client) open(ctx context.Context) (_ net.Conn, exporter []byte, re
 	if !client.Settings().EnableExtendedConnect {
 		return nil, nil, false, errors.New("snell server did not enable Extended CONNECT")
 	}
-	request, err := client.OpenRequestStream(ctx)
+	openCtx, cancel := context.WithTimeout(ctx, c.openTimeout(conn))
+	request, err := client.OpenRequestStream(openCtx)
+	cancel()
 	if err != nil {
 		if ctx.Err() != nil {
 			return nil, nil, false, err
@@ -222,6 +228,18 @@ func (c *HTTP3Client) rejected(ctx context.Context, conn *quic.Conn, err error) 
 	}
 	c.retire(conn)
 	return true
+}
+
+// A new stream needs credit from the peer's stream limit, which is already known
+// after the handshake, so Open only waits when the limit is used up. The credit
+// returns about 2.4 round trips after a stream closes (measured through a delaying
+// relay at 100 to 600 ms), so five of them leave room without holding a caller
+// for the whole request deadline.
+func (c *HTTP3Client) openTimeout(conn *quic.Conn) time.Duration {
+	if c.OpenTimeout > 0 {
+		return c.OpenTimeout
+	}
+	return max(time.Second, 5*conn.ConnectionStats().SmoothedRTT)
 }
 
 // A draining peer can refuse new streams while existing ones still carry
