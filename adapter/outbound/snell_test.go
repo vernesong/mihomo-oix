@@ -395,3 +395,32 @@ func TestSnellCloseStopsPreconnect(t *testing.T) {
 		t.Fatal("closing the proxy left the preconnect dial running")
 	}
 }
+
+func TestSnellClampsPreconnect(t *testing.T) {
+	for _, tc := range []struct{ preconnect, want int }{
+		{-2, 0}, {-1, 0}, {0, 0}, {3, 3}, {4, 4}, {5, 4}, {200, 4},
+	} {
+		if got := clampSnellPreconnect("127.0.0.1:443", tc.preconnect); got != tc.want {
+			t.Errorf("clampSnellPreconnect(%d) = %d, want %d", tc.preconnect, got, tc.want)
+		}
+	}
+}
+
+func TestSnellECHTLSLoadsPreconnectOutsideTheRangeClamped(t *testing.T) {
+	echConfig, _, err := ech.GenECHConfig("front.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, preconnect := range []int{-2, 5, 200} {
+		dialer := &blockingSnellDialer{started: make(chan struct{}, 1), ended: make(chan struct{}, 1)}
+		adapter, err := NewSnell(SnellOption{
+			BasicOption: BasicOption{DialerForAPI: dialer},
+			Name:        "snell", Server: "127.0.0.1", Port: 443, Psk: "password", Version: 4, Reuse: true,
+			ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": echConfig, "preconnect": preconnect},
+		})
+		if err != nil {
+			t.Fatalf("preconnect %d: NewSnell() error = %v", preconnect, err)
+		}
+		_ = adapter.Close()
+	}
+}

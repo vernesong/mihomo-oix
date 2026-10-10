@@ -103,6 +103,7 @@ const (
 	defaultSnellECHTLSClientFingerprint = "chrome"
 	snellECHTLSSessionCacheCapacity     = 32
 	snellECHTLSPreconnectTimeout        = 10 * time.Second
+	snellMaxPreconnect                  = 4
 )
 
 const (
@@ -163,6 +164,17 @@ func resolveSnellECHTLSClientFingerprint(opt *snellECHTLSObfsOption, option Snel
 	}
 	log.Warnln("[Snell] %s ignores client-fingerprint %s without ECH support, using %s", snellECHTLSALPN, configured, defaultSnellECHTLSClientFingerprint)
 	return defaultSnellECHTLSClientFingerprint
+}
+
+// clampSnellPreconnect keeps preconnect within 0-snellMaxPreconnect: the pool
+// holds ten connections, so a larger warm-up evicts most of them at once. A
+// value outside the range loads clamped, with a warning, instead of failing.
+func clampSnellPreconnect(addr string, preconnect int) int {
+	clamped := min(max(preconnect, 0), snellMaxPreconnect)
+	if clamped != preconnect {
+		log.Warnln("[Snell] %s preconnect %d is outside 0-%d, using %d", addr, preconnect, snellMaxPreconnect, clamped)
+	}
+	return clamped
 }
 
 func snellECHTLSConfig(opt *snellECHTLSObfsOption) (*ech.Config, error) {
@@ -547,12 +559,9 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		default:
 			return nil, fmt.Errorf("unsupported snell ech-tls transport: %s", echTLSTransport)
 		}
-		if opt.Preconnect < 0 || opt.Preconnect > 4 {
-			return nil, fmt.Errorf("snell %s preconnect must be between 0 and 4", addr)
-		}
 		echTLSIdentityVersion = opt.IdentityVersion
 		echTLSLegacyFallback = opt.LegacyFallback
-		echTLSPreconnect = opt.Preconnect
+		echTLSPreconnect = clampSnellPreconnect(addr, opt.Preconnect)
 		if opt.SkipCertVerify || opt.Insecure {
 			return nil, fmt.Errorf("snell %s %s requires certificate verification", addr, snellECHTLSALPN)
 		}
