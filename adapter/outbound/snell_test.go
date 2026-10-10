@@ -347,3 +347,51 @@ func TestSnellHTTP3ReceiveWindows(t *testing.T) {
 		t.Fatalf("initial windows: stream %d, connection %d", config.InitialStreamReceiveWindow, config.InitialConnectionReceiveWindow)
 	}
 }
+
+// blockingSnellDialer holds every dial until its context ends.
+type blockingSnellDialer struct {
+	C.Dialer
+	started chan struct{}
+	ended   chan struct{}
+}
+
+func (d *blockingSnellDialer) DialContext(ctx context.Context, _, _ string) (net.Conn, error) {
+	select {
+	case d.started <- struct{}{}:
+	default:
+	}
+	<-ctx.Done()
+	select {
+	case d.ended <- struct{}{}:
+	default:
+	}
+	return nil, ctx.Err()
+}
+
+func TestSnellCloseStopsPreconnect(t *testing.T) {
+	echConfig, _, err := ech.GenECHConfig("front.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	dialer := &blockingSnellDialer{started: make(chan struct{}, 1), ended: make(chan struct{}, 1)}
+	adapter, err := NewSnell(SnellOption{
+		BasicOption: BasicOption{DialerForAPI: dialer},
+		Name:        "snell", Server: "127.0.0.1", Port: 443, Psk: "password", Version: 4, Reuse: true,
+		ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": echConfig, "preconnect": 2},
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer adapter.Close()
+	select {
+	case <-dialer.started:
+	case <-time.After(5 * time.Second):
+		t.Fatal("preconnect did not dial")
+	}
+	_ = adapter.Close()
+	select {
+	case <-dialer.ended:
+	case <-time.After(2 * time.Second):
+		t.Fatal("closing the proxy left the preconnect dial running")
+	}
+}

@@ -39,6 +39,7 @@ type Snell struct {
 	option                *SnellOption
 	psk                   []byte
 	pool                  *snell.Pool
+	cancelPreconnect      context.CancelFunc
 	obfsOption            *simpleObfsOption
 	shadowTLSOption       *shadowtls.ShadowTLSOption
 	restlsConfig          *restls.Config
@@ -363,10 +364,17 @@ func (s *Snell) ProxyInfo() C.ProxyInfo {
 }
 
 func (s *Snell) Close() error {
-	if s.http3 != nil {
-		return s.http3.Close()
+	if s.cancelPreconnect != nil {
+		s.cancelPreconnect()
 	}
-	return s.Base.Close()
+	var h3err error
+	if s.http3 != nil {
+		h3err = s.http3.Close()
+	}
+	if s.pool != nil {
+		return errors.Join(h3err, s.pool.Close())
+	}
+	return errors.Join(h3err, s.Base.Close())
 }
 
 func (s *Snell) dialSnell(ctx context.Context) (*snell.Snell, error) {
@@ -653,8 +661,9 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			return sc, nil
 		})
 		if echTLSPreconnect > 0 {
+			ctx, cancel := context.WithTimeout(context.Background(), snellECHTLSPreconnectTimeout)
+			s.cancelPreconnect = cancel
 			go func() {
-				ctx, cancel := context.WithTimeout(context.Background(), snellECHTLSPreconnectTimeout)
 				defer cancel()
 				s.pool.Warm(ctx, echTLSPreconnect)
 			}()

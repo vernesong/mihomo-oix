@@ -15,10 +15,14 @@ import (
 type Pool struct {
 	pool    *pool.Pool[*Snell]
 	factory func(context.Context) (*Snell, error)
+	closed  atomic.Bool
 }
 
 func (p *Pool) Warm(ctx context.Context, count int) {
 	for range count {
+		if p.closed.Load() {
+			return
+		}
 		conn, err := p.factory(ctx)
 		if err != nil {
 			return
@@ -61,6 +65,11 @@ func (p *Pool) Put(conn *Snell) {
 
 func (p *Pool) put(conn *Snell) {
 	p.pool.Put(conn)
+}
+
+func (p *Pool) Close() error {
+	p.closed.Store(true)
+	return p.pool.Close()
 }
 
 type PoolConn struct {

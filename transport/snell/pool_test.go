@@ -442,3 +442,21 @@ func TestPoolGetContextKeepsIdleConnectionForCanceledContext(t *testing.T) {
 		t.Fatal("a canceled request took the idle connection")
 	}
 }
+
+func TestPoolWarmStopsOnceClosed(t *testing.T) {
+	var pool *Pool
+	dials := 0
+	pool = NewPool(func(context.Context) (*Snell, error) {
+		dials++
+		if dials == 1 {
+			_ = pool.Close()
+		}
+		conn, peer := net.Pipe()
+		t.Cleanup(func() { _ = peer.Close() })
+		return &Snell{Conn: conn}, nil
+	})
+	pool.Warm(context.Background(), 3)
+	if dials != 1 {
+		t.Fatalf("warm-up dialed %d connections, want 1 before the pool closed", dials)
+	}
+}
