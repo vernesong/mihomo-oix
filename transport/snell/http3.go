@@ -130,11 +130,21 @@ func (c *HTTP3Client) SmoothedRTT() time.Duration {
 }
 
 // Open completes Extended CONNECT before returning a stream. It never sends
-// Snell authentication or business data on a failed / retried transport.
-func (c *HTTP3Client) Open(ctx context.Context) (_ net.Conn, exporter []byte, err error) {
+// Snell authentication or business data on a failed / retried transport. A
+// session that refuses the request before the server processed it (it is
+// draining) is retired and the request is made once more on a fresh one.
+func (c *HTTP3Client) Open(ctx context.Context) (net.Conn, []byte, error) {
+	stream, exporter, retry, err := c.open(ctx)
+	if retry && ctx.Err() == nil {
+		stream, exporter, _, err = c.open(ctx)
+	}
+	return stream, exporter, err
+}
+
+func (c *HTTP3Client) open(ctx context.Context) (_ net.Conn, exporter []byte, retry bool, err error) {
 	conn, client, err := c.get(ctx)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	var stream *http3Conn
 	defer func() {
@@ -148,20 +158,21 @@ func (c *HTTP3Client) Open(ctx context.Context) (_ net.Conn, exporter []byte, er
 	}()
 	select {
 	case <-ctx.Done():
-		return nil, nil, ctx.Err()
+		return nil, nil, false, ctx.Err()
 	case <-conn.Context().Done():
-		return nil, nil, context.Cause(conn.Context())
+		return nil, nil, false, context.Cause(conn.Context())
 	case <-client.ReceivedSettings():
 	}
 	if !client.Settings().EnableExtendedConnect {
-		return nil, nil, errors.New("snell server did not enable Extended CONNECT")
+		return nil, nil, false, errors.New("snell server did not enable Extended CONNECT")
 	}
 	request, err := client.OpenRequestStream(ctx)
 	if err != nil {
-		if ctx.Err() == nil {
-			c.retire(conn)
+		if ctx.Err() != nil {
+			return nil, nil, false, err
 		}
-		return nil, nil, err
+		c.retire(conn)
+		return nil, nil, true, err
 	}
 	stream = &http3Conn{
 		RequestStream: request, local: conn.LocalAddr(), remote: conn.RemoteAddr(),
@@ -179,25 +190,38 @@ func (c *HTTP3Client) Open(ctx context.Context) (_ net.Conn, exporter []byte, er
 	})
 	stream.writeMu.Unlock()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, c.rejected(ctx, conn, err), err
 	}
 	response, err := request.ReadResponse()
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, c.rejected(ctx, conn, err), err
 	}
 	if response.StatusCode != http.StatusOK {
 		if response.StatusCode == http.StatusServiceUnavailable {
 			c.retire(conn)
 		}
-		return nil, nil, fmt.Errorf("snell HTTP/3 CONNECT status %d", response.StatusCode)
+		return nil, nil, false, fmt.Errorf("snell HTTP/3 CONNECT status %d", response.StatusCode)
 	}
 	state := conn.ConnectionState().TLS
 	exporter, err = state.ExportKeyingMaterial(IdentityExporterLabel, []byte{}, IdentityExporterLength)
 	if err != nil {
-		return nil, nil, err
+		return nil, nil, false, err
 	}
 	_ = stream.SetDeadline(time.Time{})
-	return stream, exporter, nil
+	return stream, exporter, false, nil
+}
+
+// H3_REQUEST_REJECTED is the one stream reset that proves the server did not
+// process the request (RFC 9114 section 8.1), as a draining server answers one
+// that raced its GOAWAY. The session is draining, so it is retired as well.
+func (c *HTTP3Client) rejected(ctx context.Context, conn *quic.Conn, err error) bool {
+	var reset *quic.StreamError
+	if ctx.Err() != nil || !errors.As(err, &reset) || !reset.Remote ||
+		reset.ErrorCode != quic.StreamErrorCode(http3.ErrCodeRequestRejected) {
+		return false
+	}
+	c.retire(conn)
+	return true
 }
 
 // A draining peer can refuse new streams while existing ones still carry

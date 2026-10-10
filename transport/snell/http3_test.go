@@ -40,6 +40,13 @@ func echoHTTP3Stream(w http.ResponseWriter, r *http.Request) {
 
 func newHTTP3Fixture(t *testing.T, handler http.Handler) (*HTTP3Client, *atomic.Int32, *tls.Config) {
 	t.Helper()
+	return newHTTP3ServerFixture(t, handler, nil, nil)
+}
+
+// newHTTP3ServerFixture also takes the server's QUIC limits and a hook that sees
+// the http3.Server of every accepted session, for tests that drain or exhaust it.
+func newHTTP3ServerFixture(t *testing.T, handler http.Handler, serverConfig *quic.Config, onServer func(*http3.Server)) (*HTTP3Client, *atomic.Int32, *tls.Config) {
+	t.Helper()
 	if handler == nil {
 		handler = http.HandlerFunc(echoHTTP3Stream)
 	}
@@ -76,7 +83,7 @@ func newHTTP3Fixture(t *testing.T, handler http.Handler) (*HTTP3Client, *atomic.
 	listener, err := quic.ListenAddr("127.0.0.1:0", &tls.Config{
 		NextProtos: []string{"h3"}, MinVersion: tls.VersionTLS13,
 		Certificates: []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}}, EncryptedClientHelloKeys: keys,
-	}, nil)
+	}, serverConfig)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -97,6 +104,9 @@ func newHTTP3Fixture(t *testing.T, handler http.Handler) (*HTTP3Client, *atomic.
 				stopConn := context.AfterFunc(serveCtx, func() { _ = conn.CloseWithError(0, "") })
 				defer stopConn()
 				server := &http3.Server{Handler: handler}
+				if onServer != nil {
+					onServer(server)
+				}
 				_ = server.ServeQUICConn(conn)
 			})
 		}
@@ -493,5 +503,157 @@ func TestHTTP3RetirementWaitsForPendingOpen(t *testing.T) {
 				t.Fatal("retired session remained open after CONNECT finished")
 			}
 		})
+	}
+}
+
+func assertHTTP3Echo(t *testing.T, stream net.Conn, message string) {
+	t.Helper()
+	_ = stream.SetDeadline(time.Now().Add(3 * time.Second))
+	if _, err := stream.Write([]byte(message)); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(message))
+	if _, err := io.ReadFull(stream, got); err != nil || string(got) != message {
+		t.Fatalf("echo %q: %q, %v", message, got, err)
+	}
+}
+
+func currentHTTP3Session(client *HTTP3Client) *quic.Conn {
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	return client.conn
+}
+
+func waitHTTP3SessionClosed(t *testing.T, conn *quic.Conn, within time.Duration, what string) {
+	t.Helper()
+	select {
+	case <-conn.Context().Done():
+	case <-time.After(within):
+		t.Fatalf("%s stayed open", what)
+	}
+}
+
+func requireHTTP3SessionOpen(t *testing.T, conn *quic.Conn, what string) {
+	t.Helper()
+	if err := conn.Context().Err(); err != nil {
+		t.Fatalf("%s closed: %v", what, err)
+	}
+}
+
+// A graceful server shutdown leaves the QUIC session up for its active streams but
+// refuses new requests, either client-side after GOAWAY or with H3_REQUEST_REJECTED
+// for a request that raced it. Nothing was sent, so the next session serves the Open.
+func TestHTTP3OpenRetriesOnFreshSessionAfterGoAway(t *testing.T) {
+	servers := make(chan *http3.Server, 4)
+	client, accepted, _ := newHTTP3ServerFixture(t, nil, nil, func(s *http3.Server) { servers <- s })
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	active, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	draining := currentHTTP3Session(client)
+	shutdown := make(chan error, 1)
+	go func() { shutdown <- (<-servers).Shutdown(context.Background()) }()
+	time.Sleep(200 * time.Millisecond)
+
+	next, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatalf("open after GOAWAY: %v", err)
+	}
+	if accepted.Load() != 2 {
+		t.Fatalf("opened %d QUIC sessions", accepted.Load())
+	}
+	if current := currentHTTP3Session(client); current == draining || current == nil {
+		t.Fatal("the draining session stayed current")
+	}
+	assertHTTP3Echo(t, next, "fresh session")
+	assertHTTP3Echo(t, active, "draining session keeps its stream")
+	requireHTTP3SessionOpen(t, draining, "draining session")
+
+	_ = active.Close()
+	waitHTTP3SessionClosed(t, draining, time.Second, "draining session without streams")
+	_ = next.Close()
+	select {
+	case <-shutdown:
+	case <-time.After(2 * time.Second):
+		t.Fatal("server shutdown did not finish")
+	}
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if len(client.connections) > 1 {
+		t.Fatalf("%d sessions tracked after the drained one closed", len(client.connections))
+	}
+	for conn, active := range client.connections {
+		if conn == draining || active != 0 {
+			t.Fatalf("session reference count %d after every stream closed", active)
+		}
+	}
+}
+
+func rejectHTTP3Request(w http.ResponseWriter) {
+	stream := w.(http3.HTTPStreamer).HTTPStream()
+	stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+	stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
+}
+
+func TestHTTP3OpenRetriesRejectedRequestOnFreshSession(t *testing.T) {
+	var requests atomic.Int32
+	client, accepted, _ := newHTTP3ServerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if requests.Add(1) == 1 {
+			rejectHTTP3Request(w)
+			return
+		}
+		echoHTTP3Stream(w, r)
+	}), nil, nil)
+	var rejecting *quic.Conn
+	dial := client.Dial
+	client.Dial = func(ctx context.Context) (*quic.Conn, error) {
+		conn, err := dial(ctx)
+		if rejecting == nil {
+			rejecting = conn
+		}
+		return conn, err
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stream, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatalf("open after rejection: %v", err)
+	}
+	defer stream.Close()
+	assertHTTP3Echo(t, stream, "after rejection")
+	if accepted.Load() != 2 || requests.Load() != 2 {
+		t.Fatalf("%d sessions, %d requests", accepted.Load(), requests.Load())
+	}
+	waitHTTP3SessionClosed(t, rejecting, time.Second, "session that rejected the request")
+}
+
+func TestHTTP3OpenRetriesOnlyOnce(t *testing.T) {
+	var requests atomic.Int32
+	client, accepted, _ := newHTTP3ServerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		requests.Add(1)
+		rejectHTTP3Request(w)
+	}), nil, nil)
+	var sessions []*quic.Conn
+	dial := client.Dial
+	client.Dial = func(ctx context.Context) (*quic.Conn, error) {
+		conn, err := dial(ctx)
+		if err == nil {
+			sessions = append(sessions, conn)
+		}
+		return conn, err
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	if stream, _, err := client.Open(ctx); err == nil {
+		_ = stream.Close()
+		t.Fatal("rejected twice but opened")
+	}
+	if accepted.Load() != 2 || requests.Load() != 2 {
+		t.Fatalf("%d sessions, %d requests", accepted.Load(), requests.Load())
+	}
+	for _, conn := range sessions {
+		waitHTTP3SessionClosed(t, conn, time.Second, "rejecting session")
 	}
 }
