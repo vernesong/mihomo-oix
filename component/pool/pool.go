@@ -2,9 +2,13 @@ package pool
 
 import (
 	"context"
+	"errors"
 	"runtime"
+	"sync"
 	"time"
 )
+
+var ErrClosed = errors.New("pool is closed")
 
 type Factory[T any] func(context.Context) (T, error)
 
@@ -46,13 +50,22 @@ type pool[T any] struct {
 	factory Factory[T]
 	evict   func(T)
 	maxAge  int64
+	mu      sync.Mutex
+	closed  bool
 }
 
 func (p *pool[T]) GetContext(ctx context.Context) (T, error) {
 	now := time.Now()
 	for {
+		p.mu.Lock()
+		if p.closed {
+			p.mu.Unlock()
+			var zero T
+			return zero, ErrClosed
+		}
 		select {
 		case item := <-p.ch:
+			p.mu.Unlock()
 			elm := item
 			if p.maxAge != 0 && now.Sub(item.time).Milliseconds() > p.maxAge {
 				if p.evict != nil {
@@ -63,7 +76,22 @@ func (p *pool[T]) GetContext(ctx context.Context) (T, error) {
 
 			return elm.elm, nil
 		default:
-			return p.factory(ctx)
+			p.mu.Unlock()
+			item, err := p.factory(ctx)
+			if err != nil {
+				return item, err
+			}
+			p.mu.Lock()
+			closed := p.closed
+			p.mu.Unlock()
+			if closed {
+				if p.evict != nil {
+					p.evict(item)
+				}
+				var zero T
+				return zero, ErrClosed
+			}
+			return item, nil
 		}
 	}
 }
@@ -78,10 +106,20 @@ func (p *pool[T]) Put(item T) {
 		time: time.Now(),
 	}
 
+	p.mu.Lock()
+	if p.closed {
+		p.mu.Unlock()
+		if p.evict != nil {
+			p.evict(item)
+		}
+		return
+	}
 	select {
 	case p.ch <- e:
+		p.mu.Unlock()
 		return
 	default:
+		p.mu.Unlock()
 		// pool is full
 		if p.evict != nil {
 			p.evict(item)
@@ -91,11 +129,43 @@ func (p *pool[T]) Put(item T) {
 }
 
 func recycle[T any](p *Pool[T]) {
-	for item := range p.pool.ch {
-		if p.pool.evict != nil {
-			p.pool.evict(item.elm)
+	items, evict := p.pool.close()
+	if evict != nil && len(items) > 0 {
+		go func() {
+			for _, item := range items {
+				evict(item)
+			}
+		}()
+	}
+}
+
+func (p *pool[T]) close() ([]T, func(T)) {
+	p.mu.Lock()
+	defer p.mu.Unlock()
+	if p.closed {
+		return nil, nil
+	}
+	p.closed = true
+	items := make([]T, 0, len(p.ch))
+	for {
+		select {
+		case item := <-p.ch:
+			items = append(items, item.elm)
+		default:
+			return items, p.evict
 		}
 	}
+}
+
+func (p *Pool[T]) Close() error {
+	runtime.SetFinalizer(p, nil)
+	items, evict := p.pool.close()
+	if evict != nil {
+		for _, item := range items {
+			evict(item)
+		}
+	}
+	return nil
 }
 
 func New[T any](factory Factory[T], options ...Option[T]) *Pool[T] {
