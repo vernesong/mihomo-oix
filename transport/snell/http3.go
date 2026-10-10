@@ -28,12 +28,16 @@ type HTTP3Client struct {
 	// OpenTimeout bounds how long Open waits for the peer to grant a stream before
 	// it moves to a new session; zero is five smoothed round trips, at least 1 s.
 	OpenTimeout time.Duration
+	// IdleTimeout closes a session this long after its last stream; zero is 60 s.
+	IdleTimeout time.Duration
 	mu          sync.Mutex
 	closed      bool
 	pending     *http3Dial
 	conn        *quic.Conn
 	client      *http3.ClientConn
 	connections map[*quic.Conn]int
+	idle        *time.Timer
+	idleGen     uint64
 }
 
 type http3Dial struct {
@@ -57,7 +61,9 @@ func (c *HTTP3Client) get(ctx context.Context) (*quic.Conn, *http3.ClientConn, e
 		}
 		if c.conn != nil && c.conn.Context().Err() == nil {
 			conn, client := c.conn, c.client
-			c.connections[conn]++
+			if c.connections[conn]++; c.connections[conn] == 1 {
+				c.stopIdleLocked()
+			}
 			c.mu.Unlock()
 			return conn, client, nil
 		}
@@ -109,6 +115,7 @@ func (c *HTTP3Client) dial(ctx context.Context, pending *http3Dial) {
 			c.connections = make(map[*quic.Conn]int)
 		}
 		c.connections[conn] = 0
+		c.startIdleLocked(conn)
 		context.AfterFunc(conn.Context(), func() {
 			c.mu.Lock()
 			delete(c.connections, conn)
@@ -248,6 +255,7 @@ func (c *HTTP3Client) retire(conn *quic.Conn) {
 	c.mu.Lock()
 	if c.conn == conn {
 		c.conn, c.client = nil, nil
+		c.stopIdleLocked()
 	}
 	idle := c.connections[conn] == 0
 	c.mu.Unlock()
@@ -264,16 +272,56 @@ func (c *HTTP3Client) release(conn *quic.Conn) {
 		c.connections[conn] = active
 	}
 	closeConn := tracked && active == 0 && c.conn != conn
+	if tracked && active == 0 && c.conn == conn {
+		c.startIdleLocked(conn)
+	}
 	c.mu.Unlock()
 	if closeConn {
 		_ = conn.CloseWithError(0, "")
 	}
 }
 
+// The current session closes after IdleTimeout without a stream: its keepalive
+// pings would otherwise run for as long as the client lives, waking a mobile radio
+// for every node ever used. The generation voids a timer that already fired and
+// waits for the lock while a stream took the session.
+func (c *HTTP3Client) startIdleLocked(conn *quic.Conn) {
+	c.stopIdleLocked()
+	if c.closed {
+		return
+	}
+	timeout := c.IdleTimeout
+	if timeout <= 0 {
+		timeout = time.Minute
+	}
+	gen := c.idleGen
+	c.idle = time.AfterFunc(timeout, func() { c.expire(conn, gen) })
+}
+
+func (c *HTTP3Client) stopIdleLocked() {
+	c.idleGen++
+	if c.idle != nil {
+		c.idle.Stop()
+		c.idle = nil
+	}
+}
+
+func (c *HTTP3Client) expire(conn *quic.Conn, gen uint64) {
+	c.mu.Lock()
+	if gen != c.idleGen || c.conn != conn || c.connections[conn] != 0 {
+		c.mu.Unlock()
+		return
+	}
+	c.conn, c.client, c.idle = nil, nil, nil
+	c.mu.Unlock()
+	_ = conn.CloseWithError(0, "")
+}
+
 func (c *HTTP3Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
+	c.stopIdleLocked()
 	if c.pending != nil {
 		c.pending.cancel()
 	}

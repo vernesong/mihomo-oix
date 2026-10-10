@@ -13,9 +13,11 @@ import (
 )
 
 type Pool struct {
-	pool    *pool.Pool[*Snell]
+	pool    *pool.Pool[*pooledEntry]
 	factory func(context.Context) (*Snell, error)
 	closed  atomic.Bool
+	// idleAge is how long a connection may wait in the pool.
+	idleAge time.Duration
 }
 
 func (p *Pool) Warm(ctx context.Context, count int) {
@@ -35,23 +37,94 @@ const (
 	poolConnNew int32 = iota
 	poolConnReusable
 	poolConnClosed
+
+	defaultIdleAge = 15 * time.Second
 )
+
+const (
+	entryWaiting int32 = iota
+	entryClaimed
+	entryExpired
+)
+
+// pooledEntry is a connection in the pool. The pool only ages entries out when
+// something asks for one, so a timer closes a connection nobody takes: an
+// HTTP/3 stream pins its QUIC session for as long as it is open.
+type pooledEntry struct {
+	conn   *Snell
+	mu     sync.Mutex
+	state  int32
+	expiry *time.Timer
+}
+
+func (e *pooledEntry) park(maxAge time.Duration) {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if maxAge > 0 {
+		e.expiry = time.AfterFunc(maxAge, e.expire)
+	}
+}
+
+func (e *pooledEntry) expire() {
+	e.mu.Lock()
+	if e.state != entryWaiting {
+		e.mu.Unlock()
+		return
+	}
+	e.state = entryExpired
+	e.expiry = nil
+	e.mu.Unlock()
+	_ = e.conn.Close()
+}
+
+// claim takes the entry out of the pool; false once it closed while waiting.
+func (e *pooledEntry) claim() bool {
+	e.mu.Lock()
+	defer e.mu.Unlock()
+	if e.state == entryExpired {
+		return false
+	}
+	e.state = entryClaimed
+	if e.expiry != nil {
+		e.expiry.Stop()
+		e.expiry = nil
+	}
+	return true
+}
+
+func (e *pooledEntry) evict() {
+	e.mu.Lock()
+	e.state = entryExpired
+	if e.expiry != nil {
+		e.expiry.Stop()
+		e.expiry = nil
+	}
+	e.mu.Unlock()
+	_ = e.conn.Close()
+}
 
 func (p *Pool) Get() (net.Conn, error) {
 	return p.GetContext(context.Background())
 }
 
 func (p *Pool) GetContext(ctx context.Context) (net.Conn, error) {
-	// A canceled request closes the connection it takes before using it.
-	if err := ctx.Err(); err != nil {
-		return nil, err
-	}
-	elm, err := p.pool.GetContext(ctx)
-	if err != nil {
-		return nil, err
-	}
+	for {
+		// A canceled request closes the connection it takes before using it.
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		entry, err := p.pool.GetContext(ctx)
+		if err != nil {
+			return nil, err
+		}
+		if !entry.claim() {
+			// The timer closed it while it waited.
+			_ = entry.conn.Close()
+			continue
+		}
 
-	return &PoolConn{Snell: elm, pool: p}, nil
+		return &PoolConn{Snell: entry.conn, pool: p}, nil
+	}
 }
 
 func (p *Pool) Put(conn *Snell) {
@@ -64,7 +137,9 @@ func (p *Pool) Put(conn *Snell) {
 }
 
 func (p *Pool) put(conn *Snell) {
-	p.pool.Put(conn)
+	entry := &pooledEntry{conn: conn}
+	entry.park(p.idleAge)
+	p.pool.Put(entry)
 }
 
 func (p *Pool) Close() error {
@@ -145,16 +220,20 @@ func (pc *PoolConn) Close() error {
 }
 
 func NewPool(factory func(context.Context) (*Snell, error)) *Pool {
-	p := pool.New[*Snell](
-		func(ctx context.Context) (*Snell, error) {
-			return factory(ctx)
+	p := pool.New[*pooledEntry](
+		func(ctx context.Context) (*pooledEntry, error) {
+			conn, err := factory(ctx)
+			if err != nil {
+				return nil, err
+			}
+			return &pooledEntry{conn: conn}, nil
 		},
-		pool.WithAge[*Snell](15000),
-		pool.WithSize[*Snell](10),
-		pool.WithEvict[*Snell](func(item *Snell) {
-			_ = item.Close()
+		pool.WithAge[*pooledEntry](defaultIdleAge.Milliseconds()),
+		pool.WithSize[*pooledEntry](10),
+		pool.WithEvict[*pooledEntry](func(item *pooledEntry) {
+			item.evict()
 		}),
 	)
 
-	return &Pool{pool: p, factory: factory}
+	return &Pool{pool: p, factory: factory, idleAge: defaultIdleAge}
 }

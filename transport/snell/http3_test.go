@@ -747,6 +747,146 @@ func TestHTTP3OpenKeepsCallerDeadlineBelowTheOpenTimeout(t *testing.T) {
 	}
 }
 
+// Nothing keeps a session alive once its last stream closed: the keepalive pings
+// of an unused session wake a mobile radio until the client is reloaded.
+func TestHTTP3IdleSessionClosesAndOpenDialsAnother(t *testing.T) {
+	client, accepted, _ := newHTTP3Fixture(t, nil)
+	client.IdleTimeout = 150 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	stream, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	idle := currentHTTP3Session(client)
+	assertHTTP3Echo(t, stream, "in use")
+	time.Sleep(2 * client.IdleTimeout)
+	requireHTTP3SessionOpen(t, idle, "session with an open stream")
+	closed := time.Now()
+	_ = stream.Close()
+	waitHTTP3SessionClosed(t, idle, 2*time.Second, "unused session")
+	if elapsed := time.Since(closed); elapsed < client.IdleTimeout/2 {
+		t.Fatalf("session closed %v after its last stream, before the idle period", elapsed)
+	}
+	if rtt := client.SmoothedRTT(); rtt != 0 {
+		t.Fatalf("RTT %v with no session", rtt)
+	}
+	next, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer next.Close()
+	assertHTTP3Echo(t, next, "fresh session")
+	if accepted.Load() != 2 || currentHTTP3Session(client) == idle {
+		t.Fatalf("%d sessions after the idle one closed", accepted.Load())
+	}
+}
+
+func TestHTTP3NewStreamKeepsSessionFromIdleClose(t *testing.T) {
+	client, accepted, _ := newHTTP3Fixture(t, nil)
+	client.IdleTimeout = 500 * time.Millisecond
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := currentHTTP3Session(client)
+	_ = first.Close()
+	time.Sleep(300 * time.Millisecond)
+	second, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	time.Sleep(700 * time.Millisecond)
+	requireHTTP3SessionOpen(t, session, "session used again within the idle period")
+	assertHTTP3Echo(t, second, "still the first session")
+	_ = second.Close()
+	time.Sleep(300 * time.Millisecond)
+	requireHTTP3SessionOpen(t, session, "session idle for less than the period since its last stream")
+	third, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer third.Close()
+	if accepted.Load() != 1 {
+		t.Fatalf("opened %d QUIC sessions", accepted.Load())
+	}
+	if currentHTTP3Session(client) != session {
+		t.Fatal("the session was replaced")
+	}
+}
+
+func TestHTTP3SessionNobodyWaitsForIsClosedWhenIdle(t *testing.T) {
+	client, _, _ := newHTTP3Fixture(t, nil)
+	client.IdleTimeout = 150 * time.Millisecond
+	dial := client.Dial
+	started, proceed := make(chan struct{}), make(chan struct{})
+	var dialed atomic.Pointer[quic.Conn]
+	client.Dial = func(ctx context.Context) (*quic.Conn, error) {
+		close(started)
+		<-proceed
+		conn, err := dial(ctx)
+		dialed.Store(conn)
+		return conn, err
+	}
+	abandoned, stop := context.WithCancel(t.Context())
+	result := make(chan error, 1)
+	go func() { _, _, err := client.Open(abandoned); result <- err }()
+	<-started
+	stop()
+	if err := <-result; !errors.Is(err, context.Canceled) {
+		t.Fatalf("abandoned open: %v", err)
+	}
+	close(proceed)
+	deadline := time.Now().Add(2 * time.Second)
+	for dialed.Load() == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("dial did not finish")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	waitHTTP3SessionClosed(t, dialed.Load(), 2*time.Second, "session no Open ever used")
+}
+
+// Streams parked in the pool hold references on the session; the pool must let
+// them go on its own, or the session never goes idle.
+func TestHTTP3ParkedPoolStreamsDoNotPinTheSession(t *testing.T) {
+	client, accepted, _ := newHTTP3Fixture(t, nil)
+	client.IdleTimeout = 100 * time.Millisecond
+	pool := NewPool(func(ctx context.Context) (*Snell, error) {
+		stream, exporter, err := client.Open(ctx)
+		if err != nil {
+			return nil, err
+		}
+		return StreamConnWithExporterIdentity(stream, []byte("psk"), Version4, exporter), nil
+	})
+	pool.idleAge = 100 * time.Millisecond
+	defer pool.Close()
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	pool.Warm(ctx, 3)
+	session := currentHTTP3Session(client)
+	if session == nil || accepted.Load() != 1 {
+		t.Fatalf("pool did not share one session: %d", accepted.Load())
+	}
+	client.mu.Lock()
+	parked := client.connections[session]
+	client.mu.Unlock()
+	if parked != 3 {
+		t.Fatalf("%d parked streams hold the session", parked)
+	}
+	waitHTTP3SessionClosed(t, session, 3*time.Second, "session held only by parked pool streams")
+	conn, err := pool.GetContext(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	if accepted.Load() != 2 {
+		t.Fatalf("opened %d QUIC sessions", accepted.Load())
+	}
+}
+
 func TestHTTP3OpenTimeoutDefaultsToAtLeastOneSecond(t *testing.T) {
 	client, _, _ := newHTTP3Fixture(t, nil)
 	stream, _, err := client.Open(t.Context())
@@ -761,5 +901,63 @@ func TestHTTP3OpenTimeoutDefaultsToAtLeastOneSecond(t *testing.T) {
 	client.OpenTimeout = 3 * time.Second
 	if got := client.openTimeout(session); got != 3*time.Second {
 		t.Fatalf("configured open timeout %v", got)
+	}
+}
+
+// An expiry that already fired when a stream took the session, or when a later
+// idle period began, must find the session in use or newer and leave it alone.
+func TestHTTP3StaleIdleExpiryLeavesSessionAlone(t *testing.T) {
+	client, _, _ := newHTTP3Fixture(t, nil)
+	client.IdleTimeout = time.Hour
+	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
+	defer cancel()
+	first, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	session := currentHTTP3Session(client)
+	client.mu.Lock()
+	armed := client.idleGen
+	client.mu.Unlock()
+	_ = first.Close()
+	client.mu.Lock()
+	idle := client.idleGen
+	client.mu.Unlock()
+	if idle == armed {
+		t.Fatal("closing the last stream did not start an idle period")
+	}
+	client.expire(session, armed)
+	requireHTTP3SessionOpen(t, session, "session with a newer idle period")
+	second, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer second.Close()
+	client.expire(session, idle)
+	requireHTTP3SessionOpen(t, session, "session in use")
+
+	_ = second.Close()
+	client.mu.Lock()
+	current := client.idleGen
+	client.mu.Unlock()
+	client.expire(session, current)
+	waitHTTP3SessionClosed(t, session, time.Second, "session whose idle period ended")
+	if currentHTTP3Session(client) != nil {
+		t.Fatal("an expired session stayed current")
+	}
+}
+
+func TestHTTP3ClosedClientStartsNoIdleTimer(t *testing.T) {
+	client, _, _ := newHTTP3Fixture(t, nil)
+	stream, _, err := client.Open(t.Context())
+	if err != nil {
+		t.Fatal(err)
+	}
+	_ = client.Close()
+	_ = stream.Close()
+	client.mu.Lock()
+	defer client.mu.Unlock()
+	if client.idle != nil {
+		t.Fatal("a closed client armed an idle timer")
 	}
 }

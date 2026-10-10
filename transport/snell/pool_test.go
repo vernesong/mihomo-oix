@@ -5,9 +5,11 @@ import (
 	"errors"
 	"io"
 	"net"
+	"sync"
 	"testing"
 	"time"
 
+	mpool "github.com/metacubex/mihomo/component/pool"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 )
 
@@ -43,7 +45,7 @@ func TestPoolConnCloseIsIdempotent(t *testing.T) {
 		t.Fatalf("close should observe the peer half-close before pooling, got %d reads", rawConn.reads)
 	}
 
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -155,7 +157,7 @@ func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
 		t.Fatal("close before request should close the raw connection")
 	}
 
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -187,7 +189,7 @@ func TestPoolConnCloseAfterRequestBeforeReusableClosesRawConnection(t *testing.T
 		t.Fatal("close before reusable should close the raw connection")
 	}
 
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -220,7 +222,7 @@ func TestPoolConnCloseWriteBeforeRequestClosesRawConnection(t *testing.T) {
 	if err := conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -248,7 +250,7 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -268,7 +270,7 @@ func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
 	if err = conn.Close(); err != nil {
 		t.Fatal(err)
 	}
-	got, err = pool.pool.Get()
+	got, err = takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -306,7 +308,7 @@ func TestPoolConnCloseWithoutPeerHalfCloseClosesRawConnection(t *testing.T) {
 	if !rawConn.closed {
 		t.Fatal("connection without peer half-close should close the raw connection")
 	}
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -434,7 +436,7 @@ func TestPoolGetContextKeepsIdleConnectionForCanceledContext(t *testing.T) {
 	if _, err := pool.GetContext(ctx); !errors.Is(err, context.Canceled) {
 		t.Fatalf("GetContext() error = %v, want context.Canceled", err)
 	}
-	got, err := pool.pool.Get()
+	got, err := takeIdle(pool)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -459,4 +461,123 @@ func TestPoolWarmStopsOnceClosed(t *testing.T) {
 	if dials != 1 {
 		t.Fatalf("warm-up dialed %d connections, want 1 before the pool closed", dials)
 	}
+}
+
+// takeIdle returns the connection the pool would hand out next.
+func takeIdle(p *Pool) (*Snell, error) {
+	entry, err := p.pool.Get()
+	if err != nil {
+		return nil, err
+	}
+	return entry.conn, nil
+}
+
+// closeSignalConn reports when it is closed.
+type closeSignalConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newCloseSignalConn() *closeSignalConn {
+	return &closeSignalConn{Conn: zeroChunkConn{}, closed: make(chan struct{})}
+}
+
+func (c *closeSignalConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func waitClosed(t *testing.T, c *closeSignalConn) {
+	t.Helper()
+	select {
+	case <-c.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection was not closed")
+	}
+}
+
+// The pool only ages entries out when something asks for one, so a connection
+// nobody asks for would hold its transport (an HTTP/3 stream pins its QUIC
+// session) for as long as the pool lives.
+func TestPooledConnectionIsClosedAfterItsIdleAgeWithoutAGet(t *testing.T) {
+	fresh := &Snell{Conn: newCloseSignalConn()}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return fresh, nil
+	})
+	pool.idleAge = 50 * time.Millisecond
+	idle := newCloseSignalConn()
+	pool.put(&Snell{Conn: idle})
+
+	waitClosed(t, idle)
+	conn, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.(*PoolConn).Snell != fresh {
+		t.Fatal("an aged-out connection was handed out")
+	}
+}
+
+func TestClaimedPooledConnectionOutlivesItsIdleAge(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	pool.idleAge = 100 * time.Millisecond
+	busy := newCloseSignalConn()
+	idle := &Snell{Conn: busy}
+	pool.put(idle)
+	conn, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.(*PoolConn).Snell != idle {
+		t.Fatal("the idle connection was not reused")
+	}
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-busy.closed:
+		t.Fatal("a connection in use was closed by its idle age")
+	default:
+	}
+}
+
+func TestRepooledConnectionStartsANewIdleAge(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	pool.idleAge = 400 * time.Millisecond
+	conn := newCloseSignalConn()
+	pool.put(&Snell{Conn: conn})
+	time.Sleep(250 * time.Millisecond)
+	taken, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.put(taken.(*PoolConn).Snell)
+	time.Sleep(250 * time.Millisecond)
+	select {
+	case <-conn.closed:
+		t.Fatal("the first wait's timer closed a connection parked again")
+	default:
+	}
+	waitClosed(t, conn)
+}
+
+func TestPoolCloseClosesIdleConnectionsAndRejectsReuse(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	idle := newCloseSignalConn()
+	pool.put(&Snell{Conn: idle})
+	if err := pool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, idle)
+	if _, err := pool.Get(); !errors.Is(err, mpool.ErrClosed) {
+		t.Fatalf("Get() error = %v, want pool.ErrClosed", err)
+	}
+	late := newCloseSignalConn()
+	pool.put(&Snell{Conn: late})
+	waitClosed(t, late)
 }
