@@ -111,18 +111,18 @@ func withMapping(mapping *lru.LruCache[netip.Addr, string]) middleware {
 			}
 
 			host := strings.TrimRight(q.Name, ".")
+			// The original name only maps to an address while its entire CNAME
+			// chain is valid, not for the lifetime of the final A/AAAA alone.
+			ttl := max(uint32(1), minimalTTL(msg.Answer))
 
 			for _, ans := range msg.Answer {
 				var ip netip.Addr
-				var ttl uint32
 
 				switch a := ans.(type) {
 				case *D.A:
 					ip, _ = netip.AddrFromSlice(a.A)
-					ttl = a.Hdr.Ttl
 				case *D.AAAA:
 					ip, _ = netip.AddrFromSlice(a.AAAA)
-					ttl = a.Hdr.Ttl
 				default:
 					continue
 				}
@@ -133,10 +133,6 @@ func withMapping(mapping *lru.LruCache[netip.Addr, string]) middleware {
 					continue
 				}
 				ip = ip.Unmap()
-
-				if ttl < 1 {
-					ttl = 1
-				}
 
 				mapping.SetWithExpire(ip, host, time.Now().Add(time.Second*time.Duration(ttl)))
 			}

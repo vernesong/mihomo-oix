@@ -3,6 +3,7 @@ package dns
 import (
 	"errors"
 	"net/netip"
+	"time"
 
 	"github.com/metacubex/mihomo/common/lru"
 	"github.com/metacubex/mihomo/component/fakeip"
@@ -102,8 +103,12 @@ func (h *ResolverEnhancer) FindHostByIP(ip netip.Addr) (string, bool) {
 	}
 
 	if mapping := h.mapping; mapping != nil {
-		if host, existed := h.mapping.Get(ip); existed {
-			return host, true
+		if host, expires, existed := mapping.GetWithExpire(ip); existed {
+			// Explicit InsertHostByIP entries have no expiry. DNS-derived
+			// mappings must stop influencing routing when their TTL expires.
+			if expires.Unix() == 0 || expires.After(time.Now()) {
+				return host, true
+			}
 		}
 	}
 
