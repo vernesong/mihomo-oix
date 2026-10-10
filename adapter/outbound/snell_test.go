@@ -1,15 +1,28 @@
 package outbound
 
 import (
+	"bytes"
 	"context"
+	"crypto/ecdsa"
+	"crypto/elliptic"
+	"crypto/rand"
+	"crypto/x509"
+	"encoding/pem"
 	"errors"
+	"io"
+	"math/big"
+	"net"
 	"strings"
 	"testing"
 	"time"
 
 	"github.com/metacubex/mihomo/component/ech"
+	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/snell"
+	"github.com/metacubex/mihomo/transport/vmess"
+
+	"github.com/metacubex/tls"
 )
 
 func TestSnellReuseDialHonorsCancellation(t *testing.T) {
@@ -78,7 +91,7 @@ func TestSnellECHTLSUsesRawTLSWithoutPath(t *testing.T) {
 	}
 }
 
-func TestSnellECHTLSReplacesNoneFingerprint(t *testing.T) {
+func TestSnellECHTLSResolvesClientFingerprint(t *testing.T) {
 	echConfig, _, err := ech.GenECHConfig("front.example.com")
 	if err != nil {
 		t.Fatal(err)
@@ -93,6 +106,9 @@ func TestSnellECHTLSReplacesNoneFingerprint(t *testing.T) {
 		{name: "obfs none", obfs: "none", want: defaultSnellECHTLSClientFingerprint},
 		{name: "proxy none", top: "NONE", want: defaultSnellECHTLSClientFingerprint},
 		{name: "explicit", obfs: "firefox", want: "firefox"},
+		{name: "case", top: "FireFox120", want: "firefox120"},
+		{name: "without ech", obfs: "safari", want: defaultSnellECHTLSClientFingerprint},
+		{name: "unknown", obfs: "chrome131", want: defaultSnellECHTLSClientFingerprint},
 	} {
 		t.Run(tc.name, func(t *testing.T) {
 			obfs := map[string]any{"mode": "ech-tls", "ech-config": echConfig}
@@ -109,6 +125,118 @@ func TestSnellECHTLSReplacesNoneFingerprint(t *testing.T) {
 			defer adapter.Close()
 			if got := adapter.echTLS.ClientFingerprint; got != tc.want {
 				t.Fatalf("ClientFingerprint = %q, want %q", got, tc.want)
+			}
+		})
+	}
+}
+
+// clientBytesRecorder keeps what a server reads from its client.
+type clientBytesRecorder struct {
+	net.Conn
+	read []byte
+}
+
+func (c *clientBytesRecorder) Read(b []byte) (int, error) {
+	n, err := c.Conn.Read(b)
+	c.read = append(c.read, b[:n]...)
+	return n, err
+}
+
+func TestSnellECHTLSFingerprintsKeepALPNPrivate(t *testing.T) {
+	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
+	if err != nil {
+		t.Fatal(err)
+	}
+	template := &x509.Certificate{
+		SerialNumber: big.NewInt(1), DNSNames: []string{"origin.example.com"},
+		NotBefore: time.Now().Add(-time.Hour), NotAfter: time.Now().Add(time.Hour),
+		KeyUsage: x509.KeyUsageDigitalSignature, ExtKeyUsage: []x509.ExtKeyUsage{x509.ExtKeyUsageServerAuth},
+	}
+	der, err := x509.CreateCertificate(rand.Reader, template, template, &key.PublicKey, key)
+	if err != nil {
+		t.Fatal(err)
+	}
+	echConfig, echKeyPEM, err := ech.GenECHConfig("front.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	block, _ := pem.Decode([]byte(echKeyPEM))
+	echKeys, err := ech.UnmarshalECHKeys(block.Bytes)
+	if err != nil {
+		t.Fatal(err)
+	}
+	serverConfig := &tls.Config{
+		NextProtos: []string{snellECHTLSALPN}, MinVersion: tls.VersionTLS13,
+		Certificates:             []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
+		EncryptedClientHelloKeys: echKeys,
+	}
+	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+
+	// Every name in component/tls's fingerprint table, then none, a wrong case and an unknown name.
+	for _, fingerprint := range []string{
+		"chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random",
+		"chrome120", "firefox120", "safari16", "chrome_psk", "chrome_psk_shuffle",
+		"chrome_padding_psk_shuffle", "chrome_pq", "chrome_pq_psk", "randomized",
+		"none", "Chrome", "chrome131",
+	} {
+		t.Run(fingerprint, func(t *testing.T) {
+			listener, err := net.Listen("tcp", "127.0.0.1:0")
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer listener.Close()
+			hello := make(chan []byte, 1)
+			go func() {
+				conn, err := listener.Accept()
+				if err != nil {
+					hello <- nil
+					return
+				}
+				defer conn.Close()
+				recorder := &clientBytesRecorder{Conn: conn}
+				server := tls.Server(recorder, serverConfig)
+				_ = server.SetDeadline(time.Now().Add(5 * time.Second))
+				_ = server.Handshake()
+				hello <- bytes.Clone(recorder.read)
+				_, _ = io.Copy(io.Discard, server)
+			}()
+
+			adapter, err := NewSnell(SnellOption{
+				Name: "snell", Server: "127.0.0.1", Port: listener.Addr().(*net.TCPAddr).Port, Psk: "password", Version: 4,
+				ObfsOpts: map[string]any{
+					"mode": "ech-tls", "ech-config": echConfig, "sni": "origin.example.com",
+					"ca-file": caPEM, "client-fingerprint": fingerprint,
+				},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer adapter.Close()
+			used := adapter.echTLS.ClientFingerprint
+			ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+			defer cancel()
+			raw, err := adapter.dialer.DialContext(ctx, "tcp", adapter.addr)
+			if err != nil {
+				t.Fatal(err)
+			}
+			conn, err := vmess.StreamTLSConn(ctx, raw, adapter.echTLS)
+			if err != nil {
+				_ = raw.Close()
+				t.Fatalf("handshake with %s: %v", used, err)
+			}
+			defer conn.Close()
+			if state := tlsC.GetTLSConnectionState(conn); !state.ECHAccepted || state.NegotiatedProtocol != snellECHTLSALPN {
+				t.Fatalf("%s: ECH accepted %v, ALPN %q", used, state.ECHAccepted, state.NegotiatedProtocol)
+			}
+			select {
+			case raw := <-hello:
+				for _, private := range []string{snellECHTLSALPN, "origin.example.com"} {
+					if bytes.Contains(raw, []byte(private)) {
+						t.Fatalf("%s sends %s in the clear", used, private)
+					}
+				}
+			case <-time.After(5 * time.Second):
+				t.Fatal("server handshake did not finish")
 			}
 		})
 	}

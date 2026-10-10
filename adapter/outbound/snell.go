@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net"
 	"os"
+	"slices"
 	"strconv"
 	"strings"
 	"sync/atomic"
@@ -128,22 +129,39 @@ func resolveSnellECHTLSALPN(alpn, protocol string) (string, error) {
 	return alpn, nil
 }
 
+// snellECHTLSFingerprints are the client fingerprints whose uTLS ClientHello has
+// the ECH extension that uTLS fills with the ClientHelloOuter. The other specs
+// send the inner ALPN (snell-ech/1) in the clear and fail the ECH handshake, and
+// crypto/tls, used for none or an unknown or miscased name, copies that ALPN
+// into the ClientHelloOuter; either identifies every connection to a passive
+// observer.
+var snellECHTLSFingerprints = []string{"chrome", "chrome120", "firefox", "firefox120"}
+
+// resolveSnellECHTLSClientFingerprint resolves the fingerprint of an ech-tls
+// connection, ignoring case and keeping random's process-wide pick when it can
+// carry ECH.
 func resolveSnellECHTLSClientFingerprint(opt *snellECHTLSObfsOption, option SnellOption) string {
-	fingerprint := opt.ClientFingerprint
-	if fingerprint == "" {
-		fingerprint = option.ClientFingerprint
+	configured := opt.ClientFingerprint
+	if configured == "" {
+		configured = option.ClientFingerprint
 	}
-	if fingerprint == "" {
+	if configured == "" {
 		return defaultSnellECHTLSClientFingerprint
 	}
-	if strings.EqualFold(fingerprint, "none") {
-		// Without a uTLS fingerprint crypto/tls copies the inner ALPN
-		// (snell-ech/1) into the ClientHelloOuter, which is sent in the clear
-		// and would identify every connection to a passive observer.
-		log.Warnln("[Snell] %s ignores client-fingerprint none, using %s", snellECHTLSALPN, defaultSnellECHTLSClientFingerprint)
-		return defaultSnellECHTLSClientFingerprint
+	fingerprint := strings.ToLower(configured)
+	if fingerprint == "random" {
+		random, _ := tlsC.GetFingerprint(fingerprint)
+		for _, name := range snellECHTLSFingerprints {
+			if id, _ := tlsC.GetFingerprint(name); id == random {
+				return name
+			}
+		}
 	}
-	return fingerprint
+	if slices.Contains(snellECHTLSFingerprints, fingerprint) {
+		return fingerprint
+	}
+	log.Warnln("[Snell] %s ignores client-fingerprint %s without ECH support, using %s", snellECHTLSALPN, configured, defaultSnellECHTLSClientFingerprint)
+	return defaultSnellECHTLSClientFingerprint
 }
 
 func snellECHTLSConfig(opt *snellECHTLSObfsOption) (*ech.Config, error) {
