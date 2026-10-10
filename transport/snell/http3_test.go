@@ -16,6 +16,7 @@ import (
 	"sync"
 	"sync/atomic"
 	"testing"
+	"testing/synctest"
 	"time"
 
 	"github.com/metacubex/mihomo/component/ech"
@@ -192,6 +193,72 @@ func TestHTTP3RequiresCertificateAndECH(t *testing.T) {
 	}
 }
 
+func TestHTTP3SharedDialSurvivesCanceledOpener(t *testing.T) {
+	client, accepted, _ := newHTTP3Fixture(t, nil)
+	if rtt := client.SmoothedRTT(); rtt != 0 {
+		t.Fatalf("RTT %v before any session", rtt)
+	}
+	started, proceed := make(chan struct{}), make(chan struct{})
+	dial := client.Dial
+	var dials atomic.Int32
+	client.Dial = func(ctx context.Context) (*quic.Conn, error) {
+		if dials.Add(1) == 1 {
+			close(started)
+		}
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		case <-proceed:
+			return dial(ctx)
+		}
+	}
+	ctx, cancel := context.WithTimeout(t.Context(), 3*time.Second)
+	defer cancel()
+	initiator, stop := context.WithCancel(ctx)
+	defer stop()
+	result := make(chan error, 1)
+	go func() { _, _, err := client.Open(initiator); result <- err }()
+	select {
+	case <-started:
+	case <-ctx.Done():
+		t.Fatal("session dial did not start")
+	}
+	stop()
+	select {
+	case err := <-result:
+		if !errors.Is(err, context.Canceled) {
+			t.Fatalf("canceled opener: %v", err)
+		}
+	case <-ctx.Done():
+		t.Fatal("canceled opener did not return")
+	}
+	close(proceed)
+	stream, _, err := client.Open(ctx)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer stream.Close()
+	if dials.Load() != 1 || accepted.Load() != 1 {
+		t.Fatalf("shared dial restarted: %d dials, %d sessions", dials.Load(), accepted.Load())
+	}
+	if client.SmoothedRTT() <= 0 {
+		t.Fatal("live session reported no RTT")
+	}
+	_ = stream.SetDeadline(time.Now().Add(time.Second))
+	payload := []byte("shared session survives caller cancellation")
+	if _, err := stream.Write(payload); err != nil {
+		t.Fatal(err)
+	}
+	got := make([]byte, len(payload))
+	if _, err := io.ReadFull(stream, got); err != nil || !bytes.Equal(got, payload) {
+		t.Fatalf("shared session echo: %q, %v", got, err)
+	}
+	_ = client.Close()
+	if rtt := client.SmoothedRTT(); rtt != 0 {
+		t.Fatalf("RTT %v after close", rtt)
+	}
+}
+
 func TestHTTP3CloseCancelsPendingDial(t *testing.T) {
 	started := make(chan struct{})
 	client := &HTTP3Client{Dial: func(ctx context.Context) (*quic.Conn, error) {
@@ -211,6 +278,51 @@ func TestHTTP3CloseCancelsPendingDial(t *testing.T) {
 	case <-time.After(time.Second):
 		t.Fatal("close did not cancel pending dial")
 	}
+}
+
+// A session dial belongs to no single Open: an initiator that gives up leaves it
+// running for later waiters, and its failure reaches them all instead of each
+// starting another dial; DialTimeout still bounds a dial nobody cancels.
+func TestHTTP3SharedDialOutlivesInitiatorAndFailsWaitersOnce(t *testing.T) {
+	synctest.Test(t, func(t *testing.T) {
+		var dials atomic.Int32
+		dialErr := errors.New("handshake failed")
+		client := &HTTP3Client{DialTimeout: 2 * time.Second, Dial: func(ctx context.Context) (*quic.Conn, error) {
+			dials.Add(1)
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(time.Second):
+				return nil, dialErr
+			}
+		}}
+		initiator, cancel := context.WithTimeout(context.Background(), 100*time.Millisecond)
+		defer cancel()
+		if _, _, err := client.Open(initiator); !errors.Is(err, context.DeadlineExceeded) {
+			t.Fatalf("initiator: %v", err)
+		}
+		errs := make(chan error, 2)
+		for range 2 {
+			go func() { _, _, err := client.Open(context.Background()); errs <- err }()
+		}
+		for range 2 {
+			if err := <-errs; !errors.Is(err, dialErr) {
+				t.Fatalf("waiter: %v", err)
+			}
+		}
+		if dials.Load() != 1 {
+			t.Fatalf("%d dials", dials.Load())
+		}
+		client.Dial = func(ctx context.Context) (*quic.Conn, error) {
+			dials.Add(1)
+			<-ctx.Done()
+			return nil, ctx.Err()
+		}
+		start := time.Now()
+		if _, _, err := client.Open(context.Background()); !errors.Is(err, context.DeadlineExceeded) || time.Since(start) != 2*time.Second {
+			t.Fatalf("unbounded dial: %v after %v", err, time.Since(start))
+		}
+	})
 }
 
 func TestHTTP3ReclaimsRejectedSessions(t *testing.T) {

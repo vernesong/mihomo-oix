@@ -421,6 +421,24 @@ proxies: # socks5
     # obfs-opts:
     #   mode: http # or tls/shadow-tls/restls/jls
 
+  # Snell v4 + ECH，需要服务端支持对应传输并提供 ECH 配置
+  # - name: "snell-ech-tls"
+  #   type: snell
+  #   server: server
+  #   port: 443
+  #   psk: yourpsk
+  #   version: 4
+  #   obfs-opts:
+  #     mode: ech-tls
+  #     host: origin.example.com
+  #     ech-config: "BASE64_ECH_CONFIG_LIST" # 也可改用 ech-config-file 指定本地文件
+  #     transport: tcp # 默认 tcp；h3 仅使用 HTTP/3；auto 优先尝试 HTTP/3 并与 TCP 竞速
+  #     identity-version: 2 # h3/auto 必须使用 2，且不能开启 legacy-fallback
+  # auto 首次等待 250 ms 后启动 TCP；已有 H3 会话时按 RTT 调整为 100–1000 ms
+  # H3 提前失败会立即启动 TCP；auto 的 H3 尝试最多等待 2 s，失败后冷却 30 s
+  # TCP 获胜后 H3 继续到自身超时，成功则保留会话供后续复用，失败则进入冷却
+  # 两条传输都验证证书和 ECH，仅获胜连接发送 Snell 认证与业务数据
+
   - name: "snell-shadow-tls"
     type: snell
     server: server

@@ -20,18 +20,28 @@ import (
 // HTTP3Client shares one ECH-verified QUIC session across independent Snell
 // streams. The caller owns its lifetime and must call Close on config reload.
 type HTTP3Client struct {
-	Host        string
-	Path        string
-	Dial        func(context.Context) (*quic.Conn, error)
+	Host string
+	Path string
+	Dial func(context.Context) (*quic.Conn, error)
+	// DialTimeout bounds a session dial, which no single Open cancels; zero is 10 s.
+	DialTimeout time.Duration
 	mu          sync.Mutex
 	closed      bool
-	pending     chan struct{}
-	cancel      context.CancelFunc
+	pending     *http3Dial
 	conn        *quic.Conn
 	client      *http3.ClientConn
 	connections map[*quic.Conn]int
 }
 
+type http3Dial struct {
+	cancel context.CancelFunc
+	done   chan struct{}
+	err    error
+}
+
+// get returns the current session, joining or starting its dial. The dial runs
+// detached from every caller: one that gives up leaves it running for the others,
+// and a failure reaches all of its waiters instead of each starting another dial.
 func (c *HTTP3Client) get(ctx context.Context) (*quic.Conn, *http3.ClientConn, error) {
 	for {
 		if err := ctx.Err(); err != nil {
@@ -48,55 +58,75 @@ func (c *HTTP3Client) get(ctx context.Context) (*quic.Conn, *http3.ClientConn, e
 			c.mu.Unlock()
 			return conn, client, nil
 		}
-		if pending := c.pending; pending != nil {
-			c.mu.Unlock()
-			select {
-			case <-ctx.Done():
-				return nil, nil, ctx.Err()
-			case <-pending:
-				continue
+		pending := c.pending
+		if pending == nil {
+			timeout := c.DialTimeout
+			if timeout <= 0 {
+				timeout = 10 * time.Second
 			}
+			dialCtx, cancel := context.WithTimeout(context.WithoutCancel(ctx), timeout)
+			pending = &http3Dial{cancel: cancel, done: make(chan struct{})}
+			c.pending = pending
+			go c.dial(dialCtx, pending)
 		}
-		c.pending = make(chan struct{})
-		dialCtx, cancel := context.WithCancel(ctx)
-		c.cancel = cancel
 		c.mu.Unlock()
-		conn, err := c.Dial(dialCtx)
-		cancel()
-		if err == nil {
-			state := conn.ConnectionState().TLS
-			if !state.ECHAccepted || state.NegotiatedProtocol != http3.NextProtoH3 {
-				_ = conn.CloseWithError(0, "")
-				err = errors.New("snell HTTP/3 requires accepted ECH and h3 ALPN")
-			}
+		select {
+		case <-ctx.Done():
+			return nil, nil, ctx.Err()
+		case <-pending.done:
 		}
-		c.mu.Lock()
-		if c.closed && err == nil {
-			_ = conn.CloseWithError(0, "")
-			err = net.ErrClosed
+		if pending.err != nil {
+			return nil, nil, pending.err
 		}
-		if err == nil {
-			c.conn = conn
-			c.client = (&http3.Transport{DisableCompression: true, MaxResponseHeaderBytes: 8 * 1024}).NewClientConn(conn)
-			if c.connections == nil {
-				c.connections = make(map[*quic.Conn]int)
-			}
-			c.connections[conn] = 1
-			context.AfterFunc(conn.Context(), func() {
-				c.mu.Lock()
-				delete(c.connections, conn)
-				c.mu.Unlock()
-			})
-		}
-		client := c.client
-		close(c.pending)
-		c.pending, c.cancel = nil, nil
-		c.mu.Unlock()
-		if err != nil {
-			return nil, nil, err
-		}
-		return conn, client, nil
 	}
+}
+
+func (c *HTTP3Client) dial(ctx context.Context, pending *http3Dial) {
+	conn, err := c.Dial(ctx)
+	pending.cancel()
+	if err == nil {
+		state := conn.ConnectionState().TLS
+		if !state.ECHAccepted || state.NegotiatedProtocol != http3.NextProtoH3 {
+			_ = conn.CloseWithError(0, "")
+			err = errors.New("snell HTTP/3 requires accepted ECH and h3 ALPN")
+		}
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	if c.closed && err == nil {
+		_ = conn.CloseWithError(0, "")
+		err = net.ErrClosed
+	}
+	if err == nil {
+		// Waiters take their references as they return; a session no one waits
+		// for any more stays current for the next Open.
+		c.conn = conn
+		c.client = (&http3.Transport{DisableCompression: true, MaxResponseHeaderBytes: 8 * 1024}).NewClientConn(conn)
+		if c.connections == nil {
+			c.connections = make(map[*quic.Conn]int)
+		}
+		c.connections[conn] = 0
+		context.AfterFunc(conn.Context(), func() {
+			c.mu.Lock()
+			delete(c.connections, conn)
+			c.mu.Unlock()
+		})
+	}
+	pending.err = err
+	close(pending.done)
+	c.pending = nil
+}
+
+// SmoothedRTT reports the current session's smoothed round-trip time, or zero
+// while no session is up.
+func (c *HTTP3Client) SmoothedRTT() time.Duration {
+	c.mu.Lock()
+	conn := c.conn
+	c.mu.Unlock()
+	if conn == nil || conn.Context().Err() != nil {
+		return 0
+	}
+	return conn.ConnectionStats().SmoothedRTT
 }
 
 // Open completes Extended CONNECT before returning a stream. It never sends
@@ -202,8 +232,8 @@ func (c *HTTP3Client) Close() error {
 	c.mu.Lock()
 	defer c.mu.Unlock()
 	c.closed = true
-	if c.cancel != nil {
-		c.cancel()
+	if c.pending != nil {
+		c.pending.cancel()
 	}
 	for conn := range c.connections {
 		_ = conn.CloseWithError(0, "")
