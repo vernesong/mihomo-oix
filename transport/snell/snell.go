@@ -10,11 +10,12 @@ import (
 	"net/netip"
 	"sync"
 
-	"github.com/metacubex/blake3"
 	N "github.com/metacubex/mihomo/common/net"
 	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 	"github.com/metacubex/mihomo/transport/socks5"
+
+	"github.com/metacubex/blake3"
 )
 
 const (
@@ -23,6 +24,7 @@ const (
 	Version3            = 3
 	Version4            = 4
 	Version5            = 5
+	Version6            = 6
 	DefaultSnellVersion = Version1
 
 	// max packet length
@@ -199,6 +201,9 @@ func StreamConnWithIdentity(conn net.Conn, psk []byte, version int) *Snell {
 }
 
 func StreamConnWithExporterIdentity(conn net.Conn, psk []byte, version int, exporter []byte) *Snell {
+	if version == Version6 {
+		return &Snell{Conn: newV6Conn(conn, psk, exporter)}
+	}
 	if version >= Version4 {
 		return &Snell{Conn: newV4ConnWithExporterIdentity(conn, psk, exporter)}
 	}
@@ -210,6 +215,9 @@ func StreamConn(conn net.Conn, psk []byte, version int) *Snell {
 }
 
 func streamConn(conn net.Conn, psk []byte, version int, identity []byte) *Snell {
+	if version == Version6 {
+		return &Snell{Conn: newV6Conn(conn, psk, nil)}
+	}
 	if version >= Version4 {
 		return &Snell{Conn: newV4Conn(conn, psk, identity)}
 	}

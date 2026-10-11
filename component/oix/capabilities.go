@@ -14,6 +14,7 @@ func subscriptionCapabilities() string {
 		revision uint16
 	}{
 		{"snell.ech.h3", 1},
+		{"snell.ech.v6", 1},
 	}
 	entries := make([]string, 0, len(revisions))
 	for _, capability := range revisions {

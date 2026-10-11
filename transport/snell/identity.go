@@ -4,7 +4,6 @@ import (
 	"crypto/hmac"
 	"crypto/sha256"
 	"errors"
-	"fmt"
 )
 
 const (
@@ -13,6 +12,7 @@ const (
 	IdentityExporterLabel  = "EXPORTER-Dler-Snell-Identity-v2"
 	identityV2RootLabel    = "oix/snell-ech/2/auth-root"
 	identityWireMagicV2    = "DLSNID02"
+	identityWireMagicV6    = "DLSNID06"
 )
 
 func IdentityV2HeaderFromPSK(psk []byte) []byte {
@@ -22,21 +22,22 @@ func IdentityV2HeaderFromPSK(psk []byte) []byte {
 }
 
 func IdentityV2AuthTag(psk, exporter, salt []byte) ([]byte, error) {
+	return identityAuthTag(psk, exporter, salt, identityWireMagicV2)
+}
+
+func identityAuthTag(psk, exporter, salt []byte, magic string) ([]byte, error) {
 	if len(psk) == 0 {
-		return nil, errors.New("snell identity psk is empty")
+		return nil, errors.New("snell psk is empty")
 	}
-	if len(exporter) != IdentityExporterLength {
-		return nil, fmt.Errorf("snell identity exporter length %d", len(exporter))
-	}
-	if len(salt) != v4SaltSize {
-		return nil, fmt.Errorf("snell identity salt length %d", len(salt))
+	if len(exporter) != IdentityExporterLength || len(salt) != v4SaltSize {
+		return nil, errors.New("snell invalid authentication state")
 	}
 
 	root := identityV2Root(psk)
 	authKey := identityV2Expand(root, "authentication")
 	identity := IdentityV2HeaderFromPSK(psk)
 	mac := hmac.New(sha256.New, authKey[:])
-	_, _ = mac.Write([]byte(identityWireMagicV2))
+	_, _ = mac.Write([]byte(magic))
 	_, _ = mac.Write(exporter)
 	_, _ = mac.Write(salt)
 	_, _ = mac.Write(identity)

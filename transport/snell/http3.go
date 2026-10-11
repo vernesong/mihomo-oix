@@ -97,7 +97,7 @@ func (c *HTTP3Client) dial(ctx context.Context, pending *http3Dial) {
 		state := conn.ConnectionState().TLS
 		if !state.ECHAccepted || state.NegotiatedProtocol != http3.NextProtoH3 {
 			_ = conn.CloseWithError(0, "")
-			err = errors.New("snell HTTP/3 requires accepted ECH and h3 ALPN")
+			err = errors.New("snell HTTP/3 secure handshake rejected; check server configuration")
 		}
 	}
 	c.mu.Lock()
@@ -175,7 +175,7 @@ func (c *HTTP3Client) open(ctx context.Context) (_ net.Conn, exporter []byte, re
 	case <-client.ReceivedSettings():
 	}
 	if !client.Settings().EnableExtendedConnect {
-		return nil, nil, false, errors.New("snell server did not enable Extended CONNECT")
+		return nil, nil, false, errors.New("snell server does not support the selected HTTP/3 transport")
 	}
 	openCtx, cancel := context.WithTimeout(ctx, c.openTimeout(conn))
 	request, err := client.OpenRequestStream(openCtx)
@@ -213,12 +213,12 @@ func (c *HTTP3Client) open(ctx context.Context) (_ net.Conn, exporter []byte, re
 		if response.StatusCode == http.StatusServiceUnavailable {
 			c.retire(conn)
 		}
-		return nil, nil, false, fmt.Errorf("snell HTTP/3 CONNECT status %d", response.StatusCode)
+		return nil, nil, false, fmt.Errorf("snell HTTP/3 request rejected: status %d", response.StatusCode)
 	}
 	state := conn.ConnectionState().TLS
 	exporter, err = state.ExportKeyingMaterial(IdentityExporterLabel, []byte{}, IdentityExporterLength)
 	if err != nil {
-		return nil, nil, false, err
+		return nil, nil, false, errors.New("snell authentication setup failed")
 	}
 	_ = stream.SetDeadline(time.Time{})
 	return stream, exporter, false, nil

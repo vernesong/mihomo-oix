@@ -108,15 +108,19 @@ const (
 )
 
 const (
-	snellECHTLSALPN         = "snell-ech/1"
-	snellECHTLSPreviousALPN = "oix-snell/1"
-	snellECHTLSLegacyALPN   = "h2"
+	snellECHTLSALPN       = "snell-ech/1"
+	snellECHTLSV6ALPN     = "snell-ech/2"
+	snellECHTLSLegacyALPN = "h2"
 )
 
-func resolveSnellECHTLSALPN(alpn, protocol string) (string, error) {
-	if protocol == snellECHTLSPreviousALPN {
-		protocol = snellECHTLSALPN
+func snellECHTLSALPNForVersion(version int) string {
+	if version == snell.Version6 {
+		return snellECHTLSV6ALPN
 	}
+	return snellECHTLSALPN
+}
+
+func resolveSnellECHTLSALPN(alpn, protocol string, version int) (string, error) {
 	if alpn != "" && protocol != "" && alpn != protocol {
 		return "", errors.New("ech-tls alpn and legacy protocol values conflict")
 	}
@@ -124,10 +128,13 @@ func resolveSnellECHTLSALPN(alpn, protocol string) (string, error) {
 		alpn = protocol
 	}
 	if alpn == "" {
-		alpn = snellECHTLSALPN
+		alpn = snellECHTLSALPNForVersion(version)
 	}
-	if alpn != snellECHTLSALPN {
-		return "", fmt.Errorf("unsupported ech-tls ALPN: %s", alpn)
+	if alpn != snellECHTLSALPN && alpn != snellECHTLSV6ALPN {
+		return "", errors.New("unsupported ech-tls protocol option; refresh node configuration")
+	}
+	if alpn != snellECHTLSALPNForVersion(version) {
+		return "", errors.New("snell version and transport options are incompatible; refresh node configuration")
 	}
 	return alpn, nil
 }
@@ -163,7 +170,7 @@ func resolveSnellECHTLSClientFingerprint(opt *snellECHTLSObfsOption, option Snel
 	if slices.Contains(snellECHTLSFingerprints, fingerprint) {
 		return fingerprint
 	}
-	log.Warnln("[Snell] %s ignores client-fingerprint %s without ECH support, using %s", snellECHTLSALPN, configured, defaultSnellECHTLSClientFingerprint)
+	log.Warnln("[Snell] client-fingerprint %s is incompatible with the selected transport, using %s", configured, defaultSnellECHTLSClientFingerprint)
 	return defaultSnellECHTLSClientFingerprint
 }
 
@@ -216,7 +223,7 @@ func snellECHTLSConfig(opt *snellECHTLSObfsOption) (*ech.Config, error) {
 	}, nil
 }
 
-func requiresSnellV4Identity(mode string) bool {
+func requiresSnellIdentity(mode string) bool {
 	return mode == "ech-tls"
 }
 
@@ -251,14 +258,15 @@ func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell
 		}
 		state := tlsC.GetTLSConnectionState(c)
 		if !state.ECHAccepted {
-			return nil, errors.New("snell ech-tls handshake did not accept ECH")
+			return nil, errors.New("snell secure handshake rejected; check server configuration")
 		}
-		useExporterIdentity := state.NegotiatedProtocol == snellECHTLSALPN && s.echTLSIdentityVersion == 2
+		expectedALPN := snellECHTLSALPNForVersion(s.version)
+		useExporterIdentity := state.NegotiatedProtocol == expectedALPN && s.echTLSIdentityVersion == 2
 		if state.NegotiatedProtocol == snellECHTLSLegacyALPN && !s.echTLSLegacyFallback {
-			return nil, errors.New("snell ech-tls legacy ALPN was not enabled")
+			return nil, errors.New("snell server security settings are incompatible; refresh node configuration")
 		}
-		if state.NegotiatedProtocol != snellECHTLSALPN && state.NegotiatedProtocol != snellECHTLSLegacyALPN {
-			return nil, fmt.Errorf("snell ech-tls negotiated ALPN %q", state.NegotiatedProtocol)
+		if state.NegotiatedProtocol != expectedALPN && state.NegotiatedProtocol != snellECHTLSLegacyALPN {
+			return nil, errors.New("snell server protocol is incompatible; refresh node configuration")
 		}
 		if useExporterIdentity {
 			tlsExporter, err = state.ExportKeyingMaterial(
@@ -267,11 +275,11 @@ func (s *Snell) streamConnContext(ctx context.Context, c net.Conn) (*snell.Snell
 				snell.IdentityExporterLength,
 			)
 			if err != nil {
-				return nil, fmt.Errorf("snell ech-tls exporter: %w", err)
+				return nil, errors.New("snell authentication setup failed")
 			}
 		}
 	}
-	if s.identity && s.version == snell.Version4 {
+	if s.identity && (s.version == snell.Version4 || s.version == snell.Version6) {
 		if len(tlsExporter) == snell.IdentityExporterLength {
 			return snell.StreamConnWithExporterIdentity(c, s.psk, s.version, tlsExporter), nil
 		}
@@ -456,12 +464,13 @@ func snellHTTP3QUICConfig() *quic.Config {
 
 func NewSnell(option SnellOption) (*Snell, error) {
 	addr := net.JoinHostPort(option.Server, strconv.Itoa(option.Port))
+	displayAddr := net.JoinHostPort(oixdns.Mask(option.Server), strconv.Itoa(option.Port))
 	psk := []byte(option.Psk)
 
 	decoder := structure.NewDecoder(structure.Option{TagName: "obfs", WeaklyTypedInput: true})
 	obfsOption := &simpleObfsOption{Host: "bing.com"}
 	if err := decoder.Decode(option.ObfsOpts, obfsOption); err != nil {
-		return nil, fmt.Errorf("snell %s initialize obfs error: %w", addr, err)
+		return nil, fmt.Errorf("snell %s initialize obfs error: %w", displayAddr, err)
 	}
 
 	var shadowTLSOpt *shadowtls.ShadowTLSOption
@@ -480,7 +489,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			Version: 2,
 		}
 		if err := decoder.Decode(option.ObfsOpts, opt); err != nil {
-			return nil, fmt.Errorf("snell %s initialize shadow-tls-plugin error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize shadow-tls-plugin error: %w", displayAddr, err)
 		}
 
 		shadowTLSOpt = &shadowtls.ShadowTLSOption{
@@ -503,18 +512,18 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	case restls.Mode:
 		opt := &restlsOption{}
 		if err := decoder.Decode(option.ObfsOpts, opt); err != nil {
-			return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", displayAddr, err)
 		}
 
 		var err error
 		restlsConfig, err = restls.NewRestlsConfig(opt.Host, opt.Password, opt.VersionHint, opt.RestlsScript, option.ClientFingerprint)
 		if err != nil {
-			return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", displayAddr, err)
 		}
 		restlsConfig.InsecureSkipVerify = opt.SkipCertVerify
 		if opt.Fingerprint != "" {
 			if err = restls.SetFingerprint(restlsConfig, opt.Fingerprint, opt.NameCertVerify); err != nil {
-				return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", addr, err)
+				return nil, fmt.Errorf("snell %s initialize restls-plugin error: %w", displayAddr, err)
 			}
 		} else if opt.NameCertVerify != "" {
 			restls.SetNameCertVerify(restlsConfig, opt.NameCertVerify)
@@ -523,30 +532,33 @@ func NewSnell(option SnellOption) (*Snell, error) {
 	case jls.Mode:
 		opt := &jlsOption{}
 		if err := decoder.Decode(option.ObfsOpts, opt); err != nil {
-			return nil, fmt.Errorf("snell %s initialize jls-plugin error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize jls-plugin error: %w", displayAddr, err)
 		}
 
 		var err error
 		jlsConfig, err = jls.NewClientConfig(opt.Host, opt.Username, opt.Password, opt.ALPN)
 		if err != nil {
-			return nil, fmt.Errorf("snell %s initialize jls-plugin error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize jls-plugin error: %w", displayAddr, err)
 		}
 		jlsConfig.ClientFingerprint = option.ClientFingerprint
 	case "ech-tls":
 		opt := &snellECHTLSObfsOption{}
 		if err := decoder.Decode(option.ObfsOpts, opt); err != nil {
-			return nil, fmt.Errorf("snell %s initialize ech-tls error: %w", addr, err)
+			return nil, fmt.Errorf("snell %s initialize ech-tls error: %w", displayAddr, err)
 		}
 		host := snellECHTLSHost(opt, option.Server)
-		alpn, err := resolveSnellECHTLSALPN(opt.ALPN, opt.Protocol)
+		alpn, err := resolveSnellECHTLSALPN(opt.ALPN, opt.Protocol, option.Version)
 		if err != nil {
-			return nil, fmt.Errorf("snell %s %w", addr, err)
+			return nil, fmt.Errorf("snell %s %w", displayAddr, err)
 		}
 		if opt.IdentityVersion == 0 {
 			opt.IdentityVersion = 2
 		}
 		if opt.IdentityVersion != 1 && opt.IdentityVersion != 2 {
-			return nil, fmt.Errorf("snell %s unsupported identity version: %d", addr, opt.IdentityVersion)
+			return nil, fmt.Errorf("snell %s invalid identity-version; remove the override to use default security options", displayAddr)
+		}
+		if option.Version == snell.Version6 && (opt.IdentityVersion != 2 || opt.LegacyFallback) {
+			return nil, errors.New("snell v6 requires default security options; remove identity-version and legacy-fallback overrides")
 		}
 		if opt.Transport != "" {
 			echTLSTransport = opt.Transport
@@ -555,16 +567,16 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		case "tcp":
 		case "h3", "auto":
 			if opt.IdentityVersion != 2 || opt.LegacyFallback {
-				return nil, errors.New("snell HTTP/3 requires identity-version 2 without legacy-fallback")
+				return nil, errors.New("snell HTTP/3 requires default security options; remove identity-version and legacy-fallback overrides")
 			}
 		default:
 			return nil, fmt.Errorf("unsupported snell ech-tls transport: %s", echTLSTransport)
 		}
 		echTLSIdentityVersion = opt.IdentityVersion
 		echTLSLegacyFallback = opt.LegacyFallback
-		echTLSPreconnect = clampSnellPreconnect(net.JoinHostPort(oixdns.Mask(option.Server), strconv.Itoa(option.Port)), opt.Preconnect)
+		echTLSPreconnect = clampSnellPreconnect(displayAddr, opt.Preconnect)
 		if opt.SkipCertVerify || opt.Insecure {
-			return nil, fmt.Errorf("snell %s %s requires certificate verification", addr, snellECHTLSALPN)
+			return nil, fmt.Errorf("snell %s requires certificate verification", displayAddr)
 		}
 		echConfig, err := snellECHTLSConfig(opt)
 		if err != nil {
@@ -588,12 +600,12 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			DisableRenegotiation: true,
 		}
 	default:
-		return nil, fmt.Errorf("snell %s obfs mode error: %s", addr, obfsOption.Mode)
+		return nil, fmt.Errorf("snell %s obfs mode error: %s", displayAddr, obfsOption.Mode)
 	}
 
 	// backward compatible
 	if option.Version == 0 {
-		if requiresSnellV4Identity(obfsOption.Mode) {
+		if requiresSnellIdentity(obfsOption.Mode) {
 			option.Version = snell.Version4
 		} else {
 			option.Version = snell.DefaultSnellVersion
@@ -603,19 +615,22 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		// Snell v5 servers are backward-compatible with v4 clients.
 		option.Version = snell.Version4
 	}
-	if requiresSnellV4Identity(obfsOption.Mode) && option.Version == snell.Version4 {
+	if requiresSnellIdentity(obfsOption.Mode) && (option.Version == snell.Version4 || option.Version == snell.Version6) {
 		option.Identity = true
 	}
-	if echTLSTransport != "tcp" && option.Version != snell.Version4 {
-		return nil, errors.New("snell HTTP/3 requires version 4")
+	if option.Version == snell.Version6 && obfsOption.Mode != "ech-tls" {
+		return nil, errors.New("snell v6 requires ech-tls")
 	}
-	reuse := option.Version == snell.Version2 || (option.Version == snell.Version4 && option.Reuse)
+	if echTLSTransport != "tcp" && option.Version != snell.Version4 && option.Version != snell.Version6 {
+		return nil, errors.New("snell HTTP/3 requires version 4 or 6")
+	}
+	reuse := option.Version == snell.Version2 || ((option.Version == snell.Version4 || option.Version == snell.Version6) && option.Reuse)
 	switch option.Version {
 	case snell.Version1, snell.Version2:
 		if option.UDP {
 			return nil, fmt.Errorf("snell version %d not support UDP", option.Version)
 		}
-	case snell.Version3, snell.Version4:
+	case snell.Version3, snell.Version4, snell.Version6:
 	default:
 		return nil, fmt.Errorf("snell version error: %d", option.Version)
 	}
@@ -662,7 +677,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 			if err != nil {
 				return nil, err
 			}
-			if s.version == snell.Version4 {
+			if s.version == snell.Version4 || s.version == snell.Version6 {
 				if err = sc.WarmupContext(ctx); err != nil {
 					_ = sc.Close()
 					return nil, err

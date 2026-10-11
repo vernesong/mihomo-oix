@@ -260,6 +260,43 @@ func TestSnellECHTLSRejectsSkippedCertificateVerification(t *testing.T) {
 	}
 }
 
+func TestSnellConfigurationErrorsMaskManagedNodes(t *testing.T) {
+	oixdns.ConfigureManagedDNS("managed.example", "127.0.0.1:53")
+	t.Cleanup(oixdns.ResetManagedDNS)
+	oixdns.MarkCloudIP("192.0.2.42")
+	oixdns.MarkCloudIP("2001:db8::42")
+	for _, tc := range []struct{ server, want string }{
+		{"secret.managed.example", "***.managed.example"},
+		{"192.0.2.42", "***.***.***.***"},
+		{"2001:db8::42", "***.***.***.***"},
+		{"public.example", "public.example"},
+	} {
+		t.Run(tc.server, func(t *testing.T) {
+			for _, options := range []map[string]any{
+				{"mode": "unsupported"},
+				{"mode": "ech-tls", "skip-cert-verify": true},
+				{"mode": "ech-tls", "alpn": "unsupported"},
+				{"mode": "ech-tls", "identity-version": -1},
+			} {
+				adapter, err := NewSnell(SnellOption{
+					Name: "snell", Server: tc.server, Port: 443, Psk: "password", Version: 4,
+					ObfsOpts: options,
+				})
+				if err == nil {
+					adapter.Close()
+					t.Fatal("accepted invalid configuration")
+				}
+				if !strings.Contains(err.Error(), net.JoinHostPort(tc.want, "443")) {
+					t.Fatalf("error missing node context: %v", err)
+				}
+				if tc.want != tc.server && strings.Contains(err.Error(), tc.server) {
+					t.Fatalf("error exposes managed node: %v", err)
+				}
+			}
+		})
+	}
+}
+
 func TestSnellECHTLSLegacyFallbackMustBeExplicit(t *testing.T) {
 	echConfig, _, err := ech.GenECHConfig("front.example.com")
 	if err != nil {
@@ -295,13 +332,6 @@ func TestSnellECHTLSRejectsConflictingALPNAlias(t *testing.T) {
 	})
 	if err == nil || !strings.Contains(err.Error(), "values conflict") {
 		t.Fatalf("NewSnell() error = %v", err)
-	}
-}
-
-func TestSnellECHTLSAcceptsPreviousProtocolAlias(t *testing.T) {
-	got, err := resolveSnellECHTLSALPN("", snellECHTLSPreviousALPN)
-	if err != nil || got != snellECHTLSALPN {
-		t.Fatalf("resolveSnellECHTLSALPN() = (%q, %v)", got, err)
 	}
 }
 
@@ -446,23 +476,32 @@ func TestSnellPreconnectWarningMasksManagedNodes(t *testing.T) {
 			events := log.Subscribe()
 			defer log.UnSubscribe(events)
 			adapter, err := NewSnell(SnellOption{
-				Name: "snell", Server: tc.server, Port: 443, Psk: "password", Version: 4,
+				Name: "snell", Server: tc.server, Port: 14443, Psk: "password", Version: 4,
 				ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": echConfig, "preconnect": -1},
 			})
 			if err != nil {
 				t.Fatal(err)
 			}
 			defer adapter.Close()
-			select {
-			case event := <-events:
-				if !strings.Contains(event.Payload, tc.want) || !strings.Contains(event.Payload, "preconnect -1") {
-					t.Fatalf("unexpected warning: %s", event.Payload)
+			deadline := time.NewTimer(time.Second)
+			defer deadline.Stop()
+			for {
+				select {
+				case event := <-events:
+					// Earlier tests may still have messages in the asynchronous log queue.
+					if !strings.Contains(event.Payload, ":14443 preconnect -1 ") {
+						continue
+					}
+					if !strings.Contains(event.Payload, tc.want) {
+						t.Fatalf("unexpected warning: %s", event.Payload)
+					}
+					if tc.want != tc.server && strings.Contains(event.Payload, tc.server) {
+						t.Fatalf("warning exposes managed node: %s", event.Payload)
+					}
+					return
+				case <-deadline.C:
+					t.Fatal("missing preconnect warning")
 				}
-				if tc.want != tc.server && strings.Contains(event.Payload, tc.server) {
-					t.Fatalf("warning exposes managed node: %s", event.Payload)
-				}
-			case <-time.After(time.Second):
-				t.Fatal("missing preconnect warning")
 			}
 		})
 	}

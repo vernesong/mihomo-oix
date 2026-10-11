@@ -209,14 +209,14 @@ func (r *v4Reader) readFrame() ([]byte, error) {
 		return nil, err
 	}
 	if len(header) != v4HeaderPlainSize || header[0] != 4 {
-		return nil, errors.New("snell v4 invalid frame header")
+		return nil, errors.New("snell invalid encrypted data")
 	}
 
 	paddingLength := int(binary.BigEndian.Uint16(header[3:5]))
 	payloadLength := int(binary.BigEndian.Uint16(header[5:7]))
 	if payloadLength == 0 {
 		if paddingLength != 0 {
-			return nil, errors.New("snell v4 zero chunk with padding")
+			return nil, errors.New("snell invalid encrypted data")
 		}
 		return nil, shadowaead.ErrZeroChunk
 	}
@@ -354,7 +354,7 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 		return errors.New("snell v4 frame too large")
 	}
 	if len(payload) == 0 && paddingLength != 0 {
-		return errors.New("snell v4 zero chunk with padding")
+		return errors.New("snell invalid encrypted data")
 	}
 
 	header := make([]byte, v4HeaderPlainSize)
@@ -470,7 +470,7 @@ func makeV4RandomPadding(length int) ([]byte, error) {
 func makeV4BitCountPadding(length, oneBits int) ([]byte, error) {
 	totalBits := 8 * length
 	if oneBits < 0 || oneBits > totalBits {
-		return nil, errors.New("snell v4 invalid padding bit count")
+		return nil, errors.New("snell invalid encrypted data")
 	}
 
 	bitset := make([]byte, totalBits)
