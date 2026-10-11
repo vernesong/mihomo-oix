@@ -129,7 +129,7 @@ func (p *pool[T]) Put(item T) {
 }
 
 func recycle[T any](p *Pool[T]) {
-	items, evict := p.pool.close()
+	items, evict := p.close()
 	if evict != nil && len(items) > 0 {
 		go func() {
 			for _, item := range items {
@@ -159,7 +159,7 @@ func (p *pool[T]) close() ([]T, func(T)) {
 
 func (p *Pool[T]) Close() error {
 	runtime.SetFinalizer(p, nil)
-	items, evict := p.pool.close()
+	items, evict := p.close()
 	if evict != nil {
 		for _, item := range items {
 			evict(item)

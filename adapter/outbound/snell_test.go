@@ -17,8 +17,10 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/component/ech"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
+	"github.com/metacubex/mihomo/log"
 	"github.com/metacubex/mihomo/transport/snell"
 	"github.com/metacubex/mihomo/transport/vmess"
 
@@ -422,5 +424,46 @@ func TestSnellECHTLSLoadsPreconnectOutsideTheRangeClamped(t *testing.T) {
 			t.Fatalf("preconnect %d: NewSnell() error = %v", preconnect, err)
 		}
 		_ = adapter.Close()
+	}
+}
+
+func TestSnellPreconnectWarningMasksManagedNodes(t *testing.T) {
+	echConfig, _, err := ech.GenECHConfig("front.example.com")
+	if err != nil {
+		t.Fatal(err)
+	}
+	oixdns.ConfigureManagedDNS("managed.example", "127.0.0.1:53")
+	t.Cleanup(oixdns.ResetManagedDNS)
+	oixdns.MarkCloudIP("192.0.2.42")
+	oixdns.MarkCloudIP("2001:db8::42")
+	for _, tc := range []struct{ server, want string }{
+		{"secret.managed.example", "***.managed.example"},
+		{"192.0.2.42", "***.***.***.***"},
+		{"2001:db8::42", "***.***.***.***"},
+		{"public.example", "public.example"},
+	} {
+		t.Run(tc.server, func(t *testing.T) {
+			events := log.Subscribe()
+			defer log.UnSubscribe(events)
+			adapter, err := NewSnell(SnellOption{
+				Name: "snell", Server: tc.server, Port: 443, Psk: "password", Version: 4,
+				ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": echConfig, "preconnect": -1},
+			})
+			if err != nil {
+				t.Fatal(err)
+			}
+			defer adapter.Close()
+			select {
+			case event := <-events:
+				if !strings.Contains(event.Payload, tc.want) || !strings.Contains(event.Payload, "preconnect -1") {
+					t.Fatalf("unexpected warning: %s", event.Payload)
+				}
+				if tc.want != tc.server && strings.Contains(event.Payload, tc.server) {
+					t.Fatalf("warning exposes managed node: %s", event.Payload)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("missing preconnect warning")
+			}
+		})
 	}
 }

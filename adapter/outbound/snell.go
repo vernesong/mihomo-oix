@@ -18,6 +18,7 @@ import (
 	"github.com/metacubex/mihomo/common/structure"
 	"github.com/metacubex/mihomo/component/ech"
 	"github.com/metacubex/mihomo/component/ech/echparser"
+	"github.com/metacubex/mihomo/component/oix/oixdns"
 	tlsC "github.com/metacubex/mihomo/component/tls"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
@@ -561,7 +562,7 @@ func NewSnell(option SnellOption) (*Snell, error) {
 		}
 		echTLSIdentityVersion = opt.IdentityVersion
 		echTLSLegacyFallback = opt.LegacyFallback
-		echTLSPreconnect = clampSnellPreconnect(addr, opt.Preconnect)
+		echTLSPreconnect = clampSnellPreconnect(net.JoinHostPort(oixdns.Mask(option.Server), strconv.Itoa(option.Port)), opt.Preconnect)
 		if opt.SkipCertVerify || opt.Insecure {
 			return nil, fmt.Errorf("snell %s %s requires certificate verification", addr, snellECHTLSALPN)
 		}
