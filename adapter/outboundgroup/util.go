@@ -22,18 +22,22 @@ type ProxyGroup interface {
 	URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (mp map[string]uint16, err error)
 }
 
-var _ ProxyGroup = (*Fallback)(nil)
-var _ ProxyGroup = (*LoadBalance)(nil)
-var _ ProxyGroup = (*URLTest)(nil)
-var _ ProxyGroup = (*Selector)(nil)
-var _ ProxyGroup = (*Smart)(nil)
+var (
+	_ ProxyGroup = (*Fallback)(nil)
+	_ ProxyGroup = (*LoadBalance)(nil)
+	_ ProxyGroup = (*URLTest)(nil)
+	_ ProxyGroup = (*Selector)(nil)
+	_ ProxyGroup = (*Smart)(nil)
+)
 
 type SelectAble interface {
 	Set(string) error
 	ForceSet(name string)
 }
 
-var _ SelectAble = (*Fallback)(nil)
-var _ SelectAble = (*URLTest)(nil)
-var _ SelectAble = (*Selector)(nil)
-var _ SelectAble = (*Smart)(nil)
+var (
+	_ SelectAble = (*Fallback)(nil)
+	_ SelectAble = (*URLTest)(nil)
+	_ SelectAble = (*Selector)(nil)
+	_ SelectAble = (*Smart)(nil)
+)

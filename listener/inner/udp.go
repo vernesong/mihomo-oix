@@ -190,5 +190,7 @@ func (p *innerUDPPacket) Drop() {
 	p.data = nil
 }
 
-var _ net.PacketConn = (*innerUDPPacketConn)(nil)
-var _ C.UDPPacketInAddr = (*innerUDPPacket)(nil)
+var (
+	_ net.PacketConn    = (*innerUDPPacketConn)(nil)
+	_ C.UDPPacketInAddr = (*innerUDPPacket)(nil)
+)

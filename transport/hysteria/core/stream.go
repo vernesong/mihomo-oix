@@ -2,8 +2,9 @@ package core
 
 import (
 	"context"
-	"github.com/metacubex/quic-go"
 	"time"
+
+	"github.com/metacubex/quic-go"
 )
 
 // Handle stream close properly

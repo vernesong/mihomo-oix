@@ -10,9 +10,11 @@ import (
 	"github.com/vmihailenco/msgpack/v5"
 )
 
-const storageSizeLimit = 1024 * 1024
-const storageKeySizeLimit = 64
-const maxStorageEntries = storageSizeLimit / storageKeySizeLimit
+const (
+	storageSizeLimit    = 1024 * 1024
+	storageKeySizeLimit = 64
+	maxStorageEntries   = storageSizeLimit / storageKeySizeLimit
+)
 
 type StorageData struct {
 	Data []byte

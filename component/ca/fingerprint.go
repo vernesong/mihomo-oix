@@ -16,7 +16,7 @@ func NewFingerprintVerifier(fingerprint string, time func() time.Time) (func(cer
 	case "chrome", "firefox", "safari", "ios", "android", "edge", "360", "qq", "random", "randomized": // WTF???
 		return nil, fmt.Errorf("`fingerprint` is used for TLS certificate pinning. If you need to specify the browser fingerprint, use `client-fingerprint`")
 	}
-	fingerprint = strings.TrimSpace(strings.Replace(fingerprint, ":", "", -1))
+	fingerprint = strings.TrimSpace(strings.ReplaceAll(fingerprint, ":", ""))
 	fpByte, err := hex.DecodeString(fingerprint)
 	if err != nil {
 		return nil, fmt.Errorf("fingerprint string decode error: %w", err)

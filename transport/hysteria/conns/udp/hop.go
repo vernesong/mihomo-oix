@@ -54,7 +54,7 @@ func (a *udpHopAddr) String() string {
 }
 
 type udpPacket struct {
-	buf  []byte
+	buf  *[udpBufferSize]byte
 	n    int
 	addr net.Addr
 }
@@ -91,7 +91,7 @@ func NewObfsUDPHopClientPacketConn(server string, serverPorts string, hopInterva
 		closeChan:   make(chan struct{}),
 		bufPool: sync.Pool{
 			New: func() interface{} {
-				return make([]byte, udpBufferSize)
+				return new([udpBufferSize]byte)
 			},
 		},
 	}
@@ -114,9 +114,10 @@ func NewObfsUDPHopClientPacketConn(server string, serverPorts string, hopInterva
 
 func (c *ObfsUDPHopClientPacketConn) recvRoutine(conn net.PacketConn) {
 	for {
-		buf := c.bufPool.Get().([]byte)
-		n, addr, err := conn.ReadFrom(buf)
+		buf := c.bufPool.Get().(*[udpBufferSize]byte)
+		n, addr, err := conn.ReadFrom(buf[:])
 		if err != nil {
+			c.bufPool.Put(buf)
 			return
 		}
 		select {

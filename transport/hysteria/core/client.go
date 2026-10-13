@@ -20,9 +20,7 @@ import (
 	"github.com/metacubex/tls"
 )
 
-var (
-	ErrClosed = errors.New("closed")
-)
+var ErrClosed = errors.New("closed")
 
 type CongestionFactory func(refBPS uint64) congestion.CongestionControl
 
@@ -52,7 +50,8 @@ type Client struct {
 
 func NewClient(serverAddr string, serverPorts string, protocol string, auth []byte, tlsConfig *tls.Config, quicConfig *quic.Config,
 	transport *transport.ClientTransport, sendBPS uint64, recvBPS uint64, congestionFactory CongestionFactory,
-	obfuscator obfs.Obfuscator, hopInterval time.Duration, fastOpen bool) (*Client, error) {
+	obfuscator obfs.Obfuscator, hopInterval time.Duration, fastOpen bool,
+) (*Client, error) {
 	quicConfig.DisablePathMTUDiscovery = quicConfig.DisablePathMTUDiscovery || pmtud_fix.DisablePathMTUDiscovery
 	c := &Client{
 		transport:         transport,
@@ -169,8 +168,9 @@ func (c *Client) openStreamWithReconnect(dialer utils.PacketDialer) (*quic.Conn,
 		// All good
 		return c.quicSession, &wrappedQUICStream{stream}, nil
 	}
-	// Something is wrong
-	if nErr, ok := err.(net.Error); ok && nErr.Temporary() {
+	// QUIC's immediate-close path preserves custom PacketConn write errors.
+	// Keep their Temporary contract and the direct assertion (no error unwrapping).
+	if nErr, ok := err.(net.Error); ok && nErr.Temporary() { //nolint:staticcheck // SA1019: required for custom PacketConn retry compatibility; covered by client_retry_test.go.
 		// Temporary error, just return
 		return nil, nil, err
 	}

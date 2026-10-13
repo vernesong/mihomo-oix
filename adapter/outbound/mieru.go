@@ -208,7 +208,7 @@ func buildMieruClientConfig(option MieruOption) (*mieruclient.ClientConfig, erro
 		return nil, fmt.Errorf("failed to validate mieru option: %w", err)
 	}
 
-	var transportProtocol = mierupb.TransportProtocol_UNKNOWN_TRANSPORT_PROTOCOL.Enum()
+	transportProtocol := mierupb.TransportProtocol_UNKNOWN_TRANSPORT_PROTOCOL.Enum()
 	switch option.Transport {
 	case "TCP":
 		transportProtocol = mierupb.TransportProtocol_TCP.Enum()

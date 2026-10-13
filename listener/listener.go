@@ -294,7 +294,6 @@ func ReCreateShadowSocks(shadowSocksConfig string, tunnel C.Tunnel) {
 	for _, addr := range shadowSocksListener.AddrList() {
 		log.Infoln("ShadowSocks proxy listening at: %s", addr.String())
 	}
-	return
 }
 
 func ReCreateVmess(vmessConfig string, tunnel C.Tunnel) {
@@ -346,7 +345,6 @@ func ReCreateVmess(vmessConfig string, tunnel C.Tunnel) {
 	for _, addr := range vmessListener.AddrList() {
 		log.Infoln("Vmess proxy listening at: %s", addr.String())
 	}
-	return
 }
 
 func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
@@ -391,7 +389,6 @@ func ReCreateTuic(config LC.TuicServer, tunnel C.Tunnel) {
 	for _, addr := range tuicListener.AddrList() {
 		log.Infoln("Tuic proxy listening at: %s", addr.String())
 	}
-	return
 }
 
 func ReCreateTProxy(port int, tunnel C.Tunnel) {

@@ -5,11 +5,12 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"github.com/metacubex/http"
 	"io"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/metacubex/http"
 )
 
 func dialStream(ctx context.Context, serverAddress string, opts TunnelDialOptions) (net.Conn, error) {
@@ -130,9 +131,7 @@ func (c *streamSplitConn) pullLoop() {
 		maxBackoff    = 250 * time.Millisecond
 	)
 
-	var (
-		backoff = minBackoff
-	)
+	backoff := minBackoff
 	buf := make([]byte, readChunkSize)
 	for {
 		select {

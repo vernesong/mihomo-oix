@@ -5,7 +5,6 @@ import (
 	"bytes"
 	"context"
 	"fmt"
-	"github.com/metacubex/http"
 	"math"
 	"net/netip"
 	"os"
@@ -21,6 +20,8 @@ import (
 	"github.com/metacubex/mihomo/component/smart"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+
+	"github.com/metacubex/http"
 	"github.com/vernesong/leaves"
 )
 

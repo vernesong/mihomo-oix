@@ -151,7 +151,7 @@ func (pc *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 			length = pc.remain
 		}
 
-		n, err := pc.Conn.Read(b[:length])
+		n, err := pc.Read(b[:length])
 		if err != nil {
 			return 0, nil, err
 		}

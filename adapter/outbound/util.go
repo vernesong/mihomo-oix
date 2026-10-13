@@ -52,7 +52,6 @@ func resolveUDPAddr(ctx context.Context, network, address string, prefer C.DNSPr
 	}
 
 	ip, err := resolveIPWithResolver(ctx, host, prefer, resolver.ProxyServerHostResolver)
-
 	if err != nil {
 		return nil, err
 	}

@@ -28,12 +28,11 @@ import (
 	amnezia "github.com/metacubex/amneziawg-go/device_v1"
 	"github.com/metacubex/mipstack"
 	wireguard "github.com/metacubex/sing-wireguard"
-	"github.com/metacubex/wireguard-go/device"
-	"github.com/metacubex/wireguard-go/tun"
-
 	"github.com/metacubex/sing/common/debug"
 	E "github.com/metacubex/sing/common/exceptions"
 	M "github.com/metacubex/sing/common/metadata"
+	"github.com/metacubex/wireguard-go/device"
+	"github.com/metacubex/wireguard-go/tun"
 )
 
 const (
@@ -225,8 +224,10 @@ func newIPStack(option IPStackOption, localAddresses []netip.Prefix, mtu uint32)
 	}
 }
 
-var _ ipStack = (*mipstack.Stack)(nil)
-var _ ipStack = (wireguard.Device)(nil)
+var (
+	_ ipStack = (*mipstack.Stack)(nil)
+	_ ipStack = wireguard.Device(nil)
+)
 
 type ipStackNetDialer struct {
 	stack ipStack

@@ -351,7 +351,8 @@ func (s *Store) clearCache(level string, config string, group string) {
 
 	targetCache.Clear()
 
-	if level == "config" {
+	switch level {
+	case "config":
 		unwrapCache.RemoveByKeyPrefix(FormatDBKey(config) + "/")
 		recordCache.RemoveByKeyPrefix(FormatDBKey(KeyTypeStats, config) + "/")
 		for _, kt := range []string{KeyTypeStats, KeyTypeNode, KeyTypePrefetch, KeyTypeRanking, KeyTypeHostFailures} {
@@ -359,7 +360,7 @@ func (s *Store) clearCache(level string, config string, group string) {
 		}
 		blockedNodesCache.RemoveByKeyPrefix(FormatDBKey(config) + "/")
 		hostStatusCache.RemoveByKeyPrefix(FormatDBKey(KeyTypeHostFailures, config) + "/")
-	} else if level == "group" {
+	case "group":
 		groupKey := FormatDBKey(config, group) // "smart/{config}/{group}"
 		unwrapCache.RemoveByKeyPrefix(groupKey + "/")
 		recordCache.RemoveByKeyPrefix(FormatDBKey(KeyTypeStats, config, group) + "/")

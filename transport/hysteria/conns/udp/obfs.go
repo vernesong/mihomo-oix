@@ -1,10 +1,11 @@
 package udp
 
 import (
-	"github.com/metacubex/mihomo/transport/hysteria/obfs"
 	"net"
 	"sync"
 	"time"
+
+	"github.com/metacubex/mihomo/transport/hysteria/obfs"
 )
 
 const udpBufferSize = 65535

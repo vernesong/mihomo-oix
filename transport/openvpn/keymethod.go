@@ -144,7 +144,7 @@ func readKM2TrailingString(packet []byte, offset int) (string, int, error) {
 	if err == nil {
 		return s, next, nil
 	}
-	if errors.Is(err, ioStringEOF) && looksLikeFollowingTLSControl(packet[offset:]) {
+	if errors.Is(err, errStringEOF) && looksLikeFollowingTLSControl(packet[offset:]) {
 		return "", offset, nil
 	}
 	return "", offset, err
@@ -326,7 +326,7 @@ func appendOpenVPNString(out []byte, s string) []byte {
 
 func readOpenVPNString(packet []byte, offset int) (string, int, error) {
 	if offset+2 > len(packet) {
-		return "", offset, ioStringEOF
+		return "", offset, errStringEOF
 	}
 	size := int(binary.BigEndian.Uint16(packet[offset : offset+2]))
 	if size == 0 {
@@ -334,7 +334,7 @@ func readOpenVPNString(packet []byte, offset int) (string, int, error) {
 	}
 	if offset+2+size > len(packet) {
 		// Do not consume the length prefix: leftover bytes may be PUSH_REPLY.
-		return "", offset, ioStringEOF
+		return "", offset, errStringEOF
 	}
 	raw := packet[offset+2 : offset+2+size]
 	if raw[len(raw)-1] == 0 {
@@ -343,7 +343,7 @@ func readOpenVPNString(packet []byte, offset int) (string, int, error) {
 	return string(raw), offset + 2 + size, nil
 }
 
-var ioStringEOF = errors.New("openvpn string truncated")
+var errStringEOF = errors.New("openvpn string truncated")
 
 func openvpnPRF(secret []byte, label string, clientSeed, serverSeed, clientSession, serverSession []byte, out []byte) error {
 	seed := make([]byte, 0, len(label)+len(clientSeed)+len(serverSeed)+len(clientSession)+len(serverSession))

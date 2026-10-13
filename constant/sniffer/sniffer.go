@@ -22,9 +22,7 @@ const (
 	QUIC
 )
 
-var (
-	List = []Type{TLS, HTTP, QUIC}
-)
+var List = []Type{TLS, HTTP, QUIC}
 
 type Type int
 

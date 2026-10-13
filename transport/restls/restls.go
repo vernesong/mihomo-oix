@@ -19,7 +19,7 @@ type Restls struct {
 }
 
 func (r *Restls) Upstream() any {
-	return r.UConn.NetConn()
+	return r.NetConn()
 }
 
 type Config = tls.Config

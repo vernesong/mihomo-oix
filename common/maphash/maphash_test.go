@@ -277,11 +277,11 @@ func heapStr(t *testing.T) string {
 
 func testComparable[T comparable](t *testing.T, v T, v2 ...T) {
 	t.Run(TypeFor[T]().String(), func(t *testing.T) {
-		var a, b T = v, v
+		a, b := v, v
 		if len(v2) != 0 {
 			b = v2[0]
 		}
-		var pa *T = &a
+		pa := &a
 		seed := MakeSeed()
 		if Comparable(seed, a) != Comparable(seed, b) {
 			t.Fatalf("Comparable(seed, %v) != Comparable(seed, %v)", a, b)
@@ -359,16 +359,15 @@ func testWriteComparableNoEqual[T comparable](t *testing.T, v1, v2 T) {
 	if h1.Sum64() == h2.Sum64() {
 		t.Fatalf("WriteComparable(seed, %v) == WriteComparable(seed, %v)", v1, v2)
 	}
-
 }
 
 func testWriteComparable[T comparable](t *testing.T, v T, v2 ...T) {
 	t.Run(TypeFor[T]().String(), func(t *testing.T) {
-		var a, b T = v, v
+		a, b := v, v
 		if len(v2) != 0 {
 			b = v2[0]
 		}
-		var pa *T = &a
+		pa := &a
 		h1 := Hash{}
 		h2 := Hash{}
 		*(*Seed)(unsafe.Pointer(&h1)) = MakeSeed()
@@ -447,8 +446,10 @@ func TestComparableAllocations(t *testing.T) {
 }
 
 // Make sure a Hash implements the hash.Hash and hash.Hash64 interfaces.
-var _ hash.Hash = &Hash{}
-var _ hash.Hash64 = &Hash{}
+var (
+	_ hash.Hash   = &Hash{}
+	_ hash.Hash64 = &Hash{}
+)
 
 func benchmarkSize(b *testing.B, size int) {
 	h := &Hash{}

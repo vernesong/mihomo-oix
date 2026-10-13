@@ -87,7 +87,7 @@ func (c *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
 	if err != nil {
 		return n, addr, err
 	}
-	bb, err := Unpack(b[c.Cipher.SaltSize():], b[:n], c)
+	bb, err := Unpack(b[c.SaltSize():], b[:n], c)
 	if err != nil {
 		return n, addr, err
 	}
@@ -100,7 +100,7 @@ func (c *PacketConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err
 	if err != nil {
 		return
 	}
-	data, err = Unpack(data[c.Cipher.SaltSize():], data, c)
+	data, err = Unpack(data[c.SaltSize():], data, c)
 	if err != nil {
 		if put != nil {
 			put()

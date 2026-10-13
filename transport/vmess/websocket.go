@@ -167,7 +167,7 @@ func (wsc *websocketConn) Upstream() any {
 }
 
 func (wsc *websocketConn) Close() error {
-	_ = wsc.Conn.SetWriteDeadline(time.Now().Add(time.Second * 5))
+	_ = wsc.SetWriteDeadline(time.Now().Add(time.Second * 5))
 	_ = wsutil.WriteMessage(wsc.Conn, wsc.state, ws.OpClose, ws.NewCloseFrameBody(ws.StatusNormalClosure, ""))
 	_ = wsc.Conn.Close()
 	return nil
@@ -583,7 +583,6 @@ func StreamUpgradedWebsocketConn(w http.ResponseWriter, r *http.Request) (net.Co
 		} else {
 			conn = N.NewCachedConn(conn, edBuf)
 		}
-
 	}
 
 	return conn, nil

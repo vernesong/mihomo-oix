@@ -24,9 +24,11 @@ const (
 	AEAD_ChaCha20Poly1305 = 0x0003
 )
 
-const extensionEncryptedClientHello = 0xfe0d
-const DHKEM_X25519_HKDF_SHA256 = 0x0020
-const KDF_HKDF_SHA256 = 0x0001
+const (
+	extensionEncryptedClientHello = 0xfe0d
+	DHKEM_X25519_HKDF_SHA256      = 0x0020
+	KDF_HKDF_SHA256               = 0x0001
+)
 
 // sortedSupportedAEADs is just a sorted version of hpke.SupportedAEADS.
 // We need this so that when we insert them into ECHConfigs the ordering

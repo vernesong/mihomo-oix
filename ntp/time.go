@@ -4,9 +4,8 @@
 package ntp
 
 import (
-	"time"
-
 	"sync/atomic"
+	"time"
 )
 
 var _offset atomic.Int64 // [time.Duration]

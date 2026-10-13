@@ -1957,6 +1957,7 @@ func TestReadAllKeepsPendingSoftReset(t *testing.T) {
 		t.Fatalf("soft reset lost: got %s key=%d", got.Opcode, got.KeyID)
 	}
 }
+
 func TestInitialHandshakeRetransmitsLostClientHello(t *testing.T) {
 	clientIO, serverIO := newMemoryPacketPair()
 	_, caPEM := newTestTLSServerCertificate(t)
@@ -2262,6 +2263,7 @@ func TestStaleSoftResetNotParked(t *testing.T) {
 		t.Fatalf("watcher accepted stale epoch, got key=%d want 3", got.KeyID)
 	}
 }
+
 func TestMergePushReplyPreservesContinuationAcrossAuthPending(t *testing.T) {
 	continued := &PushReply{HasPushReply: true, PushContinuation: 2}
 	pending := &PushReply{hasAuthPending: true, AuthPendingTimeout: time.Second}
@@ -2885,6 +2887,7 @@ func TestTLSControlBufferLimit(t *testing.T) {
 		t.Fatal("oversized TLS control buffer was accepted")
 	}
 }
+
 func TestExpiredPendingRetiringWindowPausesUntilInstall(t *testing.T) {
 	clientIO, serverIO := newMemoryPacketPair()
 	client, err := newTestClient(&ClientConfig{Username: "u", Password: "p"}, clientIO)

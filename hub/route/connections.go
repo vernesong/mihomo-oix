@@ -23,7 +23,7 @@ func connectionRouter() http.Handler {
 }
 
 func getConnections(w http.ResponseWriter, r *http.Request) {
-	if !(r.Header.Get("Upgrade") == "websocket") {
+	if r.Header.Get("Upgrade") != "websocket" {
 		snapshot := statistic.DefaultManager.Snapshot()
 		render.JSON(w, r, snapshot)
 		return

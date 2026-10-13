@@ -215,7 +215,7 @@ func Main(args []string) {
 		if args[3] == "-" {
 			_, err = os.Stdout.Write(result)
 		} else {
-			err = os.WriteFile(args[3], result, 0644)
+			err = os.WriteFile(args[3], result, 0o644)
 		}
 		if err != nil {
 			panic(err)
@@ -241,7 +241,7 @@ func Main(args []string) {
 		if args[3] == "-" {
 			_, err = os.Stdout.Write(result)
 		} else {
-			err = os.WriteFile(args[3], result, 0644)
+			err = os.WriteFile(args[3], result, 0o644)
 		}
 		if err != nil {
 			panic(err)

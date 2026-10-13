@@ -28,6 +28,7 @@ func (a *onceError) Store(err error) {
 	}
 	a.err = err
 }
+
 func (a *onceError) Load() error {
 	a.Lock()
 	defer a.Unlock()
@@ -141,7 +142,7 @@ type PipeReader struct{ pipe }
 // If the write end is closed with an error, that error is
 // returned as err; otherwise err is EOF.
 func (r *PipeReader) Read(data []byte) (n int, err error) {
-	return r.pipe.read(data)
+	return r.read(data)
 }
 
 // Close closes the reader; subsequent writes to the
@@ -156,7 +157,7 @@ func (r *PipeReader) Close() error {
 // CloseWithError never overwrites the previous error if it exists
 // and always returns nil.
 func (r *PipeReader) CloseWithError(err error) error {
-	return r.pipe.closeRead(err)
+	return r.closeRead(err)
 }
 
 // A PipeWriter is the write half of a pipe.
@@ -168,7 +169,7 @@ type PipeWriter struct{ r PipeReader }
 // If the read end is closed with an error, that err is
 // returned as err; otherwise err is [ErrClosedPipe].
 func (w *PipeWriter) Write(data []byte) (n int, err error) {
-	return w.r.pipe.write(data)
+	return w.r.write(data)
 }
 
 // Close closes the writer; subsequent reads from the
@@ -184,7 +185,7 @@ func (w *PipeWriter) Close() error {
 // CloseWithError never overwrites the previous error if it exists
 // and always returns nil.
 func (w *PipeWriter) CloseWithError(err error) error {
-	return w.r.pipe.closeWrite(err)
+	return w.r.closeWrite(err)
 }
 
 // Pipe creates a synchronous in-memory pipe.

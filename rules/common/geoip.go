@@ -184,7 +184,6 @@ func (g *GEOIP) getIPMatcher() (router.IPMatcher, error) {
 		return nil, fmt.Errorf("[GeoIP] %w", err)
 	}
 	return geoIPMatcher, nil
-
 }
 
 func (g *GEOIP) GetRecodeSize() int {

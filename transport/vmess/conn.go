@@ -105,7 +105,7 @@ func (vc *Conn) sendRequest() error {
 			return err
 		}
 
-		stream := cipher.NewCFBEncrypter(block, hashTimestamp(timestamp))
+		stream := cipher.NewCFBEncrypter(block, hashTimestamp(timestamp)) //nolint:staticcheck // SA1019: legacy protocol headers and CFB cipher suites require this exact wire format.
 		stream.XORKeyStream(buf.Bytes(), buf.Bytes())
 		mbuf.Write(buf.Bytes())
 		_, err = vc.Conn.Write(mbuf.Bytes())
@@ -127,7 +127,7 @@ func (vc *Conn) recvResponse() error {
 			return err
 		}
 
-		stream := cipher.NewCFBDecrypter(block, vc.respBodyIV[:])
+		stream := cipher.NewCFBDecrypter(block, vc.respBodyIV[:]) //nolint:staticcheck // SA1019: legacy protocol headers and CFB cipher suites require this exact wire format.
 		buf = make([]byte, 4)
 		_, err = io.ReadFull(vc.Conn, buf)
 		if err != nil {

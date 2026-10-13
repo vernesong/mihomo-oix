@@ -134,7 +134,7 @@ func (s *Server) configureBrutalCongestion(quicConn *quic.Conn, clientRx uint64)
 	if s.option.ReceiveBPS > 0 && s.option.IgnoreClientBandwidth && clientRx == 0 {
 		return false, errors.New("shadowquic: brutal negotiation failed")
 	}
-	if !(s.option.ReceiveBPS == 0 && s.option.IgnoreClientBandwidth) && clientRx > 0 {
+	if (s.option.ReceiveBPS != 0 || !s.option.IgnoreClientBandwidth) && clientRx > 0 {
 		rx := clientRx
 		if s.option.SendBPS > 0 && rx > s.option.SendBPS {
 			rx = s.option.SendBPS
@@ -242,5 +242,7 @@ func (p *serverUDPPacket) InAddr() net.Addr {
 	return p.assoc.LocalAddr()
 }
 
-var _ C.UDPPacket = (*serverUDPPacket)(nil)
-var _ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+var (
+	_ C.UDPPacket       = (*serverUDPPacket)(nil)
+	_ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+)

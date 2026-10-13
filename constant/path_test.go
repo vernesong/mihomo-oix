@@ -1,8 +1,9 @@
 package constant
 
 import (
-	"github.com/stretchr/testify/assert"
 	"testing"
+
+	"github.com/stretchr/testify/assert"
 )
 
 func TestPath(t *testing.T) {
@@ -37,5 +38,4 @@ func TestPath(t *testing.T) {
 	assert.True(t, (&path{}).IsSafePath("./mykey/key1.key"))
 	assert.True(t, (&path{}).IsSafePath("./mykey/../key1.key"))
 	assert.False(t, (&path{}).IsSafePath("./mykey/../../key1.key"))
-
 }

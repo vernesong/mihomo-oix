@@ -37,7 +37,7 @@ func (om *OrderedMap[K, V]) MarshalJSON() ([]byte, error) { //nolint:funlen
 			}
 		case int, int8, int16, int32, int64, uint, uint8, uint16, uint32, uint64:
 			buf.WriteByte('"')
-			buf.WriteString(fmt.Sprint(key))
+			fmt.Fprint(&buf, key)
 			buf.WriteByte('"')
 		default:
 			// this switch takes care of wrapper types around primitive types, such as
@@ -50,7 +50,7 @@ func (om *OrderedMap[K, V]) MarshalJSON() ([]byte, error) { //nolint:funlen
 			case reflect.Int, reflect.Int8, reflect.Int16, reflect.Int32, reflect.Int64,
 				reflect.Uint, reflect.Uint8, reflect.Uint16, reflect.Uint32, reflect.Uint64:
 				buf.WriteByte('"')
-				buf.WriteString(fmt.Sprint(key))
+				fmt.Fprint(&buf, key)
 				buf.WriteByte('"')
 			default:
 				return nil, fmt.Errorf("unsupported key type: %T", key)
@@ -90,7 +90,7 @@ func (om *OrderedMap[K, V]) UnmarshalJSON(data []byte) error {
 
 		keyStr, ok := tok.(string)
 		if !ok {
-			return fmt.Errorf("key must be a string, got %T\n", tok)
+			return fmt.Errorf("key must be a string, got %T", tok)
 		}
 
 		var key K

@@ -26,7 +26,7 @@ func (c *Client) quicRoundTripper(tlsConfig *vmess.TLSConfig, congestionControlN
 			Versions:                   []quic.Version{quic.Version1},
 			MaxIdleTimeout:             DefaultQuicMaxIdleTimeout,
 			InitialStreamReceiveWindow: DefaultQuicStreamReceiveWindow,
-			DisablePathMTUDiscovery:    !(runtime.GOOS == "windows" || runtime.GOOS == "linux" || runtime.GOOS == "android" || runtime.GOOS == "darwin"),
+			DisablePathMTUDiscovery:    runtime.GOOS != "windows" && runtime.GOOS != "linux" && runtime.GOOS != "android" && runtime.GOOS != "darwin",
 			Allow0RTT:                  false,
 		},
 		Dial: func(ctx context.Context, addr string, tlsCfg *tls.Config, cfg *quic.Config) (*quic.Conn, error) {

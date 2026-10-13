@@ -113,7 +113,7 @@ func (rp *ruleSetProvider) MarshalJSON() ([]byte, error) {
 		providerForApi{
 			Behavior:    rp.behavior.String(),
 			Format:      rp.format.String(),
-			Name:        rp.Fetcher.Name(),
+			Name:        rp.Name(),
 			RuleCount:   rp.strategy.Count(),
 			Type:        rp.Type().String(),
 			UpdatedAt:   rp.UpdatedAt(),

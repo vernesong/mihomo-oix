@@ -7,6 +7,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/adapter/outbound"
+	C "github.com/metacubex/mihomo/constant"
 
 	"github.com/metacubex/http"
 	"github.com/metacubex/http/httptest"
@@ -65,5 +66,13 @@ func TestURLTestUsesFirstMeasurementWhenUnifiedRetryFails(t *testing.T) {
 	}
 	if delay >= 100 {
 		t.Fatalf("delay = %dms, want first successful measurement below 100ms", delay)
+	}
+	for _, history := range [][]C.DelayHistory{proxy.DelayHistory(), proxy.DelayHistoryForTestUrl(server.URL), proxy.ExtraDelayHistories()[server.URL].History} {
+		if len(history) != 1 || history[0].Delay != delay {
+			t.Fatalf("successful probe history = %v, want delay %d", history, delay)
+		}
+	}
+	if !proxy.AliveForTestUrl(server.URL) || proxy.LastDelayForTestUrl(server.URL) != delay {
+		t.Fatal("successful probe state was not retained")
 	}
 }

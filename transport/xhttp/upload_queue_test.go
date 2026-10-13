@@ -37,10 +37,12 @@ func TestUploadQueueMaxPackets(t *testing.T) {
 	n, err = q.Read(buf)
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []byte{'1'}, buf[:n])
+	assert.NoError(t, err)
 
 	n, err = q.Read(buf)
 	assert.Equal(t, 1, n)
 	assert.Equal(t, []byte{'2'}, buf[:n])
+	assert.NoError(t, err)
 
 	n, err = q.Read(buf)
 	assert.Equal(t, 0, n)

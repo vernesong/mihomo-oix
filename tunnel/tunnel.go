@@ -75,10 +75,12 @@ var (
 
 type tunnel struct{}
 
-var Tunnel = tunnel{}
-var _ C.Tunnel = Tunnel
-var _ P.Tunnel = Tunnel
-var _ proxydialer.Tunnel = Tunnel
+var (
+	Tunnel                    = tunnel{}
+	_      C.Tunnel           = Tunnel
+	_      P.Tunnel           = Tunnel
+	_      proxydialer.Tunnel = Tunnel
+)
 
 func (t tunnel) HandleTCPConn(conn net.Conn, metadata *C.Metadata) {
 	connCtx := icontext.NewConnContext(conn, metadata)

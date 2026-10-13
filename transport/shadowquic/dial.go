@@ -68,7 +68,7 @@ type quicNetConn struct {
 }
 
 func (q quicNetConn) Close() error {
-	err := q.Conn.CloseWithError(0, "")
+	err := q.CloseWithError(0, "")
 	_ = q.pc.Close()
 	return err
 }

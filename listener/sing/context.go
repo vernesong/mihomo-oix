@@ -2,12 +2,12 @@ package sing
 
 import (
 	"context"
-	"golang.org/x/exp/slices"
 	"net"
 
 	"github.com/metacubex/mihomo/adapter/inbound"
 
 	"github.com/metacubex/sing/common/auth"
+	"golang.org/x/exp/slices"
 )
 
 type contextKey string

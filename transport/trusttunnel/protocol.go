@@ -76,7 +76,7 @@ func parse16BytesIP(buffer [16]byte) netip.Addr {
 	var zeroPrefix [12]byte
 	isIPv4 := bytes.HasPrefix(buffer[:], zeroPrefix[:])
 	// Special: check ::1
-	isIPv4 = isIPv4 && !(buffer[12] == 0 && buffer[13] == 0 && buffer[14] == 0 && buffer[15] == 1)
+	isIPv4 = isIPv4 && (buffer[12] != 0 || buffer[13] != 0 || buffer[14] != 0 || buffer[15] != 1)
 	if isIPv4 {
 		return netip.AddrFrom4([4]byte(buffer[12:16]))
 	}

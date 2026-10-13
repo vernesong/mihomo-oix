@@ -31,9 +31,11 @@ const QuicgoH3KeepAlivePeriod = 10 * time.Second
 // ChromeH2KeepAlivePeriod consistent with chrome
 const ChromeH2KeepAlivePeriod = 45 * time.Second
 
-type DialRawFunc func(ctx context.Context) (net.Conn, error)
-type WrapTLSFunc func(ctx context.Context, conn net.Conn, isH2 bool) (net.Conn, error)
-type DialQUICFunc func(ctx context.Context, cfg *quic.Config) (*quic.Conn, error)
+type (
+	DialRawFunc  func(ctx context.Context) (net.Conn, error)
+	WrapTLSFunc  func(ctx context.Context, conn net.Conn, isH2 bool) (net.Conn, error)
+	DialQUICFunc func(ctx context.Context, cfg *quic.Config) (*quic.Conn, error)
+)
 
 type TransportMaker func() http.RoundTripper
 

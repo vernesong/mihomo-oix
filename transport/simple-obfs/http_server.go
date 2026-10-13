@@ -73,8 +73,10 @@ const httpResponseTemplate = "HTTP/1.1 101 Switching Protocols\r\n" +
 	"Sec-WebSocket-Accept: %s\r\n" +
 	"\r\n"
 
-var vMajor = randv2.IntN(11)
-var vMinor = randv2.IntN(12)
+var (
+	vMajor = randv2.IntN(11)
+	vMinor = randv2.IntN(12)
+)
 
 func (hos *HTTPObfsServer) Write(b []byte) (int, error) {
 	if hos.firstResponse {

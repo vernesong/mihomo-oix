@@ -7,10 +7,10 @@ import (
 	"strings"
 	"testing"
 
-	"golang.org/x/exp/slices"
-
 	"github.com/metacubex/mihomo/component/trie"
+
 	"github.com/stretchr/testify/assert"
+	"golang.org/x/exp/slices"
 )
 
 func testDump(t *testing.T, tree *trie.DomainTrie[struct{}], set *trie.DomainSet) {

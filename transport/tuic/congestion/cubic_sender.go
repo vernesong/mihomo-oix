@@ -14,9 +14,11 @@ const (
 	initialCongestionWindow    = 32
 )
 
-const InvalidPacketNumber congestion.PacketNumber = -1
-const MaxCongestionWindowPackets = 20000
-const MaxByteCount = congestion.ByteCount(1<<62 - 1)
+const (
+	InvalidPacketNumber        congestion.PacketNumber = -1
+	MaxCongestionWindowPackets                         = 20000
+	MaxByteCount                                       = congestion.ByteCount(1<<62 - 1)
+)
 
 type cubicSender struct {
 	hybridSlowStart HybridSlowStart
@@ -54,9 +56,7 @@ type cubicSender struct {
 	maxDatagramSize congestion.ByteCount
 }
 
-var (
-	_ congestion.CongestionControl = &cubicSender{}
-)
+var _ congestion.CongestionControl = &cubicSender{}
 
 // NewCubicSender makes a new cubic sender
 func NewCubicSender(

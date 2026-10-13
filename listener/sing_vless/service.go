@@ -264,7 +264,7 @@ func (c *serverPacketConn) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 	if err != nil {
 		return
 	}
-	return c.ExtendedConn.Write(p)
+	return c.Write(p)
 }
 
 func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksaddr, err error) {
@@ -286,7 +286,7 @@ func (c *serverPacketConn) ReadPacket(buffer *buf.Buffer) (destination M.Socksad
 func (c *serverPacketConn) WritePacket(buffer *buf.Buffer, destination M.Socksaddr) error {
 	packetLen := buffer.Len()
 	binary.BigEndian.PutUint16(buffer.ExtendHeader(2), uint16(packetLen))
-	return c.ExtendedConn.WriteBuffer(buffer)
+	return c.WriteBuffer(buffer)
 }
 
 func (c *serverPacketConn) FrontHeadroom() int {

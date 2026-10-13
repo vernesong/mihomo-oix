@@ -16,6 +16,7 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/common/contextutils"
+
 	"github.com/metacubex/tls"
 	"golang.org/x/sync/semaphore"
 )
@@ -552,8 +553,10 @@ func (c *Client) authPendingDeadline() time.Time {
 // min(60, 1800) = 60s. tls_select_encryption_key switches outbound to the
 // new key once it is authenticated, which happens inside this window, so
 // this is the correct deadline for promoting without peer evidence.
-const authDeferredExpire = 60 * time.Second
-const authPendingMaxTimeout = 30 * time.Minute
+const (
+	authDeferredExpire    = 60 * time.Second
+	authPendingMaxTimeout = 30 * time.Minute
+)
 
 func (c *Client) transitionWindow() time.Duration {
 	window := transitionWindow
@@ -1214,7 +1217,7 @@ func (c *Client) readServerKeyMethodFrom(ctx context.Context, conn pushReadConn)
 			c.leftoverTLS = append([]byte(nil), buf[consumed:]...)
 			return record, nil
 		}
-		if !errors.Is(parseErr, errKeyMethodPacketTooShort) && !errors.Is(parseErr, ioStringEOF) {
+		if !errors.Is(parseErr, errKeyMethodPacketTooShort) && !errors.Is(parseErr, errStringEOF) {
 			return nil, parseErr
 		}
 		if readErr != nil {

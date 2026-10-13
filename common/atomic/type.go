@@ -313,7 +313,7 @@ func (f *Float64) Add(delta float64) float64 {
 		old := math.Float64frombits(oldBits)
 		new := old + delta
 		newBits := math.Float64bits(new)
-		if f.Uint64.CompareAndSwap(oldBits, newBits) {
+		if f.CompareAndSwap(oldBits, newBits) {
 			return new
 		}
 	}

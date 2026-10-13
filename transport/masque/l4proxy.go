@@ -130,6 +130,6 @@ func (c *l4StreamConn) RemoteAddr() net.Addr {
 }
 
 func (c *l4StreamConn) Close() error {
-	c.RequestStream.CancelRead(0)
+	c.CancelRead(0)
 	return c.RequestStream.Close()
 }

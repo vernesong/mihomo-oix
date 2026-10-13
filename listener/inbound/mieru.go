@@ -9,11 +9,11 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/listener/mieru"
 	"github.com/metacubex/mihomo/log"
-	"google.golang.org/protobuf/proto"
 
 	mieruserver "github.com/enfein/mieru/v3/apis/server"
 	mierutp "github.com/enfein/mieru/v3/apis/trafficpattern"
 	mierupb "github.com/enfein/mieru/v3/pkg/appctl/appctlpb"
+	"google.golang.org/protobuf/proto"
 )
 
 type Mieru struct {

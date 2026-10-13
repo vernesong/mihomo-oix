@@ -17,8 +17,10 @@ import (
 	"github.com/samber/lo"
 )
 
-type Parser[V any] func([]byte) (V, error)
-type BundleFile func() (fs.File, error)
+type (
+	Parser[V any] func([]byte) (V, error)
+	BundleFile    func() (fs.File, error)
+)
 
 type Fetcher[V any] struct {
 	ctx          context.Context
@@ -307,7 +309,6 @@ func (f *Fetcher[V]) updateWithLog() {
 	}
 
 	log.Infoln("[Provider] %s's content update", f.Name())
-	return
 }
 
 func NewFetcher[V any](name string, interval time.Duration, vehicle P.Vehicle, bundleFile BundleFile, parser Parser[V], onUpdate func(V)) *Fetcher[V] {

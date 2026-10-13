@@ -38,12 +38,12 @@ func (q *quicStreamConn) close() error {
 		defer q.closeDeferFn()
 	}
 
-	_ = q.Stream.SetWriteDeadline(time.Now())
+	_ = q.SetWriteDeadline(time.Now())
 
 	q.lock.Lock()
 	defer q.lock.Unlock()
 
-	q.Stream.CancelRead(0)
+	q.CancelRead(0)
 	return q.Stream.Close()
 }
 

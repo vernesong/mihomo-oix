@@ -36,7 +36,7 @@ func NewDecoder(option Option) *Decoder {
 
 // Decode transform a map[string]any to a struct
 func (d *Decoder) Decode(src map[string]any, dst any) error {
-	if reflect.TypeOf(dst).Kind() != reflect.Ptr {
+	if reflect.TypeOf(dst).Kind() != reflect.Pointer {
 		return fmt.Errorf("decode must recive a ptr struct")
 	}
 	return d.decode("", src, reflect.ValueOf(dst).Elem())
@@ -436,7 +436,7 @@ func (d *Decoder) decodeStructFromMap(name string, dataVal, val reflect.Value) e
 		for i := 0; i < structType.NumField(); i++ {
 			fieldType := structType.Field(i)
 			fieldVal := structVal.Field(i)
-			if fieldVal.Kind() == reflect.Ptr && fieldVal.Elem().Kind() == reflect.Struct {
+			if fieldVal.Kind() == reflect.Pointer && fieldVal.Elem().Kind() == reflect.Struct {
 				// Handle embedded struct pointers as embedded structs.
 				fieldVal = fieldVal.Elem()
 			}

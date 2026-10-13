@@ -13,10 +13,10 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/http"
 	"github.com/metacubex/mihomo/component/ca"
-	"github.com/metacubex/tls"
 
+	"github.com/metacubex/http"
+	"github.com/metacubex/tls"
 	"github.com/stretchr/testify/require"
 )
 

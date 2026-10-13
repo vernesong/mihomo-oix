@@ -8,17 +8,17 @@ type bindPacketConn struct {
 }
 
 func (c *bindPacketConn) Read(b []byte) (n int, err error) {
-	n, _, err = c.EnhancePacketConn.ReadFrom(b)
+	n, _, err = c.ReadFrom(b)
 	return n, err
 }
 
 func (c *bindPacketConn) WaitRead() (data []byte, put func(), err error) {
-	data, put, _, err = c.EnhancePacketConn.WaitReadFrom()
+	data, put, _, err = c.WaitReadFrom()
 	return
 }
 
 func (c *bindPacketConn) Write(b []byte) (n int, err error) {
-	return c.EnhancePacketConn.WriteTo(b, c.rAddr)
+	return c.WriteTo(b, c.rAddr)
 }
 
 func (c *bindPacketConn) RemoteAddr() net.Addr {

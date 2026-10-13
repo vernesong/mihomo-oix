@@ -413,5 +413,7 @@ func (p *udpPacket) LocalAddr() net.Addr {
 	return p.localAddr
 }
 
-var _ C.MultiAddrListener = (*Listener)(nil)
-var _ C.UDPPacket = (*udpPacket)(nil)
+var (
+	_ C.MultiAddrListener = (*Listener)(nil)
+	_ C.UDPPacket         = (*udpPacket)(nil)
+)

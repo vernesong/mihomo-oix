@@ -279,7 +279,7 @@ func (u *CoreUpdater) gzFileUnpack(gzfile, outDir string, fileMode os.FileMode, 
 		}
 	}()
 	// Get the original file name from the .gz file header
-	originalName := gzReader.Header.Name
+	originalName := gzReader.Name
 	if err := validateGzipName(originalName); err != nil {
 		return "", err
 	}

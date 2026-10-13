@@ -15,8 +15,10 @@ import (
 	"github.com/metacubex/sing/common/ntp"
 )
 
-var globalSrv *Service
-var globalMu sync.Mutex
+var (
+	globalSrv *Service
+	globalMu  sync.Mutex
+)
 
 type Service struct {
 	server         M.Socksaddr

@@ -17,9 +17,7 @@ import (
 	"github.com/metacubex/http"
 )
 
-var (
-	SwitchProxiesCallback func(sGroup string, sProxy string)
-)
+var SwitchProxiesCallback func(sGroup string, sProxy string)
 
 func proxyRouter() http.Handler {
 	r := chi.NewRouter()

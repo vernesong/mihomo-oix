@@ -26,7 +26,7 @@ type PoolClient struct {
 
 func (t *PoolClient) DialContext(ctx context.Context, metadata *C.Metadata) (net.Conn, error) {
 	conn, err := t.getClient(false).DialContext(ctx, metadata)
-	if errors.Is(err, TooManyOpenStreams) {
+	if errors.Is(err, ErrTooManyOpenStreams) {
 		conn, err = t.newClient(false).DialContext(ctx, metadata)
 	}
 	if err != nil {
@@ -37,7 +37,7 @@ func (t *PoolClient) DialContext(ctx context.Context, metadata *C.Metadata) (net
 
 func (t *PoolClient) ListenPacket(ctx context.Context, metadata *C.Metadata) (net.PacketConn, error) {
 	pc, err := t.getClient(true).ListenPacket(ctx, metadata)
-	if errors.Is(err, TooManyOpenStreams) {
+	if errors.Is(err, ErrTooManyOpenStreams) {
 		pc, err = t.newClient(true).ListenPacket(ctx, metadata)
 	}
 	if err != nil {
@@ -100,7 +100,7 @@ func (t *PoolClient) getClient(udp bool) Client {
 		}
 		for it := clients.Front(); it != nil; {
 			client := it.Value
-			if client != bestClient && client.OpenStreams() == 0 && time.Now().Sub(client.LastVisited()) > 30*time.Minute {
+			if client != bestClient && client.OpenStreams() == 0 && time.Since(client.LastVisited()) > 30*time.Minute {
 				client.Close()
 				next := it.Next()
 				clients.Remove(it)

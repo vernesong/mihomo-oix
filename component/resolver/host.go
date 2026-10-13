@@ -10,6 +10,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/resolver/hosts"
 	"github.com/metacubex/mihomo/component/trie"
+
 	"github.com/metacubex/randv2"
 )
 

@@ -292,7 +292,7 @@ func isHexRandom(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f')) {
+		if (c < '0' || c > '9') && (c < 'a' || c > 'f') {
 			return false
 		}
 	}
@@ -305,7 +305,7 @@ func isValidLabel(s string) bool {
 	}
 	for i := 0; i < len(s); i++ {
 		c := s[i]
-		if !((c >= 'a' && c <= 'z') || (c >= '0' && c <= '9') || c == '-') {
+		if (c < 'a' || c > 'z') && (c < '0' || c > '9') && c != '-' {
 			return false
 		}
 	}
@@ -337,7 +337,7 @@ func GetEffectiveTarget(host string, dstIP string) string {
 				}
 			}
 		}
-		if reg == "" || reg == h || !(h == reg || strings.HasSuffix(h, "."+reg)) {
+		if reg == "" || reg == h || (h != reg && !strings.HasSuffix(h, "."+reg)) {
 			lastDot := strings.LastIndexByte(h, '.')
 			if lastDot < 0 {
 				return h

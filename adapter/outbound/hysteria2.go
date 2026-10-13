@@ -26,8 +26,10 @@ import (
 	"github.com/metacubex/tls"
 )
 
-const minHopInterval = 5
-const defaultHopInterval = 30
+const (
+	minHopInterval     = 5
+	defaultHopInterval = 30
+)
 
 type Hysteria2 struct {
 	*Base

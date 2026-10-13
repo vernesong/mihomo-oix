@@ -172,7 +172,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 
 	tlsConfig, err := masque.PrepareTlsConfig(privKey, ecPubKey, sni, option.SkipCertVerify)
 	if err != nil {
-		return nil, fmt.Errorf("failed to prepare TLS config: %v\n", err)
+		return nil, fmt.Errorf("failed to prepare TLS config: %v", err)
 	}
 	outbound.tlsConfig = tlsConfig
 

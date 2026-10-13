@@ -3,11 +3,10 @@ package logic_test
 import (
 	"testing"
 
-	// https://github.com/golang/go/wiki/CodeReviewComments#import-dot
-	. "github.com/metacubex/mihomo/rules/logic"
-
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/rules"
+	// https://github.com/golang/go/wiki/CodeReviewComments#import-dot
+	. "github.com/metacubex/mihomo/rules/logic"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -27,9 +26,11 @@ func TestAND(t *testing.T) {
 
 	and, err = NewAND("(DOMAIN,baidu.com),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
 	assert.NotEqual(t, nil, err)
+	assert.Nil(t, and)
 
 	and, err = NewAND("((AND,(DOMAIN,baidu.com),(NETWORK,TCP)),(NETWORK,TCP),(DST-PORT,10001-65535))", "DIRECT", ParseRule)
 	assert.Equal(t, nil, err)
+	assert.NotNil(t, and)
 }
 
 func TestNOT(t *testing.T) {

@@ -22,7 +22,6 @@ import (
 	LC "github.com/metacubex/mihomo/listener/config"
 	"github.com/metacubex/mihomo/listener/sing"
 	"github.com/metacubex/mihomo/log"
-	"golang.org/x/exp/constraints"
 
 	tun "github.com/metacubex/sing-tun"
 	"github.com/metacubex/sing/common"
@@ -30,14 +29,16 @@ import (
 	E "github.com/metacubex/sing/common/exceptions"
 	F "github.com/metacubex/sing/common/format"
 	"github.com/metacubex/sing/common/ranges"
-
 	"go4.org/netipx"
+	"golang.org/x/exp/constraints"
 	"golang.org/x/exp/maps"
 	"golang.org/x/exp/slices"
 )
 
-var InterfaceName = "Meta"
-var EnforceBindInterface = false
+var (
+	InterfaceName        = "Meta"
+	EnforceBindInterface = false
+)
 
 type Listener struct {
 	closed  bool
@@ -622,11 +623,12 @@ func (d *cDialerInterfaceFinder) DefaultInterfaceName(destination netip.Addr) st
 func (d *cDialerInterfaceFinder) FindInterfaceName(destination netip.Addr) string {
 	for _, dest := range []netip.Addr{destination, netip.IPv4Unspecified(), netip.IPv6Unspecified()} {
 		autoDetectInterfaceName := d.DefaultInterfaceName(dest)
-		if autoDetectInterfaceName == d.tunName {
+		switch autoDetectInterfaceName {
+		case d.tunName:
 			log.Warnln("[TUN] Auto detect interface for %s get same name with tun", destination.String())
-		} else if autoDetectInterfaceName == "" || autoDetectInterfaceName == "<nil>" {
+		case "", "<nil>":
 			log.Warnln("[TUN] Auto detect interface for %s get empty name.", destination.String())
-		} else {
+		default:
 			log.Debugln("[TUN] Auto detect interface for %s --> %s", destination, autoDetectInterfaceName)
 			return autoDetectInterfaceName
 		}

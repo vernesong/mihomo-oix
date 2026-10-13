@@ -5,9 +5,11 @@ import (
 	"archive/zip"
 	"bytes"
 	"compress/gzip"
+	"fmt"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 )
 
@@ -107,12 +109,12 @@ func TestArchiveRejectsEmptyOrEscapingTargets(t *testing.T) {
 }
 
 func TestUIArchiveRequiresNonEmptyRegularContent(t *testing.T) {
-	for _, kind := range []string{"directory", "empty", "symlink", "escape", "valid"} {
+	for _, kind := range []string{"directory", "empty", "symlink", "escape", "valid", "legacy-valid", "legacy-empty", "legacy-directory", "legacy-escape"} {
 		t.Run(kind, func(t *testing.T) {
 			var raw bytes.Buffer
 			writer := tar.NewWriter(&raw)
 			header := &tar.Header{Name: "index.html", Mode: 0o644, Typeflag: tar.TypeReg, Size: 7}
-			switch kind {
+			switch strings.TrimPrefix(kind, "legacy-") {
 			case "directory":
 				header.Name = "assets/"
 				header.Typeflag = tar.TypeDir
@@ -133,8 +135,20 @@ func TestUIArchiveRequiresNonEmptyRegularContent(t *testing.T) {
 				_, _ = writer.Write([]byte("content"))
 			}
 			_ = writer.Close()
+			if strings.HasPrefix(kind, "legacy-") {
+				// tar.Writer normalizes NUL type flags, so construct the legacy header
+				// in the encoded archive and recompute its checksum.
+				data := raw.Bytes()
+				data[156] = 0
+				copy(data[148:156], "        ")
+				var sum int
+				for _, b := range data[:512] {
+					sum += int(b)
+				}
+				copy(data[148:156], fmt.Sprintf("%06o\x00 ", sum))
+			}
 			err := validateArchive(makeTestGzip(t, "", raw.Bytes()), true)
-			if kind == "valid" {
+			if strings.TrimPrefix(kind, "legacy-") == "valid" {
 				if err != nil {
 					t.Fatal(err)
 				}

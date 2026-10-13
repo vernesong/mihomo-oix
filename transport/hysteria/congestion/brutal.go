@@ -1,10 +1,10 @@
 package congestion
 
 import (
+	"time"
+
 	"github.com/metacubex/quic-go/congestion"
 	"github.com/metacubex/quic-go/monotime"
-
-	"time"
 )
 
 const (
@@ -70,17 +70,20 @@ func (b *BrutalSender) GetCongestionWindow() congestion.ByteCount {
 }
 
 func (b *BrutalSender) OnPacketSent(sentTime monotime.Time, bytesInFlight congestion.ByteCount,
-	packetNumber congestion.PacketNumber, bytes congestion.ByteCount, isRetransmittable bool) {
+	packetNumber congestion.PacketNumber, bytes congestion.ByteCount, isRetransmittable bool,
+) {
 	b.pacer.SentPacket(sentTime, bytes)
 }
 
 func (b *BrutalSender) OnPacketAcked(number congestion.PacketNumber, ackedBytes congestion.ByteCount,
-	priorInFlight congestion.ByteCount, eventTime monotime.Time) {
+	priorInFlight congestion.ByteCount, eventTime monotime.Time,
+) {
 	// Stub
 }
 
 func (b *BrutalSender) OnCongestionEvent(number congestion.PacketNumber, lostBytes congestion.ByteCount,
-	priorInFlight congestion.ByteCount) {
+	priorInFlight congestion.ByteCount,
+) {
 	// Stub
 }
 

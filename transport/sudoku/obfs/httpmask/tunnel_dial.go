@@ -5,8 +5,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/metacubex/http"
-	"github.com/metacubex/tls"
 	"io"
 	"net"
 	"net/url"
@@ -15,6 +13,9 @@ import (
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
+
+	"github.com/metacubex/http"
+	"github.com/metacubex/tls"
 )
 
 const (

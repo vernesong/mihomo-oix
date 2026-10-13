@@ -47,9 +47,7 @@ func (ssr *ShadowSocksR) StreamConnContext(ctx context.Context, c net.Conn, meta
 	}
 	c = ssr.obfs.StreamConn(c)
 	c = ssr.cipher.StreamConn(c)
-	var (
-		iv []byte
-	)
+	var iv []byte
 	switch conn := c.(type) {
 	case *shadowstream.Conn:
 		iv, err = conn.ObtainWriteIV()

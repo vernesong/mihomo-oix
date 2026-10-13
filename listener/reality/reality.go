@@ -19,8 +19,10 @@ import (
 	utls "github.com/metacubex/utls"
 )
 
-type Conn = utls.Conn
-type LimitFallback = utls.RealityLimitFallback
+type (
+	Conn          = utls.Conn
+	LimitFallback = utls.RealityLimitFallback
+)
 
 type Config struct {
 	Dest              string

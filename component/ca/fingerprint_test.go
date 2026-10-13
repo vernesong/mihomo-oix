@@ -190,24 +190,28 @@ func TestFingerprintVerifierRoot(t *testing.T) {
 	assert.Error(t, err)
 }
 
-var rootPEM, _ = pem.Decode([]byte(gtsRoot))
-var rootCert, _ = x509.ParseCertificate(rootPEM.Bytes)
-var intermediatePEM, _ = pem.Decode([]byte(gtsIntermediate))
-var intermediateCert, _ = x509.ParseCertificate(intermediatePEM.Bytes)
-var leafPEM, _ = pem.Decode([]byte(googleLeaf))
-var leafCert, _ = x509.ParseCertificate(leafPEM.Bytes)
-var leafWithInvalidHashPEM, _ = pem.Decode([]byte(googleLeafWithInvalidHash))
-var leafWithInvalidHashCert, _ = x509.ParseCertificate(leafWithInvalidHashPEM.Bytes)
-var smimeRootPEM, _ = pem.Decode([]byte(smimeRoot))
-var smimeRootCert, _ = x509.ParseCertificate(smimeRootPEM.Bytes)
-var smimeIntermediatePEM, _ = pem.Decode([]byte(smimeIntermediate))
-var smimeIntermediateCert, _ = x509.ParseCertificate(smimeIntermediatePEM.Bytes)
-var smimeLeafPEM, _ = pem.Decode([]byte(smimeLeaf))
-var smimeLeafCert, _ = x509.ParseCertificate(smimeLeafPEM.Bytes)
-var certTime = func() time.Time { return time.Unix(1677615892, 0) }
+var (
+	rootPEM, _                 = pem.Decode([]byte(gtsRoot))
+	rootCert, _                = x509.ParseCertificate(rootPEM.Bytes)
+	intermediatePEM, _         = pem.Decode([]byte(gtsIntermediate))
+	intermediateCert, _        = x509.ParseCertificate(intermediatePEM.Bytes)
+	leafPEM, _                 = pem.Decode([]byte(googleLeaf))
+	leafCert, _                = x509.ParseCertificate(leafPEM.Bytes)
+	leafWithInvalidHashPEM, _  = pem.Decode([]byte(googleLeafWithInvalidHash))
+	leafWithInvalidHashCert, _ = x509.ParseCertificate(leafWithInvalidHashPEM.Bytes)
+	smimeRootPEM, _            = pem.Decode([]byte(smimeRoot))
+	smimeRootCert, _           = x509.ParseCertificate(smimeRootPEM.Bytes)
+	smimeIntermediatePEM, _    = pem.Decode([]byte(smimeIntermediate))
+	smimeIntermediateCert, _   = x509.ParseCertificate(smimeIntermediatePEM.Bytes)
+	smimeLeafPEM, _            = pem.Decode([]byte(smimeLeaf))
+	smimeLeafCert, _           = x509.ParseCertificate(smimeLeafPEM.Bytes)
+	certTime                   = func() time.Time { return time.Unix(1677615892, 0) }
+)
 
-const leafServerName = "www.google.com"
-const wrongLeafServerName = "www.google.com.cn"
+const (
+	leafServerName      = "www.google.com"
+	wrongLeafServerName = "www.google.com.cn"
+)
 
 const gtsIntermediate = `-----BEGIN CERTIFICATE-----
 MIIFljCCA36gAwIBAgINAgO8U1lrNMcY9QFQZjANBgkqhkiG9w0BAQsFADBHMQsw

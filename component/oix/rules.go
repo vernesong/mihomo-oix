@@ -10,12 +10,16 @@ import (
 	"unicode/utf8"
 )
 
-const rulesPath = "/api/v1/rules"
-const saveRulesPath = "/api/v1/rules/save"
-const maxEditableRuleBytes = 8192
+const (
+	rulesPath            = "/api/v1/rules"
+	saveRulesPath        = "/api/v1/rules/save"
+	maxEditableRuleBytes = 8192
+)
 
-var errRulesInput = errors.New("规则内容或版本无效，请重新读取面板规则")
-var errRulesTooLarge = errors.New("account rules exceed the router editor limit")
+var (
+	errRulesInput    = errors.New("规则内容或版本无效，请重新读取面板规则")
+	errRulesTooLarge = errors.New("account rules exceed the router editor limit")
+)
 
 type ruleState struct {
 	CustomRules string `json:"custom_rules"`

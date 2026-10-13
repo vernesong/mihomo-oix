@@ -8,11 +8,11 @@ import (
 	"net/netip"
 	"strconv"
 
-	"github.com/metacubex/blake3"
-	"github.com/metacubex/quic-go"
-
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/transport/socks5"
+
+	"github.com/metacubex/blake3"
+	"github.com/metacubex/quic-go"
 )
 
 type BufferedReader interface {
@@ -116,8 +116,8 @@ func NewAuthenticate(TKN [32]byte) Authenticate {
 
 func ReadAuthenticateWithHead(head CommandHead, reader BufferedReader) (c Authenticate, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != AuthenticateType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != AuthenticateType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	_, err = io.ReadFull(reader, c.TKN[:])
@@ -169,8 +169,8 @@ func NewConnect(ADDR Address) Connect {
 
 func ReadConnectWithHead(head CommandHead, reader BufferedReader) (c Connect, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != ConnectType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != ConnectType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	c.ADDR, err = ReadAddress(reader)
@@ -224,8 +224,8 @@ func NewPacket(ASSOC_ID uint32, LEN uint16, ADDR Address, DATA []byte) Packet {
 
 func ReadPacketWithHead(head CommandHead, reader BufferedReader) (c Packet, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != PacketType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != PacketType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	err = binary.Read(reader, binary.BigEndian, &c.ASSOC_ID)
@@ -300,8 +300,8 @@ func NewDissociate(ASSOC_ID uint32) Dissociate {
 
 func ReadDissociateWithHead(head CommandHead, reader BufferedReader) (c Dissociate, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != DissociateType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != DissociateType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	err = binary.Read(reader, binary.BigEndian, &c.ASSOC_ID)
@@ -347,8 +347,8 @@ func NewHeartbeat() Heartbeat {
 
 func ReadHeartbeatWithHead(head CommandHead, reader BufferedReader) (c Heartbeat, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != HeartbeatType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != HeartbeatType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	return
@@ -384,8 +384,8 @@ func NewResponseFailed() Response {
 
 func ReadResponseWithHead(head CommandHead, reader BufferedReader) (c Response, err error) {
 	c.CommandHead = head
-	if c.CommandHead.TYPE != ResponseType {
-		err = fmt.Errorf("error command type: %s", c.CommandHead.TYPE)
+	if c.TYPE != ResponseType {
+		err = fmt.Errorf("error command type: %s", c.TYPE)
 		return
 	}
 	c.REP, err = reader.ReadByte()

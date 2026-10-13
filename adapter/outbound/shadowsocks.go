@@ -318,7 +318,8 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 	obfsMode := ""
 
 	decoder := structure.NewDecoder(structure.Option{TagName: "obfs", WeaklyTypedInput: true})
-	if option.Plugin == "obfs" {
+	switch option.Plugin {
+	case "obfs":
 		opts := simpleObfsOption{Host: "bing.com"}
 		if err := decoder.Decode(option.PluginOpts, &opts); err != nil {
 			return nil, fmt.Errorf("ss %s initialize obfs error: %w", addr, err)
@@ -329,7 +330,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 		}
 		obfsMode = opts.Mode
 		obfsOption = &opts
-	} else if option.Plugin == "v2ray-plugin" {
+	case "v2ray-plugin":
 		opts := v2rayObfsOption{Host: "bing.com", Mux: true}
 		if err := decoder.Decode(option.PluginOpts, &opts); err != nil {
 			return nil, fmt.Errorf("ss %s initialize v2ray-plugin error: %w", addr, err)
@@ -362,7 +363,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 			}
 			v2rayOption.ECHConfig = echConfig
 		}
-	} else if option.Plugin == "gost-plugin" {
+	case "gost-plugin":
 		opts := gostObfsOption{Host: "bing.com", Mux: true}
 		if err := decoder.Decode(option.PluginOpts, &opts); err != nil {
 			return nil, fmt.Errorf("ss %s initialize gost-plugin error: %w", addr, err)
@@ -393,7 +394,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 			}
 			gostOption.ECHConfig = echConfig
 		}
-	} else if option.Plugin == shadowtls.Mode {
+	case shadowtls.Mode:
 		obfsMode = shadowtls.Mode
 		opt := &shadowTLSOption{
 			Version: 2,
@@ -419,7 +420,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 		} else {
 			shadowTLSOpt.ALPN = shadowtls.DefaultALPN
 		}
-	} else if option.Plugin == restls.Mode {
+	case restls.Mode:
 		obfsMode = restls.Mode
 		restlsOpt := &restlsOption{}
 		if err := decoder.Decode(option.PluginOpts, restlsOpt); err != nil {
@@ -440,7 +441,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 			restls.SetNameCertVerify(restlsConfig, restlsOpt.NameCertVerify)
 		}
 		restlsConfig.ForceTLS12 = restlsOpt.ForceTLS12
-	} else if option.Plugin == jls.Mode {
+	case jls.Mode:
 		obfsMode = jls.Mode
 		jlsOpt := &jlsOption{}
 		if err := decoder.Decode(option.PluginOpts, jlsOpt); err != nil {
@@ -451,7 +452,7 @@ func NewShadowSocks(option ShadowSocksOption) (*ShadowSocks, error) {
 			return nil, fmt.Errorf("ss %s initialize jls-plugin error: %w", addr, err)
 		}
 		jlsConfig.ClientFingerprint = option.ClientFingerprint
-	} else if option.Plugin == kcptun.Mode {
+	case kcptun.Mode:
 		obfsMode = kcptun.Mode
 		kcptunOpt := &kcpTunOption{}
 		if err := decoder.Decode(option.PluginOpts, kcptunOpt); err != nil {

@@ -176,4 +176,3 @@ func (m *Manager) RangeSmartTarget(target string, fn func(id string) bool) {
 		})
 	}
 }
-

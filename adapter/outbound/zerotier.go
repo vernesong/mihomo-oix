@@ -21,6 +21,7 @@ import (
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/dns"
 	"github.com/metacubex/mihomo/log"
+
 	M "github.com/metacubex/sing/common/metadata"
 	ZT "github.com/metacubex/zerotier-go"
 	ZTIP "github.com/metacubex/zerotier-go/iplink"
@@ -184,7 +185,7 @@ func (f zeroTierStateFS) Open(name string) (fs.File, error) {
 
 func (f zeroTierStateFS) WriteFile(name string, data []byte, perm fs.FileMode) error {
 	path := filepath.Join(f.directory, filepath.FromSlash(name))
-	err := os.MkdirAll(filepath.Dir(path), 0700)
+	err := os.MkdirAll(filepath.Dir(path), 0o700)
 	if err == nil {
 		err = os.WriteFile(path, data, perm)
 	}
@@ -472,7 +473,7 @@ func (z *ZeroTier) startLocked() error {
 	if started {
 		return nil
 	}
-	if err := os.MkdirAll(z.option.StateDir, 0700); err != nil {
+	if err := os.MkdirAll(z.option.StateDir, 0o700); err != nil {
 		return err
 	}
 	wireConfig, err := z.wireTransportConfig()

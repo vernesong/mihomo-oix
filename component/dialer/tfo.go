@@ -125,7 +125,9 @@ func (c *tfoConn) WriterReplaceable() bool {
 	return c.Conn != nil
 }
 
-func dialTFO(ctx context.Context, netDialer net.Dialer, network, address string) (net.Conn, error) {
+// The connection dials on first Write, after the caller may cancel its dial context.
+// Keep the existing independent timeout, canceled when the connection closes.
+func dialTFO(_ context.Context, netDialer net.Dialer, network, address string) (net.Conn, error) {
 	ctx, cancel := context.WithTimeout(context.Background(), DefaultTCPTimeout)
 	dialer := tfo.Dialer{Dialer: netDialer, DisableTFO: false}
 	return &tfoConn{

@@ -141,7 +141,6 @@ func router(isDebug bool, secret string, dohServer string, cors Cors) *chi.Mux {
 		}
 		r.Mount("/upgrade", upgradeRouter())
 		addExternalRouters(r)
-
 	})
 
 	if uiPath != "" {
@@ -487,10 +486,7 @@ func getLogs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	formatText := r.URL.Query().Get("format")
-	isStructured := false
-	if formatText == "structured" {
-		isStructured = true
-	}
+	isStructured := formatText == "structured"
 
 	level, ok := log.LogLevelMapping[levelText]
 	if !ok {

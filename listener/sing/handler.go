@@ -36,6 +36,8 @@ func (h FnHandler) NewError(ctx context.Context, err error) {
 	h.NewErrorFn(ctx, err)
 }
 
-var _ N.TCPConnectionHandler = FnHandler{}
-var _ N.UDPConnectionHandler = FnHandler{}
-var _ E.Handler = FnHandler{}
+var (
+	_ N.TCPConnectionHandler = FnHandler{}
+	_ N.UDPConnectionHandler = FnHandler{}
+	_ E.Handler              = FnHandler{}
+)

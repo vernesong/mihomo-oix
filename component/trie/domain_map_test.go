@@ -11,6 +11,7 @@ import (
 	"testing"
 
 	"github.com/metacubex/mihomo/component/trie"
+
 	"github.com/stretchr/testify/assert"
 )
 

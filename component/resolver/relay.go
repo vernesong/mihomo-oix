@@ -12,8 +12,10 @@ import (
 	D "github.com/miekg/dns"
 )
 
-const DefaultDnsReadTimeout = time.Second * 10
-const DefaultDnsRelayTimeout = time.Second * 5
+const (
+	DefaultDnsReadTimeout  = time.Second * 10
+	DefaultDnsRelayTimeout = time.Second * 5
+)
 
 const SafeDnsPacketSize = 2 * 1024 // safe size which is 1232 from https://dnsflagday.net/2020/, so 2048 is enough
 

@@ -1,9 +1,9 @@
 package queue
 
 import (
+	"runtime"
 	"sync"
 	"testing"
-	"time"
 
 	"github.com/stretchr/testify/assert"
 )
@@ -124,69 +124,50 @@ func TestQueueNew(t *testing.T) {
 	assert.Equal(t, int64(0), q3.Len(), "New queue should have length 0")
 }
 
-// TestQueueConcurrency tests the concurrency safety of Queue
+// Exercise the public methods while producers, consumers and readers overlap.
 func TestQueueConcurrency(t *testing.T) {
-	// Initialize a new queue
 	q := New[int](100)
-
-	// Number of goroutines and operations
-	goroutines := 10
-	operations := 100
-
-	// Wait group to synchronize goroutines
-	wg := sync.WaitGroup{}
-	wg.Add(goroutines * 2) // For both producers and consumers
-
-	// Start producer goroutines
-	for i := 0; i < goroutines; i++ {
-		go func(id int) {
-			defer wg.Done()
-			for j := 0; j < operations; j++ {
-				q.Put(id*operations + j)
-				// Small sleep to increase chance of race conditions
-				time.Sleep(time.Microsecond)
+	const workers, operations = 10, 100
+	consumed := make(chan int, workers*operations)
+	var wg sync.WaitGroup
+	for i := range workers {
+		wg.Go(func() {
+			for j := range operations {
+				q.Put(i*operations + j + 1)
+				_ = q.Last()
+				_ = q.Copy()
+				consumed <- q.Pop()
+				runtime.Gosched()
 			}
-		}(i)
+		})
 	}
-
-	// Start consumer goroutines
-	consumed := make(chan int, goroutines*operations)
-	for i := 0; i < goroutines; i++ {
-		go func() {
-			defer wg.Done()
-			for j := 0; j < operations; j++ {
-				// Try to pop an item, but don't block if queue is empty
-				// Use a mutex to avoid race condition between Len() check and Pop()
-				q.lock.Lock()
-				if len(q.items) > 0 {
-					item := q.items[0]
-					q.items = q.items[1:]
-					q.lock.Unlock()
-					consumed <- item
-				} else {
-					q.lock.Unlock()
-				}
-				// Small sleep to increase chance of race conditions
-				time.Sleep(time.Microsecond)
-			}
-		}()
-	}
-
-	// Wait for all goroutines to finish
 	wg.Wait()
-	// Close the consumed channel
 	close(consumed)
-
-	// Count the number of consumed items
-	consumedCount := 0
-	for range consumed {
-		consumedCount++
+	seen := make(map[int]bool)
+	for item := range consumed {
+		if item == 0 || seen[item] {
+			t.Fatalf("lost or duplicated item: %d", item)
+		}
+		seen[item] = true
 	}
+	assert.Equal(t, workers*operations, len(seen))
+	assert.Equal(t, int64(0), q.Len())
+}
 
-	// Check that the queue is in a consistent state
-	totalItems := goroutines * operations
-	remaining := int(q.Len())
-	assert.Equal(t, totalItems, consumedCount+remaining, "Total items should equal consumed items plus remaining items")
+func TestQueuePopReleasesReferences(t *testing.T) {
+	q := New[*int](2)
+	first, second := new(int), new(int)
+	q.Put(first, second)
+	backing := q.items
+	if q.Pop() != first || backing[0] != nil {
+		t.Fatal("consumed slot retains its object")
+	}
+	if q.Pop() != second || backing[1] != nil {
+		t.Fatal("last consumed slot retains its object")
+	}
+	if q.items != nil {
+		t.Fatal("empty queue retains its backing array")
+	}
 }
 
 // TestQueueWithDifferentTypes tests the Queue with different types

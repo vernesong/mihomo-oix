@@ -14,7 +14,7 @@ type domainTriePolicy struct {
 }
 
 func (p domainTriePolicy) Match(domain string) []dnsClient {
-	record := p.DomainTrie.Search(domain)
+	record := p.Search(domain)
 	if record != nil {
 		return record.Data()
 	}

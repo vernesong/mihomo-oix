@@ -8,6 +8,7 @@ import (
 	"testing"
 
 	"github.com/metacubex/mihomo/component/geodata/router"
+
 	"google.golang.org/protobuf/proto"
 )
 

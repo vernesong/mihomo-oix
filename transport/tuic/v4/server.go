@@ -75,9 +75,7 @@ func (s *serverHandler) parsePacket(packet *Packet, udpRelayMode types.UdpRelayM
 	if !s.authOk.Load() {
 		return
 	}
-	var assocId uint32
-
-	assocId = packet.ASSOC_ID
+	assocId := packet.ASSOC_ID
 
 	writeClosed, _ := s.udpInputMap.LoadOrStoreFn(assocId, func() *atomic.Bool { return &atomic.Bool{} })
 	if writeClosed.Load() {
@@ -214,5 +212,7 @@ func (s *serverUDPPacket) Drop() {
 	s.packet.DATA = nil
 }
 
-var _ C.UDPPacket = (*serverUDPPacket)(nil)
-var _ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+var (
+	_ C.UDPPacket       = (*serverUDPPacket)(nil)
+	_ C.UDPPacketInAddr = (*serverUDPPacket)(nil)
+)

@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/metacubex/mihomo/log"
+
 	"github.com/oschwald/maxminddb-golang"
 )
 

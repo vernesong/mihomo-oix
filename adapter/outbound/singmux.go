@@ -50,7 +50,7 @@ func (s *SingMux) ListenPacketContext(ctx context.Context, metadata *C.Metadata)
 	if s.onlyTcp {
 		return s.ProxyAdapter.ListenPacketContext(ctx, metadata)
 	}
-	if err = s.ProxyAdapter.ResolveUDP(ctx, metadata); err != nil {
+	if err = s.ResolveUDP(ctx, metadata); err != nil {
 		return nil, err
 	}
 	pc, err := s.client.ListenPacket(ctx, M.SocksaddrFromNet(metadata.UDPAddr()))

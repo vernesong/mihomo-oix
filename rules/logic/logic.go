@@ -89,9 +89,10 @@ func (logic *Logic) format(payload string) ([]Range, error) {
 	stack := make([]int, 0)
 	subRanges := make([]Range, 0)
 	for i, c := range payload {
-		if c == '(' {
+		switch c {
+		case '(':
 			stack = append(stack, i) // push
-		} else if c == ')' {
+		case ')':
 			if len(stack) == 0 {
 				return nil, fmt.Errorf("missing '('")
 			}
@@ -183,7 +184,7 @@ func matchSubRules(metadata *C.Metadata, name string, subRules map[string][]C.Ru
 				m, a = matchSubRules(metadata, rule.Adapter(), subRules, helper)
 			}
 			if m && (a == "PASS-RULE" || (helper.CheckPassRule != nil && helper.CheckPassRule(a))) {
-				continue 
+				continue
 			}
 			return m, a
 		}

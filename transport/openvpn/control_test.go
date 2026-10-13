@@ -1274,6 +1274,7 @@ func TestProtectedControlPacketIDExhaustion(t *testing.T) {
 		t.Fatalf("packet emitted after control packet ID exhaustion: %v", err)
 	}
 }
+
 func TestControlWriteDeadlineExtensionIgnoresOldTimer(t *testing.T) {
 	packetIO := &blockingWritePacketIO{entered: make(chan struct{})}
 	var clientID SessionID

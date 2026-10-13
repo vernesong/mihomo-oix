@@ -37,7 +37,6 @@ func NewTProxy(options *TProxyOption) (*TProxy, error) {
 		config: options,
 		udp:    options.UDP,
 	}, nil
-
 }
 
 // Config implements constant.InboundListener

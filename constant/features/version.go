@@ -1,5 +1,7 @@
 package features
 
-var WindowsMajorVersion uint32
-var WindowsMinorVersion uint32
-var WindowsBuildNumber uint32
+var (
+	WindowsMajorVersion uint32
+	WindowsMinorVersion uint32
+	WindowsBuildNumber  uint32
+)

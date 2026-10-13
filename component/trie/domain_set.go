@@ -9,6 +9,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metacubex/mihomo/common/utils"
+
 	"github.com/openacid/low/bitmap"
 	"golang.org/x/exp/slices"
 )
@@ -229,7 +230,6 @@ func (ss *DomainSet) Has(key string) bool {
 	}
 
 	return getBit(ss.leaves, nodeId) != 0
-
 }
 
 // revLowerAt returns the i-th byte of key read back to front, lowercased for

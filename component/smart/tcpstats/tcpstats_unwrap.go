@@ -24,7 +24,7 @@ func GetTCPStatsWithSource(conn net.Conn) (*Stats, uint64) {
 outer:
 	for depth := 0; depth < maxUnwrapSteps; depth++ {
 		var id uint64
-		if rv := reflect.ValueOf(conn); rv.Kind() == reflect.Ptr {
+		if rv := reflect.ValueOf(conn); rv.Kind() == reflect.Pointer {
 			ptr := rv.Pointer()
 			id = uint64(ptr)
 			for _, prev := range seen {
@@ -57,7 +57,7 @@ outer:
 		}
 		{
 			v := reflect.ValueOf(conn)
-			if v.Kind() == reflect.Ptr {
+			if v.Kind() == reflect.Pointer {
 				v = v.Elem()
 			}
 			if v.Kind() == reflect.Struct {

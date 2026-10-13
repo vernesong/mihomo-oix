@@ -8,9 +8,7 @@ import (
 	"strings"
 )
 
-var (
-	ErrInvalidSudokuMapMiss = errors.New("INVALID_SUDOKU_MAP_MISS")
-)
+var ErrInvalidSudokuMapMiss = errors.New("INVALID_SUDOKU_MAP_MISS")
 
 type Table struct {
 	EncodeTable [256][][4]byte

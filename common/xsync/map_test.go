@@ -298,10 +298,7 @@ func TestMapAll_Break(t *testing.T) {
 	m.All()(func(key string, value int) bool {
 		iters++
 
-		if iters == 50 {
-			return false
-		}
-		return true
+		return iters != 50
 	})
 
 	if iters != 50 {

@@ -22,11 +22,13 @@ import (
 	"github.com/stretchr/testify/assert"
 )
 
-var noneList = []string{shadowsocks.MethodNone}
-var shadowsocksCipherLists = [][]string{noneList, shadowaead.List, shadowaead_2022.List, shadowstream.List}
-var shadowsocksCipherShortLists = [][]string{noneList, shadowaead.List[:5]} // for test shadowTLS and kcptun
-var shadowsocksPassword32 string
-var shadowsocksPassword16 string
+var (
+	noneList                    = []string{shadowsocks.MethodNone}
+	shadowsocksCipherLists      = [][]string{noneList, shadowaead.List, shadowaead_2022.List, shadowstream.List}
+	shadowsocksCipherShortLists = [][]string{noneList, shadowaead.List[:5]} // for test shadowTLS and kcptun
+	shadowsocksPassword32       string
+	shadowsocksPassword16       string
+)
 
 func init() {
 	passwordBytes := make([]byte, 32)

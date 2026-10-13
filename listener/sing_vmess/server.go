@@ -243,7 +243,7 @@ func New(config LC.VmessServer, lc C.InboundListenConfig, tunnel C.Tunnel, addit
 	for _, addr := range strings.Split(config.Listen, ",") {
 		addr := addr
 
-		//TCP
+		// TCP
 		var l net.Listener
 		if config.MKCPConfig.Enable {
 			pc, err := lc.ListenPacket(context.Background(), "udp", addr)

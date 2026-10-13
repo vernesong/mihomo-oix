@@ -9,7 +9,7 @@ import (
 )
 
 func TestAddons(t *testing.T) {
-	var tests = []struct {
+	tests := []struct {
 		flow string
 		seed []byte
 	}{

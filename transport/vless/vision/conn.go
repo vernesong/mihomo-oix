@@ -16,9 +16,7 @@ import (
 	"github.com/gofrs/uuid/v5"
 )
 
-var (
-	_ N.ExtendedConn = (*Conn)(nil)
-)
+var _ N.ExtendedConn = (*Conn)(nil)
 
 type Conn struct {
 	net.Conn // should be *vless.Conn
@@ -105,7 +103,7 @@ func (vc *Conn) ReadBuffer(buffer *buf.Buffer) error {
 	if vc.readProcess {
 		switch vc.readLastCommand {
 		case commandPaddingContinue:
-			//if vc.isTLS || vc.packetsToFilter > 0 {
+			// if vc.isTLS || vc.packetsToFilter > 0 {
 			need := PaddingHeaderLen
 			if !vc.readFilterUUID {
 				need = PaddingHeaderLen - uuid.Size
@@ -297,10 +295,7 @@ func (vc *Conn) WriterPossiblyReplaceable() bool {
 }
 
 func (vc *Conn) WriterReplaceable() bool {
-	if vc.writeDirect {
-		return true
-	}
-	return false
+	return vc.writeDirect
 }
 
 func (vc *Conn) Close() error {

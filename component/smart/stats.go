@@ -1462,12 +1462,12 @@ func (s *Store) UpdateHostStatus(group, config, wildcardTarget string, metadata 
 			codeSet.Confirmations[name] = confirmations
 			// an explicit ttl (the UDP fallback) keeps its fixed block
 			if ttl <= 0 {
-				switch {
-				case confirmations == 1:
+				switch confirmations {
+				case 1:
 					blockTTL = 15 * time.Minute
-				case confirmations == 2:
+				case 2:
 					blockTTL = time.Hour
-				case confirmations == 3:
+				case 3:
 					blockTTL = 4 * time.Hour
 				default:
 					blockTTL = HostFailureNodeTTL
@@ -2018,11 +2018,12 @@ func (s *Store) CleanupOldRecords(group, config string) {
 		}
 
 		if deleted > 0 {
-			if keyType == KeyTypeStats {
+			switch keyType {
+			case KeyTypeStats:
 				recordCache.RemoveByKeyPrefix(pathPrefix)
-			} else if keyType == KeyTypePrefetch {
+			case KeyTypePrefetch:
 				dbResultCache.RemoveByKeyPrefix(pathPrefix)
-			} else if keyType == KeyTypeHostFailures {
+			case KeyTypeHostFailures:
 				hostStatusCache.RemoveByKeyPrefix(pathPrefix)
 			}
 			log.Debugln("[SmartStore] Cleaned up [%d] old [%s] records, group [%s] keeping [%d] valuable and recent data...",

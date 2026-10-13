@@ -126,5 +126,4 @@ func ReCreateServer(addr string, lc C.InboundListenConfig, service resolver.Serv
 		server.tcpServer = &D.Server{Addr: addr, Listener: l, Handler: server.TCPHandler()}
 		_ = server.tcpServer.ActivateAndServe()
 	}()
-
 }

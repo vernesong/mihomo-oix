@@ -13,9 +13,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/atomic"
 	"github.com/metacubex/mihomo/common/convert"
-	"github.com/metacubex/mihomo/common/queue"
 	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/common/xsync"
 	"github.com/metacubex/mihomo/component/ca"
 	"github.com/metacubex/mihomo/component/mmdb"
 	"github.com/metacubex/mihomo/component/smart"
@@ -28,17 +26,15 @@ import (
 
 var UnifiedDelay = atomic.NewBool(false)
 
-var (
-	banStatus = map[int]bool{
-		http.StatusForbidden:          true, // 403
-		http.StatusMethodNotAllowed:   true, // 405
-		http.StatusMisdirectedRequest: true, // 421
-		http.StatusNotImplemented:     true, // 501
-		http.StatusServiceUnavailable: true, // 503
-		520:                           true, // Cloudflare 520
-		599:                           true, // timeout
-	}
-)
+var banStatus = map[int]bool{
+	http.StatusForbidden:          true, // 403
+	http.StatusMethodNotAllowed:   true, // 405
+	http.StatusMisdirectedRequest: true, // 421
+	http.StatusNotImplemented:     true, // 501
+	http.StatusServiceUnavailable: true, // 503
+	520:                           true, // Cloudflare 520
+	599:                           true, // timeout
+}
 
 const (
 	defaultHistoriesNum = 10
@@ -47,14 +43,14 @@ const (
 
 type internalProxyState struct {
 	alive   atomic.Bool
-	history *queue.Queue[C.DelayHistory]
+	history delayHistory
 }
 
 type Proxy struct {
 	C.ProxyAdapter
 	alive   atomic.Bool
-	history *queue.Queue[C.DelayHistory]
-	extra   xsync.Map[string, *internalProxyState]
+	history delayHistory
+	extra   proxyStates
 }
 
 // Adapter implements C.Proxy
@@ -85,26 +81,15 @@ func (p *Proxy) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (
 
 // DelayHistory implements C.Proxy
 func (p *Proxy) DelayHistory() []C.DelayHistory {
-	queueM := p.history.Copy()
-	histories := []C.DelayHistory{}
-	for _, item := range queueM {
-		histories = append(histories, item)
-	}
-	return histories
+	return p.history.Copy()
 }
 
 // DelayHistoryForTestUrl implements C.Proxy
 func (p *Proxy) DelayHistoryForTestUrl(url string) []C.DelayHistory {
-	var queueM []C.DelayHistory
-
 	if state, ok := p.extra.Load(url); ok {
-		queueM = state.history.Copy()
+		return state.history.Copy()
 	}
-	histories := []C.DelayHistory{}
-	for _, item := range queueM {
-		histories = append(histories, item)
-	}
-	return histories
+	return []C.DelayHistory{}
 }
 
 // ExtraDelayHistories return all delay histories for each test URL
@@ -116,12 +101,7 @@ func (p *Proxy) ExtraDelayHistories() map[string]C.ProxyState {
 		testUrl := k
 		state := v
 
-		queueM := state.history.Copy()
-		var history []C.DelayHistory
-
-		for _, item := range queueM {
-			history = append(history, item)
-		}
+		history := state.history.Copy()
 
 		histories[testUrl] = C.ProxyState{
 			Alive:   state.alive.Load(),
@@ -192,14 +172,10 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 		p.alive.Store(alive)
 		p.history.Put(record)
-		if p.history.Len() > defaultHistoriesNum {
-			p.history.Pop()
-		}
 
 		state, _ := p.extra.LoadOrStoreFn(url, func() *internalProxyState {
 			return &internalProxyState{
-				history: queue.New[C.DelayHistory](defaultHistoriesNum),
-				alive:   atomic.NewBool(true),
+				alive: atomic.NewBool(true),
 			}
 		})
 
@@ -210,10 +186,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 
 		state.alive.Store(alive)
 		state.history.Put(record)
-		if state.history.Len() > defaultHistoriesNum {
-			state.history.Pop()
-		}
-
 	}()
 
 	unifiedDelay := UnifiedDelay.Load()
@@ -266,7 +238,6 @@ func (p *Proxy) URLTest(ctx context.Context, url string, expectedStatus utils.In
 	defer client.CloseIdleConnections()
 
 	resp, err := client.Do(req)
-
 	if err != nil {
 		return
 	}
@@ -310,7 +281,6 @@ func durationToDelay(duration time.Duration) uint16 {
 func NewProxy(adapter C.ProxyAdapter) *Proxy {
 	return &Proxy{
 		ProxyAdapter: adapter,
-		history:      queue.New[C.DelayHistory](defaultHistoriesNum),
 		alive:        atomic.NewBool(true),
 	}
 }

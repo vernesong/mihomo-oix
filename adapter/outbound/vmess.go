@@ -669,10 +669,10 @@ func (uc *vmessPacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 	}
 	uc.access.Lock()
 	defer uc.access.Unlock()
-	return uc.Conn.Write(b)
+	return uc.Write(b)
 }
 
 func (uc *vmessPacketConn) ReadFrom(b []byte) (int, net.Addr, error) {
-	n, err := uc.Conn.Read(b)
+	n, err := uc.Read(b)
 	return n, uc.rAddr, err
 }

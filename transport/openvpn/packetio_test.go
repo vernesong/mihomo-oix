@@ -652,6 +652,7 @@ type classifiedInitialUnreachableError struct{}
 func (classifiedInitialUnreachableError) Error() string {
 	return "classified initial network unreachable"
 }
+
 func (classifiedInitialUnreachableError) Is(target error) bool {
 	return target == errPacketDropped || target == syscall.ENETUNREACH
 }

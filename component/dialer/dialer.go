@@ -25,9 +25,7 @@ const (
 	dualStackFallbackTimeout = 300 * time.Millisecond
 )
 
-var (
-	tcpConcurrent = atomic.NewBool(false)
-)
+var tcpConcurrent = atomic.NewBool(false)
 
 func SetTcpConcurrent(concurrent bool) {
 	tcpConcurrent.Store(concurrent)
@@ -142,18 +140,16 @@ func dialContext(ctx context.Context, network string, destination netip.Addr, po
 	destination, port = resolver.LookupIP4P(destination, port)
 	address = net.JoinHostPort(destination.String(), port)
 
-	netDialer := opt.netDialer
-	switch netDialer.(type) {
+	var dialer *net.Dialer
+	switch netDialer := opt.netDialer.(type) {
 	case nil:
-		netDialer = &net.Dialer{}
+		dialer = &net.Dialer{}
 	case *net.Dialer:
-		_netDialer := *netDialer.(*net.Dialer)
-		netDialer = &_netDialer // make a copy
+		copyDialer := *netDialer
+		dialer = &copyDialer
 	default:
 		return netDialer.DialContext(ctx, network, address)
 	}
-
-	dialer := netDialer.(*net.Dialer)
 	keepalive.SetNetDialer(dialer)
 	mptcp.SetNetDialer(dialer, opt.mpTcp)
 
@@ -251,7 +247,7 @@ func dualStackDialContext(ctx context.Context, dialFn dialFunc, network string, 
 			case results <- result:
 			case <-returned:
 				if result.Conn != nil && result.error == nil {
-					_ = result.Conn.Close()
+					_ = result.Close()
 				}
 			}
 		}()
@@ -291,7 +287,7 @@ loop:
 				if res.isPrimary {
 					if fallback.error == nil && fallback.Conn != nil {
 						go func() { // close fallback connection in new goroutine to avoid blocking
-							_ = fallback.Conn.Close()
+							_ = fallback.Close()
 						}()
 					}
 					return res.Conn, nil
@@ -330,7 +326,7 @@ func parallelDialContext(ctx context.Context, network string, ips []netip.Addr, 
 			case results <- result:
 			case <-returned:
 				if result.Conn != nil && result.error == nil {
-					_ = result.Conn.Close()
+					_ = result.Close()
 				}
 			}
 		}()

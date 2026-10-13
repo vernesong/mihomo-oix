@@ -161,9 +161,9 @@ func getAllGroupWeights(w http.ResponseWriter, r *http.Request) {
 	errorsMap := make(map[string]string)
 
 	var (
-		mu    sync.Mutex
-		wg    sync.WaitGroup
-		sem   = make(chan struct{}, 5)
+		mu  sync.Mutex
+		wg  sync.WaitGroup
+		sem = make(chan struct{}, 5)
 	)
 
 	for _, p := range tunnel.Proxies() {

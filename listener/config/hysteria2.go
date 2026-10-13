@@ -1,9 +1,9 @@
 package config
 
 import (
-	"github.com/metacubex/mihomo/listener/sing"
-
 	"encoding/json"
+
+	"github.com/metacubex/mihomo/listener/sing"
 )
 
 type Hysteria2Server struct {

@@ -9,9 +9,7 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-var (
-	errPayload = errors.New("payloadRule error")
-)
+var errPayload = errors.New("payloadRule error")
 
 // params
 var (
@@ -19,8 +17,7 @@ var (
 	Src       = "src"
 )
 
-type Base struct {
-}
+type Base struct{}
 
 func (b *Base) ProviderNames() []string { return nil }
 

@@ -21,8 +21,10 @@ import (
 	"github.com/metacubex/tls"
 )
 
-var ErrNotHandshakeComplete = errors.New("tls connection not handshake complete")
-var ErrNotTLS13 = errors.New("XTLS Vision based on TLS 1.3 outer connection")
+var (
+	ErrNotHandshakeComplete = errors.New("tls connection not handshake complete")
+	ErrNotTLS13             = errors.New("XTLS Vision based on TLS 1.3 outer connection")
+)
 
 func NewConn(conn net.Conn, tlsConn net.Conn, userUUID uuid.UUID) (*Conn, error) {
 	c := &Conn{

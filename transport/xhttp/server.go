@@ -110,19 +110,19 @@ type requestHandler struct {
 }
 
 func NewServerHandler(opt ServerOption) (http.Handler, error) {
-	xPaddingBytes, err := opt.Config.GetNormalizedXPaddingBytes()
+	xPaddingBytes, err := opt.GetNormalizedXPaddingBytes()
 	if err != nil {
 		return nil, err
 	}
-	scMaxEachPostBytes, err := opt.Config.GetNormalizedScMaxEachPostBytes()
+	scMaxEachPostBytes, err := opt.GetNormalizedScMaxEachPostBytes()
 	if err != nil {
 		return nil, err
 	}
-	scStreamUpServerSecs, err := opt.Config.GetNormalizedScStreamUpServerSecs()
+	scStreamUpServerSecs, err := opt.GetNormalizedScStreamUpServerSecs()
 	if err != nil {
 		return nil, err
 	}
-	scMaxBufferedPosts, err := opt.Config.GetNormalizedScMaxBufferedPosts()
+	scMaxBufferedPosts, err := opt.GetNormalizedScMaxBufferedPosts()
 	if err != nil {
 		return nil, err
 	}

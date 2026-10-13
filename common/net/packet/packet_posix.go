@@ -17,7 +17,7 @@ type enhanceUDPConn struct {
 
 func (c *enhanceUDPConn) WaitReadFrom() (data []byte, put func(), addr net.Addr, err error) {
 	if c.rawConn == nil {
-		c.rawConn, _ = c.UDPConn.SyscallConn()
+		c.rawConn, _ = c.SyscallConn()
 	}
 	var readErr error
 	err = c.rawConn.Read(func(fd uintptr) (done bool) {

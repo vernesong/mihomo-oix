@@ -39,6 +39,7 @@ func (c *CacheFile) SetETagWithHash(url string, etagWithHash EtagWithHash) {
 		return
 	}
 }
+
 func (c *CacheFile) GetETagWithHash(key string) (etagWithHash EtagWithHash) {
 	if c.DB == nil {
 		return

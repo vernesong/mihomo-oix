@@ -19,7 +19,7 @@ func (c *PacketConn) WriteTo(b []byte, addr net.Addr) (int, error) {
 		return 0, err
 	}
 
-	return c.Conn.Write(b)
+	return c.Write(b)
 }
 
 func (c *PacketConn) ReadFrom(b []byte) (int, net.Addr, error) {

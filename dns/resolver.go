@@ -568,11 +568,11 @@ func NewResolver(config Config) (rs Resolvers) {
 		for _, ns := range nameserver {
 			var dc dnsClient
 			for _, nsc := range nameServerCache {
-				if nsc.NameServer.Equal(ns) {
+				if nsc.Equal(ns) {
 					result = append(result, nsc.dnsClient)
 					continue LOOP // exact match wins: reuse the wrapped client as-is
 				}
-				if dc == nil && nsc.NameServer.transportEqual(ns) {
+				if dc == nil && nsc.transportEqual(ns) {
 					dc = nsc.dnsClient // reusable raw transport; keep scanning for an exact match
 				}
 			}

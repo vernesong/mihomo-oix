@@ -10,10 +10,12 @@ import (
 	"github.com/metacubex/mlkem"
 )
 
-const MLKEM768SeedLength = mlkem.SeedSize
-const MLKEM768ClientLength = mlkem.EncapsulationKeySize768
-const X25519PasswordSize = 32
-const X25519PrivateKeySize = 32
+const (
+	MLKEM768SeedLength   = mlkem.SeedSize
+	MLKEM768ClientLength = mlkem.EncapsulationKeySize768
+	X25519PasswordSize   = 32
+	X25519PrivateKeySize = 32
+)
 
 func GenMLKEM768(seedStr string) (seedBase64, clientBase64, hash32Base64 string, err error) {
 	var seed [MLKEM768SeedLength]byte

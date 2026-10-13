@@ -28,8 +28,10 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const vmessInteropV2RayRef = "v5.51.2"
-const vmessInteropV2RayXNetRef = "bd5f1dcf71cf0d6d2424021d0a04f191396a46a7" // http2: initialize Transport on NewClientConn
+const (
+	vmessInteropV2RayRef     = "v5.51.2"
+	vmessInteropV2RayXNetRef = "bd5f1dcf71cf0d6d2424021d0a04f191396a46a7" // http2: initialize Transport on NewClientConn
+)
 
 func vmessInteropSkip(t *testing.T) {
 	t.Helper()

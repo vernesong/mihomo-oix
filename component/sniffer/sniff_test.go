@@ -14,6 +14,7 @@ import (
 
 	"github.com/metacubex/mihomo/common/buf"
 	"github.com/metacubex/mihomo/constant"
+
 	"github.com/metacubex/quic-go/quicvarint"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"

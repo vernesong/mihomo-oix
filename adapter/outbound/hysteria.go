@@ -22,11 +22,10 @@ import (
 	"github.com/metacubex/mihomo/transport/hysteria/transport"
 	hyUtils "github.com/metacubex/mihomo/transport/hysteria/utils"
 
-	"github.com/metacubex/tls"
-
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/congestion"
 	M "github.com/metacubex/sing/common/metadata"
+	"github.com/metacubex/tls"
 )
 
 const (
@@ -211,7 +210,7 @@ func NewHysteria(option HysteriaOption) (*Hysteria, error) {
 		log.Infoln("hysteria: Path MTU Discovery is not yet supported on this platform")
 	}
 
-	var auth = []byte(option.AuthString)
+	auth := []byte(option.AuthString)
 	if option.Auth != "" {
 		auth, err = base64.StdEncoding.DecodeString(option.Auth)
 		if err != nil {

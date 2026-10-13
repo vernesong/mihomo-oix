@@ -34,8 +34,10 @@ type LoadBalance struct {
 
 type strategyFn = func(proxies []C.Proxy, metadata *C.Metadata, touch bool) C.Proxy
 
-var errStrategy = errors.New("unsupported strategy")
-var errHashKey = errors.New("unsupported hash-key")
+var (
+	errStrategy = errors.New("unsupported strategy")
+	errHashKey  = errors.New("unsupported hash-key")
+)
 
 // keyFn derives the value a hashing strategy pins a request on.
 type keyFn = func(metadata *C.Metadata) string

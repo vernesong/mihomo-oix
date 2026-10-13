@@ -40,7 +40,7 @@ type SkipList[K any, V any] struct {
 func NewSkipList[K Ordered, V any]() *SkipList[K, V] {
 	sl := skipListOrdered[K, V]{}
 	sl.init()
-	sl.impl = (skipListImpl[K, V])(&sl)
+	sl.impl = skipListImpl[K, V](&sl)
 	return &sl.SkipList
 }
 
@@ -381,7 +381,7 @@ func (sl *skipListFunc[K, V]) findNode(key K) *skipListNode[K, V] {
 }
 
 func (sl *skipListFunc[K, V]) lowerBound(key K) *skipListNode[K, V] {
-	var prev = &sl.head
+	prev := &sl.head
 	for i := sl.level - 1; i >= 0; i-- {
 		cur := prev.next[i]
 		for ; cur != nil; cur = cur.next[i] {

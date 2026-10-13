@@ -8,10 +8,12 @@ import (
 	"github.com/metacubex/quic-go/monotime"
 )
 
-const initialMaxDatagramSize = congestion.ByteCount(1252)
-const MinPacingDelay = time.Millisecond
-const TimerGranularity = time.Millisecond
-const maxBurstSizePackets = 10
+const (
+	initialMaxDatagramSize = congestion.ByteCount(1252)
+	MinPacingDelay         = time.Millisecond
+	TimerGranularity       = time.Millisecond
+	maxBurstSizePackets    = 10
+)
 
 // The pacer implements a token bucket pacing algorithm.
 type pacer struct {

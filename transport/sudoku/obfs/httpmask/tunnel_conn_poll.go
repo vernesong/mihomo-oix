@@ -6,11 +6,12 @@ import (
 	"context"
 	"encoding/base64"
 	"fmt"
-	"github.com/metacubex/http"
 	"io"
 	"net"
 	"sync/atomic"
 	"time"
+
+	"github.com/metacubex/http"
 )
 
 type pollConn struct {

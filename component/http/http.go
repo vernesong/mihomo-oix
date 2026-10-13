@@ -17,9 +17,7 @@ import (
 	"github.com/metacubex/http"
 )
 
-var (
-	ua string
-)
+var ua string
 
 func UA() string {
 	return ua

@@ -105,7 +105,7 @@ func strClone(key string) string {
 }
 
 func (n *Node[T]) isEmpty() bool {
-	if n == nil || n.inited == false {
+	if n == nil || !n.inited {
 		return true
 	}
 	return false
@@ -128,6 +128,7 @@ func (n *Node[T]) getChildren() map[string]*Node[T] {
 	}
 	return nil
 }
+
 func (n *Node[T]) Data() T {
 	return n.data
 }

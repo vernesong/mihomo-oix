@@ -4,9 +4,9 @@ import (
 	"math"
 	"testing"
 
-	"github.com/stretchr/testify/require"
-
 	"github.com/metacubex/mihomo/common/structure"
+
+	"github.com/stretchr/testify/require"
 )
 
 func mustOverrideExprs(t *testing.T, sources ...string) []OverrideExpr {
@@ -338,7 +338,6 @@ func TestOverrideExprYQBehaviorDetails(t *testing.T) {
 			require.Equal(t, testCase.expected, mapping["result"])
 		})
 	}
-
 }
 
 func TestOverrideExprInterpolationAndCollections(t *testing.T) {

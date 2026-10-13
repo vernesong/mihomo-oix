@@ -30,7 +30,7 @@ func (c *enhanceSingPacketConn) WaitReadFrom() (data []byte, put func(), addr ne
 		buff, dest, err = c.packetReadWaiter.WaitReadPacket()
 	} else {
 		buff = rwOptions.NewPacketBuffer()
-		dest, err = c.SingPacketConn.ReadPacket(buff)
+		dest, err = c.ReadPacket(buff)
 		if buff != nil {
 			rwOptions.PostReturn(buff)
 		}

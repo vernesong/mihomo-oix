@@ -1,11 +1,11 @@
 package congestion
 
 import (
-	"github.com/metacubex/quic-go/congestion"
-	"github.com/metacubex/quic-go/monotime"
-
 	"math"
 	"time"
+
+	"github.com/metacubex/quic-go/congestion"
+	"github.com/metacubex/quic-go/monotime"
 )
 
 const (

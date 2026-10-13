@@ -116,14 +116,14 @@ func wsUpgrade(r *http.Request, w http.ResponseWriter) (conn net.Conn, rw *bufio
 	// Clear deadlines set by server.
 	conn.SetDeadline(time.Time{})
 
-	rw.Writer.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
+	rw.WriteString("HTTP/1.1 101 Switching Protocols\r\n")
 	header := http.Header{}
 	header.Set("Upgrade", "websocket")
 	header.Set("Connection", "Upgrade")
 	header.Set("Sec-WebSocket-Accept", N.GetWebSocketSecAccept(nonce))
 	header.Write(rw.Writer)
-	rw.Writer.WriteString("\r\n")
-	err = rw.Writer.Flush()
+	rw.WriteString("\r\n")
+	err = rw.Flush()
 
 	return conn, rw, err
 }
@@ -135,9 +135,9 @@ func wsWriteServerMessage(w io.Writer, op byte, p []byte) error {
 	// Make slice of bytes with capacity 14 that could hold any header.
 	bts := make([]byte, 14)
 
-	bts[0] |= 0x80   //FIN
-	bts[0] |= 0 << 4 //RSV
-	bts[0] |= op     //OPCODE
+	bts[0] |= 0x80   // FIN
+	bts[0] |= 0 << 4 // RSV
+	bts[0] |= op     // OPCODE
 
 	var n int
 	switch {

@@ -40,8 +40,9 @@ func AESCTR(key []byte) (Cipher, error) {
 type cfbStream struct{ cipher.Block }
 
 func (b *cfbStream) IVSize() int                       { return b.BlockSize() }
-func (b *cfbStream) Decrypter(iv []byte) cipher.Stream { return cipher.NewCFBDecrypter(b.Block, iv) }
-func (b *cfbStream) Encrypter(iv []byte) cipher.Stream { return cipher.NewCFBEncrypter(b.Block, iv) }
+func (b *cfbStream) Decrypter(iv []byte) cipher.Stream { return cipher.NewCFBDecrypter(b.Block, iv) } //nolint:staticcheck // SA1019: legacy protocol headers and CFB cipher suites require this exact wire format.
+
+func (b *cfbStream) Encrypter(iv []byte) cipher.Stream { return cipher.NewCFBEncrypter(b.Block, iv) } //nolint:staticcheck // SA1019: legacy protocol headers and CFB cipher suites require this exact wire format.
 
 func AESCFB(key []byte) (Cipher, error) {
 	blk, err := aes.NewCipher(key)

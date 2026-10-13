@@ -24,6 +24,7 @@ func (c *CacheFile) SetSubscriptionInfo(name string, userInfo string) {
 		return
 	}
 }
+
 func (c *CacheFile) GetSubscriptionInfo(name string) (userInfo string) {
 	if c.DB == nil {
 		return

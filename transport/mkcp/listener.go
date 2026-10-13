@@ -181,5 +181,7 @@ func (w *packetConnWriter) Close() error {
 	return nil
 }
 
-var _ net.Listener = (*Listener)(nil)
-var _ net.Conn = (*Conn)(nil)
+var (
+	_ net.Listener = (*Listener)(nil)
+	_ net.Conn     = (*Conn)(nil)
+)

@@ -3,9 +3,10 @@ package cachefile
 import (
 	"sync"
 
-	"github.com/metacubex/bbolt"
 	"github.com/metacubex/mihomo/component/smart"
 	"github.com/metacubex/mihomo/log"
+
+	"github.com/metacubex/bbolt"
 )
 
 var (
@@ -25,7 +26,6 @@ func GetSmartStore() *smart.Store {
 			_, err := tx.CreateBucketIfNotExists(bucketSmartStats)
 			return err
 		})
-
 		if err != nil {
 			log.Warnln("[CacheFile] write cache to %s failed: %s", c.DB.Path(), err.Error())
 			smartStore = smart.NewStore(nil)

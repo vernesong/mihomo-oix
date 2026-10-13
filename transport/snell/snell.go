@@ -247,7 +247,7 @@ func (s *Snell) WritePacketFrame(b []byte) (int, error) {
 	if fw, ok := s.Conn.(packetFrameWriter); ok {
 		return fw.WritePacketFrame(b)
 	}
-	return s.Conn.Write(b)
+	return s.Write(b)
 }
 
 func writePacket(w io.Writer, socks5Addr, payload []byte) (int, error) {
@@ -484,7 +484,7 @@ func (pc *packetConn) WritePacketFrame(b []byte) (int, error) {
 			return fw.WritePacketFrame(b)
 		}
 	}
-	return pc.Conn.Write(b)
+	return pc.Write(b)
 }
 
 func (pc *packetConn) WriteTo(b []byte, addr net.Addr) (int, error) {

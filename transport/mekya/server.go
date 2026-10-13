@@ -310,6 +310,8 @@ func (s *serverSession) String() string {
 	return s.remoteAddr.String()
 }
 
-var _ net.Listener = (*Listener)(nil)
-var _ net.Addr = (*serverSession)(nil)
-var _ io.ReadWriteCloser = (*serverSession)(nil)
+var (
+	_ net.Listener       = (*Listener)(nil)
+	_ net.Addr           = (*serverSession)(nil)
+	_ io.ReadWriteCloser = (*serverSession)(nil)
+)

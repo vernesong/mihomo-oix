@@ -6,6 +6,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/resolver"
 	icontext "github.com/metacubex/mihomo/context"
+
 	D "github.com/miekg/dns"
 )
 

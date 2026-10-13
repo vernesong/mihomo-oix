@@ -92,8 +92,10 @@ type packet struct {
 	put     func()
 }
 
-var _ C.UDPPacket = (*packet)(nil)
-var _ C.UDPPacketInAddr = (*packet)(nil)
+var (
+	_ C.UDPPacket       = (*packet)(nil)
+	_ C.UDPPacketInAddr = (*packet)(nil)
+)
 
 func (c *packet) Data() []byte {
 	return c.payload

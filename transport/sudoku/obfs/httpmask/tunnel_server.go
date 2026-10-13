@@ -7,8 +7,6 @@ import (
 	"encoding/base64"
 	"errors"
 	"fmt"
-	"github.com/metacubex/http"
-	"github.com/metacubex/http/httputil"
 	"io"
 	"net"
 	"net/url"
@@ -17,6 +15,9 @@ import (
 	"strings"
 	"sync"
 	"time"
+
+	"github.com/metacubex/http"
+	"github.com/metacubex/http/httputil"
 )
 
 type TunnelServerOptions struct {

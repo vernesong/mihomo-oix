@@ -20,7 +20,7 @@ func validateVersion(data []byte) error {
 		return errors.New("invalid version response")
 	}
 	for _, c := range value {
-		if !(c >= 'a' && c <= 'z' || c >= 'A' && c <= 'Z' || c >= '0' && c <= '9' || c == '.' || c == '-' || c == '_') {
+		if (c < 'a' || c > 'z') && (c < 'A' || c > 'Z') && (c < '0' || c > '9') && c != '.' && c != '-' && c != '_' {
 			return errors.New("invalid version response")
 		}
 	}
@@ -151,7 +151,7 @@ func validateArchive(data []byte, tarGzip bool) error {
 					return err
 				}
 				switch header.Typeflag {
-				case tar.TypeReg, tar.TypeRegA:
+				case tar.TypeReg: // archive/tar normalizes legacy NUL type flags to TypeReg.
 					if path.Clean(header.Name) == "." {
 						return errors.New("invalid archive filename")
 					}
@@ -163,7 +163,7 @@ func validateArchive(data []byte, tarGzip bool) error {
 				if err != nil {
 					return err
 				}
-				if (header.Typeflag == tar.TypeReg || header.Typeflag == tar.TypeRegA) && n > 0 {
+				if header.Typeflag == tar.TypeReg && n > 0 {
 					hasContent = true
 				}
 			}
@@ -178,7 +178,7 @@ func validateArchive(data []byte, tarGzip bool) error {
 			}
 			return nil
 		}
-		if err := validateGzipName(reader.Header.Name); err != nil {
+		if err := validateGzipName(reader.Name); err != nil {
 			return err
 		}
 		n, err := check(reader)

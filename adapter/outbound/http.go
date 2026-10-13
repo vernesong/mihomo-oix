@@ -115,13 +115,11 @@ func (h *Http) shakeHandContext(ctx context.Context, c net.Conn, metadata *C.Met
 	HeaderString += "\r\n"
 
 	_, err = c.Write([]byte(HeaderString))
-
 	if err != nil {
 		return err
 	}
 
 	resp, err := http.ReadResponse(bufio.NewReader(c), nil)
-
 	if err != nil {
 		return err
 	}

@@ -9,10 +9,11 @@ import (
 	"strings"
 	"time"
 
-	"github.com/metacubex/http"
 	"github.com/metacubex/mihomo/component/dialer"
 	"github.com/metacubex/mihomo/component/resolver"
 	"github.com/metacubex/mihomo/listener/inner"
+
+	"github.com/metacubex/http"
 )
 
 const MaxReadBytes int64 = 64 << 20

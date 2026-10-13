@@ -12,7 +12,7 @@ func (mapping *DomainMap[T]) WriteBin(writer io.Writer, writeValue func(io.Write
 	}
 
 	// domainSet
-	if err := mapping.index.DomainSet.WriteBin(writer); err != nil {
+	if err := mapping.index.WriteBin(writer); err != nil {
 		return err
 	}
 

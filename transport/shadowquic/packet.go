@@ -129,7 +129,7 @@ func (a *association) WriteTo(p []byte, addr net.Addr) (n int, err error) {
 			return 0, err
 		}
 		if err = WriteUDPControl(a.control, socksAddr, id); err != nil {
-			a.parent.releaseSendIDs(map[uint16]struct{}{id: struct{}{}})
+			a.parent.releaseSendIDs(map[uint16]struct{}{id: {}})
 			return 0, err
 		}
 		a.sendIDs[key] = id

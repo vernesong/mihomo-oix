@@ -79,10 +79,7 @@ func (cw *chunkWriter) Write(b []byte) (n int, err error) {
 	buf := pool.Get(pool.RelayBufferSize)
 	defer pool.Put(buf)
 	length := len(b)
-	for {
-		if length == 0 {
-			break
-		}
+	for length != 0 {
 		readLen := chunkSize
 		if length < chunkSize {
 			readLen = length

@@ -29,8 +29,10 @@ import (
 	"github.com/metacubex/sing/common/uot"
 )
 
-const UDPTimeout = 5 * time.Minute
-const ICMPTimeout = 10 * time.Second
+const (
+	UDPTimeout  = 5 * time.Minute
+	ICMPTimeout = 10 * time.Second
+)
 
 type ListenerConfig struct {
 	Tunnel     C.Tunnel

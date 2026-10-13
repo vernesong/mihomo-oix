@@ -3,13 +3,14 @@ package httpmask
 import (
 	"context"
 	"errors"
-	"github.com/metacubex/http"
 	"io"
 	"net"
 	"net/url"
 	"strings"
 	"syscall"
 	"time"
+
+	"github.com/metacubex/http"
 )
 
 type httpStatusError struct {
@@ -81,8 +82,18 @@ func isRetryableHTTPTransportError(err error) bool {
 	if strings.Contains(strings.ToLower(err.Error()), "server closed idle connection") {
 		return true
 	}
+	// Retry specific transient failures instead of the deprecated, loosely
+	// defined net.Error.Temporary contract. Timeout also covers EAGAIN and
+	// EWOULDBLOCK for syscall.Errno.
+	if errors.Is(err, syscall.EINTR) || errors.Is(err, syscall.EMFILE) || errors.Is(err, syscall.ENFILE) {
+		return true
+	}
+	var dnsErr *net.DNSError
+	if errors.As(err, &dnsErr) && dnsErr.IsTemporary {
+		return true
+	}
 	var netErr net.Error
-	return errors.As(err, &netErr) && (netErr.Timeout() || netErr.Temporary())
+	return errors.As(err, &netErr) && netErr.Timeout()
 }
 
 func resetTimer(t *time.Timer, d time.Duration) {

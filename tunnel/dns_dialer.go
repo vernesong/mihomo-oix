@@ -125,7 +125,6 @@ func (d *DNSDialer) DialContext(ctx context.Context, network, addr string) (net.
 
 		return N.NewBindPacketConn(packetConn, metadata.UDPAddr()), nil
 	}
-
 }
 
 func (d *DNSDialer) ListenPacket(ctx context.Context, network, addr string) (net.PacketConn, error) {

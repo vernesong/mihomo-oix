@@ -44,13 +44,14 @@ func NewTLSAuth(staticKey []byte, keyDirection string, authName string) (*TLSAut
 	key1 := staticKey[keySlotSize:]
 
 	var encrypt, decrypt []byte
-	if keyDirection == "1" {
+	switch keyDirection {
+	case "1":
 		encrypt = key1
 		decrypt = key0
-	} else if keyDirection == "0" {
+	case "0":
 		encrypt = key0
 		decrypt = key1
-	} else {
+	default:
 		encrypt = key0
 		decrypt = key0
 	}

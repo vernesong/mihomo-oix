@@ -8,9 +8,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 )
 
-var (
-	ip4PEnable bool
-)
+var ip4PEnable bool
 
 func GetIP4PEnable() bool {
 	return ip4PEnable

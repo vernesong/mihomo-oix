@@ -15,14 +15,19 @@ import (
 	"github.com/metacubex/tls"
 )
 
-var globalCertPool *x509.CertPool
-var mutex sync.RWMutex
-var errNotMatch = errors.New("certificate fingerprints do not match")
+var (
+	globalCertPool *x509.CertPool
+	mutex          sync.RWMutex
+	errNotMatch    = errors.New("certificate fingerprints do not match")
+)
 
 //go:embed ca-certificates.crt
 var _CaCertificates []byte
-var DisableEmbedCa, _ = strconv.ParseBool(os.Getenv("DISABLE_EMBED_CA"))
-var DisableSystemCa, _ = strconv.ParseBool(os.Getenv("DISABLE_SYSTEM_CA"))
+
+var (
+	DisableEmbedCa, _  = strconv.ParseBool(os.Getenv("DISABLE_EMBED_CA"))
+	DisableSystemCa, _ = strconv.ParseBool(os.Getenv("DISABLE_SYSTEM_CA"))
+)
 
 func AddCertificate(certificate string) error {
 	mutex.Lock()

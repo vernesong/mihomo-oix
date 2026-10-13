@@ -10,6 +10,7 @@ import (
 	"github.com/metacubex/mihomo/log"
 
 	"github.com/metacubex/bbolt"
+	berrors "github.com/metacubex/bbolt/errors"
 )
 
 var (
@@ -82,7 +83,7 @@ func initCache() {
 	options := bbolt.Options{Timeout: time.Second, NoStatistics: true}
 	db, err := bbolt.Open(C.Path.Cache(), fileMode, &options)
 	switch err {
-	case bbolt.ErrInvalid, bbolt.ErrChecksum, bbolt.ErrVersionMismatch:
+	case berrors.ErrInvalid, berrors.ErrChecksum, berrors.ErrVersionMismatch:
 		if err = os.Remove(C.Path.Cache()); err != nil {
 			log.Warnln("[CacheFile] remove invalid cache file error: %s", err.Error())
 			break

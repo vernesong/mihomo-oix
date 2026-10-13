@@ -8,13 +8,14 @@ import (
 	"github.com/metacubex/mihomo/component/geodata/router"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/log"
+
 	"google.golang.org/protobuf/proto"
 )
 
 type GeoIPCache map[string]*router.GeoIP
 
 func (g GeoIPCache) Has(key string) bool {
-	return !(g.Get(key) == nil)
+	return g.Get(key) != nil
 }
 
 func (g GeoIPCache) Get(key string) *router.GeoIP {
@@ -79,7 +80,7 @@ func (g GeoIPCache) Unmarshal(filename, code string) (*router.GeoIP, error) {
 type GeoSiteCache map[string]*router.GeoSite
 
 func (g GeoSiteCache) Has(key string) bool {
-	return !(g.Get(key) == nil)
+	return g.Get(key) != nil
 }
 
 func (g GeoSiteCache) Get(key string) *router.GeoSite {

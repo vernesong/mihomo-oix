@@ -171,7 +171,7 @@ func CalculateWeight(input *ModelInput, priorityFactor float64) (float64, bool) 
 		trafficFactor = (uploadFactor * uploadWeight) + (downloadFactor * downloadWeight)
 	}
 
-	var durationFactor float64 = 0.1
+	durationFactor := 0.1
 	if durationMinutes > 0 {
 		if isShortConnection {
 			durationFactor = math.Min(0.3, 0.1+math.Log1p(durationMinutes)*0.08)

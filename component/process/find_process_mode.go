@@ -11,13 +11,11 @@ const (
 	FindProcessOff
 )
 
-var (
-	validModes = map[string]FindProcessMode{
-		FindProcessStrict.String(): FindProcessStrict,
-		FindProcessAlways.String(): FindProcessAlways,
-		FindProcessOff.String():    FindProcessOff,
-	}
-)
+var validModes = map[string]FindProcessMode{
+	FindProcessStrict.String(): FindProcessStrict,
+	FindProcessAlways.String(): FindProcessAlways,
+	FindProcessOff.String():    FindProcessOff,
+}
 
 type FindProcessMode int32
 

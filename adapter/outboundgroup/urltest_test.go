@@ -8,11 +8,11 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/sing/common/buf"
-
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
 	P "github.com/metacubex/mihomo/constant/provider"
+
+	"github.com/metacubex/sing/common/buf"
 )
 
 type urlTestFakeProxy struct {

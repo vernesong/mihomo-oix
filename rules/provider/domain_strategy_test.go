@@ -5,6 +5,7 @@ import (
 
 	"github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/rules/provider"
+
 	"github.com/stretchr/testify/assert"
 )
 

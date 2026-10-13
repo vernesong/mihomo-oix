@@ -78,7 +78,7 @@ func openVPNTransitionWindow(value *int) (time.Duration, bool, error) {
 	if *value < 0 {
 		return 0, false, errors.New("openvpn tran-window must be non-negative")
 	}
-	if int64(*value) > int64((time.Duration(1<<63-1))/time.Second) {
+	if int64(*value) > int64(time.Duration(1<<63-1)/time.Second) {
 		return 0, false, errors.New("openvpn tran-window is too large")
 	}
 	return time.Duration(*value) * time.Second, true, nil

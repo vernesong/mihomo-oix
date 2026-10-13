@@ -14,8 +14,12 @@ import (
 )
 
 var (
-	ClientClosed       = errors.New("tuic: client closed")
-	TooManyOpenStreams = errors.New("tuic: too many open streams")
+	ErrClientClosed       = errors.New("tuic: client closed")
+	ErrTooManyOpenStreams = errors.New("tuic: too many open streams")
+
+	// ClientClosed and TooManyOpenStreams retain the original API names.
+	ClientClosed       = ErrClientClosed
+	TooManyOpenStreams = ErrTooManyOpenStreams
 )
 
 type DialFunc func(ctx context.Context) (quicConn *quic.Conn, err error)

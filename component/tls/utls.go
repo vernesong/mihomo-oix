@@ -16,12 +16,16 @@ import (
 	"golang.org/x/exp/slices"
 )
 
-type Conn = utls.Conn
-type UConn = utls.UConn
-type UClientHelloID = utls.ClientHelloID
+type (
+	Conn           = utls.Conn
+	UConn          = utls.UConn
+	UClientHelloID = utls.ClientHelloID
+)
 
-const VersionTLS12 = utls.VersionTLS12
-const VersionTLS13 = utls.VersionTLS13
+const (
+	VersionTLS12 = utls.VersionTLS12
+	VersionTLS13 = utls.VersionTLS13
+)
 
 func Client(c net.Conn, config *utls.Config) *Conn {
 	return utls.Client(c, config)
@@ -139,10 +143,12 @@ type ConnectionState = utls.ConnectionState
 
 type Config = utls.Config
 
-var tlsCertificateRequestInfoCtxOffset = utils.MustOK(reflect.TypeOf((*tls.CertificateRequestInfo)(nil)).Elem().FieldByName("ctx")).Offset
-var tlsClientHelloInfoCtxOffset = utils.MustOK(reflect.TypeOf((*tls.ClientHelloInfo)(nil)).Elem().FieldByName("ctx")).Offset
-var tlsConnectionStateEkmOffset = utils.MustOK(reflect.TypeOf((*tls.ConnectionState)(nil)).Elem().FieldByName("ekm")).Offset
-var utlsConnectionStateEkmOffset = utils.MustOK(reflect.TypeOf((*utls.ConnectionState)(nil)).Elem().FieldByName("ekm")).Offset
+var (
+	tlsCertificateRequestInfoCtxOffset = utils.MustOK(reflect.TypeOf((*tls.CertificateRequestInfo)(nil)).Elem().FieldByName("ctx")).Offset
+	tlsClientHelloInfoCtxOffset        = utils.MustOK(reflect.TypeOf((*tls.ClientHelloInfo)(nil)).Elem().FieldByName("ctx")).Offset
+	tlsConnectionStateEkmOffset        = utils.MustOK(reflect.TypeOf((*tls.ConnectionState)(nil)).Elem().FieldByName("ekm")).Offset
+	utlsConnectionStateEkmOffset       = utils.MustOK(reflect.TypeOf((*utls.ConnectionState)(nil)).Elem().FieldByName("ekm")).Offset
+)
 
 func tlsConnectionState(state utls.ConnectionState) (tlsState tls.ConnectionState) {
 	tlsState = tls.ConnectionState{
@@ -150,9 +156,9 @@ func tlsConnectionState(state utls.ConnectionState) (tlsState tls.ConnectionStat
 		HandshakeComplete: state.HandshakeComplete,
 		DidResume:         state.DidResume,
 		CipherSuite:       state.CipherSuite,
-		//CurveID:                     state.CurveID,
+		// CurveID:                     state.CurveID,
 		NegotiatedProtocol:          state.NegotiatedProtocol,
-		NegotiatedProtocolIsMutual:  state.NegotiatedProtocolIsMutual,
+		NegotiatedProtocolIsMutual:  state.NegotiatedProtocolIsMutual, //nolint:staticcheck // SA1019: preserve the complete uTLS state for callers of the TLS adapter.
 		ServerName:                  state.ServerName,
 		PeerCertificates:            state.PeerCertificates,
 		VerifiedChains:              state.VerifiedChains,
@@ -160,12 +166,11 @@ func tlsConnectionState(state utls.ConnectionState) (tlsState tls.ConnectionStat
 		OCSPResponse:                state.OCSPResponse,
 		TLSUnique:                   state.TLSUnique,
 		ECHAccepted:                 state.ECHAccepted,
-		//HelloRetryRequest:           state.HelloRetryRequest,
+		// HelloRetryRequest:           state.HelloRetryRequest,
 	}
 	// The layout of map, chan, and func types is equivalent to *T.
 	// state.ekm is a func(label string, context []byte, length int) ([]byte, error)
-	*(*unsafe.Pointer)(unsafe.Add(unsafe.Pointer(&tlsState), tlsConnectionStateEkmOffset)) =
-		*(*unsafe.Pointer)(unsafe.Add(unsafe.Pointer(&state), utlsConnectionStateEkmOffset))
+	*(*unsafe.Pointer)(unsafe.Add(unsafe.Pointer(&tlsState), tlsConnectionStateEkmOffset)) = *(*unsafe.Pointer)(unsafe.Add(unsafe.Pointer(&state), utlsConnectionStateEkmOffset))
 	return
 }
 
@@ -225,7 +230,7 @@ func UConfig(config *tls.Config) *utls.Config {
 				SupportedVersions: info.SupportedVersions,
 				Extensions:        info.Extensions,
 				Conn:              info.Conn,
-				//HelloRetryRequest: info.HelloRetryRequest,
+				// HelloRetryRequest: info.HelloRetryRequest,
 			}
 			*(*context.Context)(unsafe.Add(unsafe.Pointer(tlsInfo), tlsClientHelloInfoCtxOffset)) = info.Context() // for tlsInfo.ctx
 			cert, err := config.GetCertificate(tlsInfo)
@@ -247,7 +252,7 @@ func UConfig(config *tls.Config) *utls.Config {
 			return config.EncryptedClientHelloRejectionVerify(tlsConnectionState(state))
 		}
 	}
-	//cfg.GetEncryptedClientHelloKeys =
+	// cfg.GetEncryptedClientHelloKeys =
 	cfg.EncryptedClientHelloKeys = utils.Map(config.EncryptedClientHelloKeys, UEncryptedClientHelloKey)
 	return cfg
 }

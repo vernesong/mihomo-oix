@@ -78,8 +78,10 @@ type replayState struct {
 
 // controlReplayWindow mirrors OpenVPN's REPLAY_WINDOW (64) used for the
 // control-channel packet_id_rec seq_backtrack.
-const controlReplayWindow = 64
-const controlReplayTimeBacktrack = 15 * time.Second
+const (
+	controlReplayWindow        = 64
+	controlReplayTimeBacktrack = 15 * time.Second
+)
 
 // recvWindowOK reports whether an out-of-order control packet with the given
 // message ID fits the receive window. Unsigned subtraction mirrors OpenVPN's

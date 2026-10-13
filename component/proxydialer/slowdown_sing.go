@@ -5,6 +5,7 @@ import (
 	"net"
 
 	"github.com/metacubex/mihomo/component/slowdown"
+
 	M "github.com/metacubex/sing/common/metadata"
 )
 

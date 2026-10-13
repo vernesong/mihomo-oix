@@ -212,8 +212,8 @@ func (pc *PoolConn) Close() error {
 		}
 		// mihomo use SetReadDeadline to break bidirectional copy between client and server.
 		// reset it before reuse connection to avoid io timeout error.
-		_ = pc.Snell.Conn.SetReadDeadline(time.Time{})
-		pc.Snell.reply = false
+		_ = pc.SetReadDeadline(time.Time{})
+		pc.reply = false
 		pc.pool.put(pc.Snell)
 	})
 	return pc.closeErr

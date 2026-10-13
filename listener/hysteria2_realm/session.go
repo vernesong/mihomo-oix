@@ -209,5 +209,4 @@ func (s *server) reaper(ctx context.Context) {
 			}
 		}
 	}
-
 }

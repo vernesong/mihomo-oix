@@ -32,10 +32,7 @@ func (w *aeadWriter) Write(b []byte) (n int, err error) {
 		pool.Put(buf)
 	}()
 	length := len(b)
-	for {
-		if length == 0 {
-			break
-		}
+	for length != 0 {
 		readLen := chunkSize - w.Overhead()
 		if length < readLen {
 			readLen = length

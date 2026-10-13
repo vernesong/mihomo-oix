@@ -8,7 +8,7 @@ import (
 	"github.com/samber/lo"
 )
 
-//modify from https://github.com/alexanderGugel/arc
+// modify from https://github.com/alexanderGugel/arc
 
 // Option is part of Functional Options Pattern
 type Option[K comparable, V any] func(*ARC[K, V])

@@ -104,7 +104,7 @@ type bbrSender struct {
 	rttStats      congestion.RTTStatsProvider
 	bytesInFlight congestion.ByteCount
 	// return total bytes of unacked packets.
-	//GetBytesInFlight func() congestion.ByteCount
+	// GetBytesInFlight func() congestion.ByteCount
 	// Bandwidth sampler provides BBR with the bandwidth measurements at
 	// individual points.
 	sampler *BandwidthSampler
@@ -135,7 +135,7 @@ type bbrSender struct {
 	// The largest value the |congestion_window_| can achieve.
 	initialMaxCongestionWindow congestion.ByteCount
 	// The smallest value the |congestion_window_| can achieve.
-	//minCongestionWindow congestion.ByteCount
+	// minCongestionWindow congestion.ByteCount
 	// The pacing gain applied during the STARTUP phase.
 	highGain float64
 	// The CWND gain applied during the STARTUP phase.
@@ -322,7 +322,7 @@ func (b *bbrSender) GetCongestionWindow() congestion.ByteCount {
 		return b.ProbeRttCongestionWindow()
 	}
 
-	if b.InRecovery() && !(b.rateBasedStartup && b.mode == STARTUP) {
+	if b.InRecovery() && (!b.rateBasedStartup || b.mode != STARTUP) {
 		return minByteCount(b.congestionWindow, b.recoveryWindow)
 	}
 
@@ -330,7 +330,6 @@ func (b *bbrSender) GetCongestionWindow() congestion.ByteCount {
 }
 
 func (b *bbrSender) MaybeExitSlowStart() {
-
 }
 
 func (b *bbrSender) OnPacketAcked(number congestion.PacketNumber, ackedBytes congestion.ByteCount, priorInFlight congestion.ByteCount, eventTime monotime.Time) {
@@ -389,7 +388,6 @@ func (b *bbrSender) OnCongestionEventEx(priorInFlight congestion.ByteCount, even
 }
 
 func (b *bbrSender) OnRetransmissionTimeout(packetsRetransmitted bool) {
-
 }
 
 // BandwidthEstimate returns the current bandwidth estimate
@@ -460,7 +458,7 @@ func (b *bbrSender) UpdateBandwidthAndMinRtt(now monotime.Time, ackedPackets []c
 
 	b.minRttSinceLastProbeRtt = minRtt(b.minRttSinceLastProbeRtt, sampleMinRtt)
 	// Do not expire min_rtt if none was ever available.
-	minRttExpired := b.minRtt > 0 && (now.After(b.minRttTimestamp.Add(MinRttExpiry)))
+	minRttExpired := b.minRtt > 0 && now.After(b.minRttTimestamp.Add(MinRttExpiry))
 	if minRttExpired || sampleMinRtt < b.minRtt || b.minRtt == 0 {
 		if minRttExpired && b.ShouldExtendMinRttExpiry() {
 			minRttExpired = false
@@ -546,7 +544,7 @@ func (b *bbrSender) UpdateAckAggregationBytes(ackTime monotime.Time, ackedBytes 
 	// Compute how many bytes are expected to be delivered, assuming max bandwidth
 	// is correct.
 	expectedAckedBytes := congestion.ByteCount(b.maxBandwidth.GetBest()) *
-		congestion.ByteCount((ackTime.Sub(b.aggregationEpochStartTime)))
+		congestion.ByteCount(ackTime.Sub(b.aggregationEpochStartTime))
 	// Reset the current aggregation epoch as soon as the ack arrival rate is less
 	// than or equal to the max bandwidth.
 	if b.aggregationEpochBytes <= expectedAckedBytes {
@@ -873,6 +871,4 @@ func minByteCount(a, b congestion.ByteCount) congestion.ByteCount {
 	}
 }
 
-var (
-	InfiniteRTT = time.Duration(math.MaxInt64)
-)
+var InfiniteRTT = time.Duration(math.MaxInt64)

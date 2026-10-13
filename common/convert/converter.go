@@ -436,7 +436,7 @@ func ConvertsV2Ray(buf []byte) ([]map[string]any, error) {
 				err = VerifyMethod(cipher, password)
 				if err != nil {
 					dcBuf, _ = encRaw.DecodeString(cipherRaw)
-					cipher, password, found = strings.Cut(string(dcBuf), ":")
+					cipher, password, _ = strings.Cut(string(dcBuf), ":")
 				}
 			}
 

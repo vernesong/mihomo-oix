@@ -14,7 +14,6 @@ import (
 	"time"
 
 	"github.com/metacubex/http"
-
 	"golang.org/x/crypto/hkdf"
 )
 

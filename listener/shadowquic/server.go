@@ -187,7 +187,7 @@ func New(config LC.ShadowQuicServer, lc C.InboundListenConfig, tunnel C.Tunnel, 
 
 		go func() {
 			err := server.Serve()
-			if err != nil && !sl.closed {
+			if !sl.closed { // Serve only returns on an accept error.
 				log.Warnln("ShadowQuic server closed: %s", err)
 			}
 		}()

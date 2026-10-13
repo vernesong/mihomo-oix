@@ -5,6 +5,7 @@ import (
 	"unicode/utf8"
 
 	"github.com/metacubex/mihomo/common/utils"
+
 	"github.com/openacid/low/bitmap"
 )
 

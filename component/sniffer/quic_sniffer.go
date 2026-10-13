@@ -14,7 +14,6 @@ import (
 	"github.com/metacubex/mihomo/common/buf"
 	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/common/utils"
-	"github.com/metacubex/mihomo/constant"
 	C "github.com/metacubex/mihomo/constant"
 	"github.com/metacubex/mihomo/constant/sniffer"
 
@@ -104,8 +103,10 @@ type quicInitialKey struct {
 	largestPacketNumber int64
 }
 
-var _ sniffer.Sniffer = (*QUICSniffer)(nil)
-var _ sniffer.MultiPacketSniffer = (*QUICSniffer)(nil)
+var (
+	_ sniffer.Sniffer            = (*QUICSniffer)(nil)
+	_ sniffer.MultiPacketSniffer = (*QUICSniffer)(nil)
+)
 
 type QUICSniffer struct {
 	*BaseSniffer
@@ -133,7 +134,7 @@ func (sniffer *QUICSniffer) SniffData(b []byte) (string, error) {
 	return "", ErrorUnsupportedSniffer
 }
 
-func (sniffer *QUICSniffer) WrapperSender(packetSender constant.PacketSender, replaceDomain sniffer.ReplaceDomain) constant.PacketSender {
+func (sniffer *QUICSniffer) WrapperSender(packetSender C.PacketSender, replaceDomain sniffer.ReplaceDomain) C.PacketSender {
 	return &quicPacketSender{
 		PacketSender:  packetSender,
 		replaceDomain: replaceDomain,
@@ -141,7 +142,7 @@ func (sniffer *QUICSniffer) WrapperSender(packetSender constant.PacketSender, re
 	}
 }
 
-var _ constant.PacketSender = (*quicPacketSender)(nil)
+var _ C.PacketSender = (*quicPacketSender)(nil)
 
 type quicPacketSender struct {
 	structure           *quicStructure
@@ -154,7 +155,7 @@ type quicPacketSender struct {
 
 	replaceDomain sniffer.ReplaceDomain
 
-	constant.PacketSender
+	C.PacketSender
 
 	done chan struct{}
 
@@ -163,7 +164,7 @@ type quicPacketSender struct {
 
 // Send will send PacketAdapter nonblocking
 // the implement must call UDPPacket.Drop() inside Send
-func (q *quicPacketSender) Send(current constant.PacketAdapter) {
+func (q *quicPacketSender) Send(current C.PacketAdapter) {
 	defer q.PacketSender.Send(current)
 
 	q.lock.RLock()
@@ -181,7 +182,7 @@ func (q *quicPacketSender) Send(current constant.PacketAdapter) {
 }
 
 // DoSniff wait sniffer recv all fragments and update the domain
-func (q *quicPacketSender) DoSniff(metadata *constant.Metadata) error {
+func (q *quicPacketSender) DoSniff(metadata *C.Metadata) error {
 	select {
 	case <-q.done:
 		q.lock.RLock()

@@ -14,8 +14,9 @@ import (
 	"testing/fstest"
 	"time"
 
-	"github.com/metacubex/http"
 	"github.com/metacubex/mihomo/common/utils"
+
+	"github.com/metacubex/http"
 )
 
 func TestFetcherParsesOnceAndDiscardsOnlyUnpublishedResources(t *testing.T) {

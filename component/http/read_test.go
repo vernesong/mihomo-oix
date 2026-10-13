@@ -12,8 +12,9 @@ import (
 	"testing"
 	"time"
 
-	"github.com/metacubex/http"
 	C "github.com/metacubex/mihomo/constant"
+
+	"github.com/metacubex/http"
 )
 
 type redirectDialer struct {
@@ -147,7 +148,7 @@ func TestGetStripsCrossOriginCredentials(t *testing.T) {
 			}
 		}
 		if r.URL.Path != "/final" {
-			stdhttp.Redirect(w, r, "/final", 302)
+			stdhttp.Redirect(w, r, "/final", http.StatusFound)
 			return
 		}
 		_, _ = io.WriteString(w, "ok")
@@ -157,7 +158,7 @@ func TestGetStripsCrossOriginCredentials(t *testing.T) {
 		if r.Header.Get("Authorization") != "Bearer private" {
 			t.Error("origin lost authorization")
 		}
-		stdhttp.Redirect(w, r, destination.URL, 302)
+		stdhttp.Redirect(w, r, destination.URL, http.StatusFound)
 	}))
 	defer origin.Close()
 	_, _, err := Get(context.Background(), origin.URL+"/?token=private", map[string][]string{

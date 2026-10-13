@@ -65,7 +65,8 @@ func TestRulesRejectBadInputBeforeRequest(t *testing.T) {
 	t.Setenv("OIX_TOKEN", "rules-token")
 	revision := rulePayload("")["revision"].(string)
 	for _, input := range []map[string]string{
-		{"revision": revision}, {"revision": revision, "rules_base64": "!"},
+		{"revision": revision},
+		{"revision": revision, "rules_base64": "!"},
 		{"revision": revision, "rules_base64": base64.StdEncoding.EncodeToString([]byte{255})},
 		{"revision": "bad", "rules_base64": ""},
 		{"revision": revision, "rules_base64": base64.StdEncoding.EncodeToString([]byte(strings.Repeat("x", 8193)))},

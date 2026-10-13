@@ -8,6 +8,7 @@ import (
 	"github.com/metacubex/mihomo/adapter/outbound"
 	"github.com/metacubex/mihomo/listener/inbound"
 	"github.com/metacubex/mihomo/transport/vless/encryption"
+
 	"github.com/stretchr/testify/assert"
 )
 
@@ -156,7 +157,7 @@ func TestInboundVless_Encryption(t *testing.T) {
 		{"old-padding", "100-100-1000."}, // Xray-core v25.8.29
 		{"custom-padding", "100-1234-7890.33-0-1111.66-0-6666.55-111-777."},
 	}
-	var modes = []string{
+	modes := []string{
 		"native",
 		"xorpub",
 		"random",

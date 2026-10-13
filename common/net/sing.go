@@ -11,30 +11,40 @@ import (
 	"github.com/metacubex/sing/common/network"
 )
 
-var NewExtendedConn = bufio.NewExtendedConn
-var NewExtendedWriter = bufio.NewExtendedWriter
-var NewExtendedReader = bufio.NewExtendedReader
+var (
+	NewExtendedConn   = bufio.NewExtendedConn
+	NewExtendedWriter = bufio.NewExtendedWriter
+	NewExtendedReader = bufio.NewExtendedReader
+)
 
-type ExtendedConn = network.ExtendedConn
-type ExtendedWriter = network.ExtendedWriter
-type ExtendedReader = network.ExtendedReader
+type (
+	ExtendedConn   = network.ExtendedConn
+	ExtendedWriter = network.ExtendedWriter
+	ExtendedReader = network.ExtendedReader
+)
 
 var WriteBuffer = bufio.WriteBuffer
 
 type ReadWaitOptions = network.ReadWaitOptions
 
-var NewReadWaitOptions = network.NewReadWaitOptions
-var CalculateFrontHeadroom = network.CalculateFrontHeadroom
-var CalculateRearHeadroom = network.CalculateRearHeadroom
+var (
+	NewReadWaitOptions     = network.NewReadWaitOptions
+	CalculateFrontHeadroom = network.CalculateFrontHeadroom
+	CalculateRearHeadroom  = network.CalculateRearHeadroom
+)
 
-type ReaderWithUpstream = network.ReaderWithUpstream
-type WithUpstreamReader = network.WithUpstreamReader
-type WriterWithUpstream = network.WriterWithUpstream
-type WithUpstreamWriter = network.WithUpstreamWriter
-type WithUpstream = common.WithUpstream
+type (
+	ReaderWithUpstream = network.ReaderWithUpstream
+	WithUpstreamReader = network.WithUpstreamReader
+	WriterWithUpstream = network.WriterWithUpstream
+	WithUpstreamWriter = network.WithUpstreamWriter
+	WithUpstream       = common.WithUpstream
+)
 
-var UnwrapReader = network.UnwrapReader
-var UnwrapWriter = network.UnwrapWriter
+var (
+	UnwrapReader = network.UnwrapReader
+	UnwrapWriter = network.UnwrapWriter
+)
 
 func NewDeadlineConn(conn net.Conn) ExtendedConn {
 	if deadline.IsPipe(conn) || deadline.IsPipe(UnwrapReader(conn)) {

@@ -15,8 +15,8 @@ func (s StringMap) ToBytes() []byte {
 }
 
 func StringMapFromBytes(b []byte) StringMap {
-	var m = make(StringMap)
-	var lines = strings.Split(string(b), "\n")
+	m := make(StringMap)
+	lines := strings.Split(string(b), "\n")
 	for _, line := range lines {
 		v := strings.SplitN(line, "=", 2)
 		if len(v) == 2 {
