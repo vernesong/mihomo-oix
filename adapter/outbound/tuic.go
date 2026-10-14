@@ -6,6 +6,7 @@ import (
 	"math"
 	"net"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/component/ca"
@@ -26,6 +27,7 @@ type Tuic struct {
 	option *TuicOption
 	client *tuic.PoolClient
 
+	quicOnce   sync.Once
 	quicConfig *quic.Config
 	tlsConfig  *tls.Config
 	echConfig  *ech.Config
@@ -111,7 +113,7 @@ func (t *Tuic) ListenPacketContext(ctx context.Context, metadata *C.Metadata) (_
 }
 
 func (t *Tuic) dial(ctx context.Context) (quicConn *quic.Conn, err error) {
-	_, quicConn, err = common.DialQuic(ctx, t.addr, t.DialOptions(), t.dialer, t.tlsConfig, t.quicConfig, common.DialQuicOption{Early: t.option.ReduceRtt})
+	_, quicConn, err = common.DialQuic(ctx, t.addr, t.DialOptions(), t.dialer, t.tlsConfig, t.getQUICConfig(), common.DialQuicOption{Early: t.option.ReduceRtt})
 	if err != nil {
 		return nil, err
 	}
@@ -193,30 +195,6 @@ func NewTuic(option TuicOption) (*Tuic, error) {
 	}
 	option.MaxUdpRelayPacketSize = option.MaxDatagramFrameSize - packetOverHead
 
-	// ensure server's incoming stream can handle correctly, increase to 1.1x
-	quicMaxOpenStreams := int64(option.MaxOpenStreams)
-	quicMaxOpenStreams = quicMaxOpenStreams + int64(math.Ceil(float64(quicMaxOpenStreams)/10.0))
-	quicConfig := &quic.Config{
-		InitialStreamReceiveWindow:     uint64(option.ReceiveWindowConn),
-		MaxStreamReceiveWindow:         uint64(option.ReceiveWindowConn),
-		InitialConnectionReceiveWindow: uint64(option.ReceiveWindow),
-		MaxConnectionReceiveWindow:     uint64(option.ReceiveWindow),
-		MaxIncomingStreams:             quicMaxOpenStreams,
-		MaxIncomingUniStreams:          quicMaxOpenStreams,
-		KeepAlivePeriod:                time.Duration(option.HeartbeatInterval) * time.Millisecond,
-		DisablePathMTUDiscovery:        option.DisableMTUDiscovery,
-		MaxDatagramFrameSize:           int64(option.MaxDatagramFrameSize),
-		EnableDatagrams:                true,
-	}
-	if option.ReceiveWindowConn == 0 {
-		quicConfig.InitialStreamReceiveWindow = tuic.DefaultStreamReceiveWindow / 10
-		quicConfig.MaxStreamReceiveWindow = tuic.DefaultStreamReceiveWindow
-	}
-	if option.ReceiveWindow == 0 {
-		quicConfig.InitialConnectionReceiveWindow = tuic.DefaultConnectionReceiveWindow / 10
-		quicConfig.MaxConnectionReceiveWindow = tuic.DefaultConnectionReceiveWindow
-	}
-
 	if len(option.Ip) > 0 {
 		addr = net.JoinHostPort(option.Ip, strconv.Itoa(option.Port))
 	}
@@ -250,10 +228,9 @@ func NewTuic(option TuicOption) (*Tuic, error) {
 			RoutingMark:  option.RoutingMark,
 			Prefer:       option.IPVersion,
 		}),
-		option:     &option,
-		quicConfig: quicConfig,
-		tlsConfig:  tlsConfig,
-		echConfig:  echConfig,
+		option:    &option,
+		tlsConfig: tlsConfig,
+		echConfig: echConfig,
 	}
 	t.dialer = option.NewDialer(t.DialOptions())
 
@@ -297,4 +274,39 @@ func NewTuic(option TuicOption) (*Tuic, error) {
 	}
 
 	return t, nil
+}
+
+// Keep the immutable QUIC settings out of unused nodes. TLS is intentionally
+// still configured during parsing to preserve certificate and CA lifetimes.
+func (t *Tuic) getQUICConfig() *quic.Config {
+	t.quicOnce.Do(func() { t.quicConfig = newTuicQUICConfig(t.option) })
+	return t.quicConfig
+}
+
+func newTuicQUICConfig(option *TuicOption) *quic.Config {
+	// ensure server's incoming stream can handle correctly, increase to 1.1x
+	quicMaxOpenStreams := int64(option.MaxOpenStreams)
+	quicMaxOpenStreams = quicMaxOpenStreams + int64(math.Ceil(float64(quicMaxOpenStreams)/10.0))
+	quicConfig := &quic.Config{
+		InitialStreamReceiveWindow:     uint64(option.ReceiveWindowConn),
+		MaxStreamReceiveWindow:         uint64(option.ReceiveWindowConn),
+		InitialConnectionReceiveWindow: uint64(option.ReceiveWindow),
+		MaxConnectionReceiveWindow:     uint64(option.ReceiveWindow),
+		MaxIncomingStreams:             quicMaxOpenStreams,
+		MaxIncomingUniStreams:          quicMaxOpenStreams,
+		KeepAlivePeriod:                time.Duration(option.HeartbeatInterval) * time.Millisecond,
+		DisablePathMTUDiscovery:        option.DisableMTUDiscovery,
+		MaxDatagramFrameSize:           int64(option.MaxDatagramFrameSize),
+		EnableDatagrams:                true,
+	}
+	if option.ReceiveWindowConn == 0 {
+		quicConfig.InitialStreamReceiveWindow = tuic.DefaultStreamReceiveWindow / 10
+		quicConfig.MaxStreamReceiveWindow = tuic.DefaultStreamReceiveWindow
+	}
+	if option.ReceiveWindow == 0 {
+		quicConfig.InitialConnectionReceiveWindow = tuic.DefaultConnectionReceiveWindow / 10
+		quicConfig.MaxConnectionReceiveWindow = tuic.DefaultConnectionReceiveWindow
+	}
+
+	return quicConfig
 }

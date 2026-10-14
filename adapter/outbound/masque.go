@@ -12,6 +12,7 @@ import (
 	"net/netip"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/metacubex/mihomo/common/atomic"
@@ -40,11 +41,14 @@ type Masque struct {
 	h2Transport *http.Transport
 	l4Client    *masque.L4Client
 
-	runCtx    context.Context
-	runCancel context.CancelFunc
-	runLock   *semaphore.Weighted
-	running   atomic.Bool
-	runDevice atomic.Bool
+	runCtx        context.Context
+	runCancel     context.CancelFunc
+	runLock       *semaphore.Weighted
+	running       atomic.Bool
+	stackMu       sync.Mutex
+	stackPrefixes []netip.Prefix
+	stackMTU      uint32
+	runDevice     bool // guarded by stackMu, together with tunDevice initialization
 
 	option MasqueOption
 }
@@ -131,6 +135,12 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 	ctx, cancel := context.WithCancel(context.Background())
 	outbound.runCtx = ctx
 	outbound.runCancel = cancel
+	complete := false
+	defer func() {
+		if !complete {
+			_ = outbound.Close()
+		}
+	}()
 
 	privKeyB64, err := base64.StdEncoding.DecodeString(option.PrivateKey)
 	if err != nil {
@@ -235,9 +245,15 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 		if len(prefixes) == 0 {
 			return nil, errors.New("missing local address")
 		}
-		outbound.tunDevice, err = newIPStack(option.IPStack, prefixes, uint32(mtu))
-		if err != nil {
-			return nil, fmt.Errorf("create device: %w", err)
+		outbound.stackPrefixes, outbound.stackMTU = prefixes, uint32(mtu)
+		// Keep unusual configurations on the original validation path so a
+		// stack-specific refusal still happens while loading the node.
+		if !canDeferIPStack(prefixes, uint32(mtu)) {
+			device, err := newIPStack(option.IPStack, prefixes, uint32(mtu))
+			if err != nil {
+				return nil, fmt.Errorf("create device: %w", err)
+			}
+			outbound.tunDevice = device
 		}
 
 		for _, address := range prefixes {
@@ -262,6 +278,7 @@ func NewMasque(option MasqueOption) (*Masque, error) {
 		})
 	}
 
+	complete = true
 	return outbound, nil
 }
 
@@ -330,18 +347,14 @@ func (w *Masque) run(ctx context.Context) error {
 }
 
 func (w *Masque) startLocked(ctx context.Context) error {
-	if !w.runDevice.Load() {
-		err := w.tunDevice.Start()
-		if err != nil {
-			return err
-		}
-		w.runDevice.Store(true)
+	device, err := w.startIPStack()
+	if err != nil {
+		return err
 	}
 
 	var pc net.PacketConn
 	var closer io.Closer
 	var ipConn masque.IpConn
-	var err error
 	if w.h2Transport != nil {
 		closer, ipConn, err = masque.ConnectTunnelH2(ctx, w.h2Transport, w.uri)
 		if err != nil {
@@ -380,7 +393,7 @@ func (w *Masque) startLocked(ctx context.Context) error {
 		bufs := [][]byte{buf}
 		sizes := []int{0}
 		for runCtx.Err() == nil {
-			_, err := w.tunDevice.Read(bufs, sizes, 0)
+			_, err := device.Read(bufs, sizes, 0)
 			if err != nil {
 				log.Errorln("[Masque](%s) error reading from TUN device: %v", w.name, err)
 				return
@@ -396,7 +409,7 @@ func (w *Masque) startLocked(ctx context.Context) error {
 			}
 
 			if len(icmp) > 0 {
-				if _, err := w.tunDevice.Write([][]byte{icmp}, 0); err != nil {
+				if _, err := device.Write([][]byte{icmp}, 0); err != nil {
 					log.Warnln("[Masque](%s) error writing ICMP to TUN device: %v, continuing...", w.name, err)
 				}
 			}
@@ -415,7 +428,7 @@ func (w *Masque) startLocked(ctx context.Context) error {
 				log.Warnln("[Masque](%s) error reading from IP connection: %v, continuing...", w.name, err)
 				continue
 			}
-			if _, err := w.tunDevice.Write([][]byte{buf}, 0); err != nil {
+			if _, err := device.Write([][]byte{buf}, 0); err != nil {
 				log.Errorln("[Masque](%s) error writing to TUN device: %v", w.name, err)
 				return
 			}
@@ -428,8 +441,14 @@ func (w *Masque) startLocked(ctx context.Context) error {
 // Close implements C.ProxyAdapter
 func (w *Masque) Close() error {
 	w.runCancel()
-	if w.tunDevice != nil {
-		w.tunDevice.Close()
+	w.stackMu.Lock()
+	device := w.tunDevice
+	w.stackMu.Unlock()
+	if device != nil {
+		_ = device.Close()
+	}
+	if w.h2Transport != nil {
+		w.h2Transport.CloseIdleConnections()
 	}
 	if w.l4Client != nil {
 		w.l4Client.Close()

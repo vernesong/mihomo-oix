@@ -126,10 +126,10 @@ func (b *Base) IsL3Protocol(metadata *C.Metadata) bool {
 
 // MarshalJSON implements C.ProxyAdapter
 func (b *Base) MarshalJSON() ([]byte, error) {
-	return json.Marshal(map[string]string{
-		"type": b.Type().String(),
-		"id":   b.Id(),
-	})
+	return json.Marshal(struct {
+		ID   string `json:"id"`
+		Type string `json:"type"`
+	}{ID: b.Id(), Type: b.Type().String()})
 }
 
 // Addr implements C.ProxyAdapter

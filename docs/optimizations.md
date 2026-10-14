@@ -228,3 +228,129 @@ a concurrent stress run reached a connection deadline once; an isolated run of
 all three retry regressions passed 100 iterations each with the race detector.
 The complete Snell package passed race and `with_gvisor` tests, and both lint
 configurations remained clean.
+
+## Second optimization pass: lazy outbound stacks and API allocation
+
+Reviewed the same ProjectClash snapshot, `3891cc46092029c23f7fd0bfa1fe29e0e6e1dffb`,
+again on 2026-10-14. Local baseline for this pass is `f971c204`.
+
+### Additional adaptations
+
+- **MASQUE:** adapt the first-use stack construction idea from
+  [`0a008c1`](https://github.com/ProjectClash/Clash/commit/0a008c1f99b225b0501cd49d6c343590465d3204),
+  specifically `clash_lazy_ipstack.go` and `clash_masque_lazy.go`. Normal unused
+  nodes retain their parsed prefixes and MTU instead of constructing a MIPS or
+  gVisor stack. Creation/start and close are synchronized; an unused node can
+  close without ever creating a stack. No idle-session eviction is added.
+- Address/MTU configurations outside a conservative accepted subset still call
+  the original stack constructor during parsing, retaining its exact errors
+  and backend-specific acceptance behavior. The local subset additionally
+  checks the current mipstack dependency's IPv6 minimum MTU of 1280. IPv4-mapped,
+  multicast, unspecified, duplicate and broadcast-address cases remain on the
+  original validation path. Prefix parsing, stack-mode/congestion validation,
+  keys, TLS and DNS setup retain their construction-time behavior. A constructor
+  failure now cancels its context and closes any successfully created resources;
+  a typed nil returned with a constructor error is never installed for cleanup.
+- **TUIC:** adapt the QUIC allocation part of `clash_tuic_lazy.go` from the same
+  commit. Construct the immutable QUIC configuration exactly once, on the first
+  dial, using the already-normalized options. TLS and ECH configuration stay in
+  the constructor, preserving certificate errors, CA snapshots, key-loader
+  lifetimes and trust isolation. Stream limits, windows, datagram sizes,
+  heartbeat, v4/v5 selection and session-pool behavior are unchanged.
+- **API allocation:** inspired by the reference's `clash_proxy_json.go`, use the
+  standard JSON encoder with a fixed two-field struct for base-node output.
+  Field names, ordering, escaping and UUID formatting remain identical. Snapshot
+  per-URL states into a slice, using stack storage for up to eight entries, rather
+  than constructing a second hash map. Callbacks still run after releasing the
+  state-map lock. Public history snapshots remain independent and unordered URL
+  maps continue to be sorted by the standard JSON encoder.
+
+### Additional candidates reviewed
+
+| Candidate | Decision and compatibility reason |
+| --- | --- |
+| WireGuard and ZeroTier deferred startup | Already lazy in this fork; no extra wrapper or second initialization path is needed. |
+| MIPS/gVisor receive buffers, domain-set construction queue, buffered geodata reads | Equivalent upstream optimizations are already present. |
+| Hysteria2 defragmentation in `2250a0b` | Not imported. Its vendored replacement tracks only one packet ID, resetting partial fragments when a different packet arrives. For interleaved A0, B0, A1, B1, it discards fragments that the current multi-packet cache can reassemble. Releasing completed cache metadata is useful, but this implementation changes receive behavior and also replaces the whole dependency. |
+| Global idle-session release and memory admission | Requires the reference's activity tracking and runtime lifecycle. Forced eviction or different admission limits could change long-lived TCP/UDP behavior. |
+| Compiled/lazy provider catalogs, mmap rule indexes and streaming YAML | Coupled to new catalog APIs, storage formats and vendored parsers. A separate parser/configuration compatibility project is needed before replacing the existing managed-profile and provider paths. |
+| Apple-specific Go runtime/goroutine stack tuning | Requires a custom runtime/toolchain; inappropriate for the existing multi-platform release matrix. |
+| TLS cache sharing and handwritten JSON merge/parser | Keep CA/ECH isolation and the standard JSON encoder. The small API allocation changes above do not need a new parser, response format or catalog API. |
+
+### Measurements
+
+Apple M4, darwin/arm64, Go 1.27.1, three repetitions. These are allocated bytes
+per operation, **not retained heap or process RSS**. MASQUE/TUIC construction
+used the `with_gvisor` build and 100 iterations per repetition. JSON/history
+benchmarks used the default build and 500 ms per repetition; baseline base-node
+and snapshot sources were supplied from `f971c204` through a Go build overlay.
+
+| Benchmark | Before, B/op | After, B/op | Allocations before / after |
+| --- | ---: | ---: | ---: |
+| Unused MASQUE, MIPS | 96,483–96,549 | 16,382–16,395 | 256 / 224 |
+| Unused MASQUE, gVisor | 87,453–89,390 | 16,380–16,396 | 766–768 / 224 |
+| Unused TUIC | 1,888 | 1,744 | 13 / 12 |
+| Base-node JSON | 520 | 176 | 9 / 4 |
+| Proxy JSON, ten records for one URL | 5,867–5,870 | 5,519–5,522 | 70 / 65 |
+| Extra histories, one URL | 496 | 496 | 3 / 3 |
+| Extra histories, four URLs | 592 | 592 | 6 / 6 |
+| Extra histories, sixteen URLs | 4,672 | 4,120 | 26 / 24 |
+
+Unused MASQUE construction allocates about 81–83% fewer bytes. First use still
+pays for the same IP stack, and active-node buffers/windows are unchanged. TUIC
+saves 144 bytes per unused node, including the cost of its new `sync.Once`.
+
+```sh
+go test -tags with_gvisor ./adapter/outbound -run '^$' \
+  -bench 'BenchmarkNew(Masque|Tuic)$' -benchmem -benchtime=100x -count=3
+go test ./adapter/outbound ./adapter -run '^$' \
+  -bench 'Benchmark(BaseMarshalJSON|ProxyMarshalJSON|ProxyExtraDelayHistories)$' \
+  -benchmem -benchtime=500ms -count=3
+```
+
+### Verification and second review
+
+- Default full suite passed with `SKIP_INTEROP_TEST=0`; the `with_gvisor` full
+  suite passed with `SKIP_INTEROP_TEST=1`. Both use `SKIP_CONCURRENT_TEST=1` to
+  omit the existing optional inbound stress test. The final fixture edits were
+  additionally checked by the default focused suite and the complete
+  `with_gvisor` adapter race suite.
+- Real loopback MASQUE H2 and H3 CONNECT-IP tunnels passed TCP and UDP echo tests
+  over IPv4 and IPv6, for both MIPS and gVisor. Concurrent first connections
+  share exactly one tunnel, and the client verifies the server's pinned key.
+  No host routes, elevated networking privileges or external MASQUE service
+  are needed by these tests.
+- Configuration acceptance/errors match the original stack constructor for 19
+  address/MTU combinations per backend. Concurrent start/close, closing an
+  unused node and subsequent TCP/UDP calls are covered. Closing must reject
+  new sockets; backend-specific closed/unreachable error identities are retained.
+- The complete `go test -race -tags with_gvisor ./adapter/...` passed. Existing
+  real TUIC v4/v5 TCP/UDP tests also passed under the race detector, including
+  TLS, ECH, mutual TLS and all three existing congestion-control variants.
+- Default and `with_gvisor` whole-repository lint report zero issues, with both
+  issue limits disabled. No new suppression, dependency replacement or linter
+  exception was introduced. Linux amd64 and Windows amd64 release-tag builds
+  passed with CGO disabled; those cross-compiled binaries were not executed.
+- Final manual review covered stack publication and lock ordering, cancellation,
+  constructor failure cleanup, option ownership, unchanged QUIC defaults,
+  TLS/ECH lifetimes and JSON field/escaping/snapshot compatibility.
+
+The first complete gVisor race run exposed test contamination by the pinned
+sing-wireguard constructor: on an `AddProtocolAddress` error it returns nil
+without closing the already-created gVisor stack. Sampling located the surviving
+workers in gVisor's sleeper; the pinned ARM64 race-only CAS assembly also loads
+both old and new into `R1`, unlike the reference's corrected `R2` load. This is
+outside the normal release build. The workers starved later Sudoku tests, so the
+run was stopped and its stacks inspected. The gVisor constructor comparison now
+runs in a bounded child process, retaining every acceptance/error assertion and
+containing the unreturned dependency resources. Normal stack creation, traffic
+and close-race tests still execute in the main test process. The complete race
+suite then passed after correcting a test-only assumption that every closed
+backend returns `net.ErrClosed`; gVisor can instead report network-unreachable.
+The existing dependency failure-path leak and race-only assembly issue are not
+claimed as fixed. The official MetaCubeX/gvisor head was still the pinned revision
+when checked; this pass does not vendor its runtime or change production stack
+implementations.
+
+No production RSS or live-traffic measurement was performed during this
+optimization verification.

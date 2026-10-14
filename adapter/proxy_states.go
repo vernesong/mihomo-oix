@@ -36,13 +36,21 @@ func (s *proxyStates) LoadOrStoreFn(url string, fn func() *internalProxyState) (
 
 func (s *proxyStates) Range(f func(url string, state *internalProxyState) bool) {
 	s.mu.RLock()
-	snapshot := make(map[string]*internalProxyState, len(s.states))
+	type entry struct {
+		url   string
+		state *internalProxyState
+	}
+	var small [8]entry
+	snapshot := small[:0]
+	if len(s.states) > len(small) {
+		snapshot = make([]entry, 0, len(s.states))
+	}
 	for url, state := range s.states {
-		snapshot[url] = state
+		snapshot = append(snapshot, entry{url, state})
 	}
 	s.mu.RUnlock()
-	for url, state := range snapshot {
-		if !f(url, state) {
+	for _, entry := range snapshot {
+		if !f(entry.url, entry.state) {
 			return
 		}
 	}
