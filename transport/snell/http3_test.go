@@ -25,6 +25,7 @@ import (
 	"github.com/metacubex/quic-go"
 	"github.com/metacubex/quic-go/http3"
 	"github.com/metacubex/tls"
+	"github.com/stretchr/testify/require"
 )
 
 func echoHTTP3Stream(w http.ResponseWriter, r *http.Request) {
@@ -579,6 +580,13 @@ func TestHTTP3OpenRetriesOnFreshSessionAfterGoAway(t *testing.T) {
 	case <-time.After(2 * time.Second):
 		t.Fatal("server shutdown did not finish")
 	}
+	// The connection context closes before its AfterFunc removes the entry.
+	require.Eventually(t, func() bool {
+		client.mu.Lock()
+		defer client.mu.Unlock()
+		_, tracked := client.connections[draining]
+		return !tracked
+	}, time.Second, time.Millisecond, "drained session was not removed")
 	client.mu.Lock()
 	defer client.mu.Unlock()
 	if len(client.connections) > 1 {
@@ -591,7 +599,14 @@ func TestHTTP3OpenRetriesOnFreshSessionAfterGoAway(t *testing.T) {
 	}
 }
 
-func rejectHTTP3Request(w http.ResponseWriter) {
+func rejectHTTP3Request(t *testing.T, w http.ResponseWriter) {
+	t.Helper()
+	// HTTPStream flushes an implicit 200 response. Prevent that write so the
+	// peer sees only H3_REQUEST_REJECTED, never a successful CONNECT first.
+	if err := http.NewResponseController(w).SetWriteDeadline(time.Now().Add(-time.Second)); err != nil {
+		t.Errorf("disable response header write: %v", err)
+		return
+	}
 	stream := w.(http3.HTTPStreamer).HTTPStream()
 	stream.CancelRead(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
 	stream.CancelWrite(quic.StreamErrorCode(http3.ErrCodeRequestRejected))
@@ -601,7 +616,7 @@ func TestHTTP3OpenRetriesRejectedRequestOnFreshSession(t *testing.T) {
 	var requests atomic.Int32
 	client, accepted, _ := newHTTP3ServerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if requests.Add(1) == 1 {
-			rejectHTTP3Request(w)
+			rejectHTTP3Request(t, w)
 			return
 		}
 		echoHTTP3Stream(w, r)
@@ -619,7 +634,7 @@ func TestHTTP3OpenRetriesRejectedRequestOnFreshSession(t *testing.T) {
 	defer cancel()
 	stream, _, err := client.Open(ctx)
 	if err != nil {
-		t.Fatalf("open after rejection: %v", err)
+		t.Fatalf("open after rejection: %v (%d sessions, %d requests)", err, accepted.Load(), requests.Load())
 	}
 	defer stream.Close()
 	assertHTTP3Echo(t, stream, "after rejection")
@@ -633,7 +648,7 @@ func TestHTTP3OpenRetriesOnlyOnce(t *testing.T) {
 	var requests atomic.Int32
 	client, accepted, _ := newHTTP3ServerFixture(t, http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		requests.Add(1)
-		rejectHTTP3Request(w)
+		rejectHTTP3Request(t, w)
 	}), nil, nil)
 	var sessions []*quic.Conn
 	dial := client.Dial
@@ -646,9 +661,14 @@ func TestHTTP3OpenRetriesOnlyOnce(t *testing.T) {
 	}
 	ctx, cancel := context.WithTimeout(t.Context(), 5*time.Second)
 	defer cancel()
-	if stream, _, err := client.Open(ctx); err == nil {
+	stream, _, err := client.Open(ctx)
+	if err == nil {
 		_ = stream.Close()
 		t.Fatal("rejected twice but opened")
+	}
+	var reset *quic.StreamError
+	if !errors.As(err, &reset) || !reset.Remote || reset.ErrorCode != quic.StreamErrorCode(http3.ErrCodeRequestRejected) {
+		t.Fatalf("expected peer rejection after the retry: %v", err)
 	}
 	if accepted.Load() != 2 || requests.Load() != 2 {
 		t.Fatalf("%d sessions, %d requests", accepted.Load(), requests.Load())

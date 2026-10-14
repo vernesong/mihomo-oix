@@ -214,3 +214,17 @@ Final verification:
 
 Cross-platform binaries are compilation checks only; local loopback tests do not
 constitute production traffic or remote deployment validation.
+
+### Release verification follow-up
+
+The Linux default CI suite exposed two existing HTTP/3 fixture races. The
+rejection helper now prevents `HTTPStream()` from implicitly flushing a 200
+response before sending `H3_REQUEST_REJECTED`; the retry-limit test also checks
+the exact peer reset. The GOAWAY test waits for the asynchronous connection-map
+cleanup before asserting its remaining references. Production code is unchanged.
+
+The original cleanup failure reproduced locally. After the fixture correction,
+a concurrent stress run reached a connection deadline once; an isolated run of
+all three retry regressions passed 100 iterations each with the race detector.
+The complete Snell package passed race and `with_gvisor` tests, and both lint
+configurations remained clean.
