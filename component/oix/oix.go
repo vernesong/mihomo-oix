@@ -123,7 +123,6 @@ const (
 )
 
 const (
-	maxRetries              = 2
 	totalTimeout            = 30 * time.Second
 	hedgeDelay              = 250 * time.Millisecond
 	maxManagedResponseBytes = 16 << 20
@@ -686,27 +685,8 @@ func fetchBest(parent context.Context, token string, urls []string) (*fetchedCon
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
-	// Always go through the Once so this goroutine synchronizes with whichever
-	// one generated the pair before reading it below.
 	ageKeyPair()
-	ctx, cancel := context.WithTimeout(parent, totalTimeout)
-	defer cancel()
-	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(urls))
-	for i, baseURL := range urls {
-		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
-			if i > 0 {
-				timer := time.NewTimer(hedgeDelay)
-				defer timer.Stop()
-				select {
-				case <-timer.C:
-				case <-ctx.Done():
-					return nil, ctx.Err()
-				}
-			}
-			return reportEmptySubscription(fetchFrom(ctx, token, baseURL))
-		})
-	}
-	return raceConfigReads(ctx, attempts)
+	return fetchFromClients(parent, token, urls, oixConfigClients())
 }
 
 // reportEmptySubscription turns an empty result into an error so a racing peer
@@ -730,25 +710,58 @@ func raceConfigReads(ctx context.Context, attempts []func(context.Context) (*fet
 
 type oixHTTPClientContextKey struct{}
 
-func fetchFrom(ctx context.Context, token, baseURL string) (*fetchedConfig, error) {
-	ctx, cancel := context.WithTimeout(ctx, totalTimeout)
-	defer cancel()
+func oixConfigClients() []*http.Client {
 	clients := []*http.Client{oixHTTPClient}
 	if inner.GetTunnel() != nil {
-		clients = append([]*http.Client{oixRoutedHTTPClient}, clients...)
+		clients = append(clients, oixRoutedHTTPClient)
 	}
-	return fetchFromClients(ctx, token, baseURL, clients)
+	return clients
 }
 
-func fetchFromClients(ctx context.Context, token, baseURL string, clients []*http.Client) (*fetchedConfig, error) {
-	attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(clients))
-	for _, client := range clients {
-		attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
-			routeCtx := context.WithValue(ctx, oixHTTPClientContextKey{}, client)
-			return reportEmptySubscription(fetchFromRoute(routeCtx, token, baseURL))
-		})
+func fetchFrom(ctx context.Context, token, baseURL string) (*fetchedConfig, error) {
+	return fetchFromClients(ctx, token, []string{baseURL}, oixConfigClients())
+}
+
+func fetchFromClients(parent context.Context, token string, urls []string, clients []*http.Client) (*fetchedConfig, error) {
+	if len(urls) == 0 {
+		return nil, ErrNoDomains
 	}
-	return raceConfigReads(ctx, attempts)
+	if len(clients) == 0 {
+		return nil, errors.New("no config request routes")
+	}
+	ctx, cancel := context.WithTimeout(parent, totalTimeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	var lastError error
+	for index, client := range clients {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		routeCtx, cancelRoute := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(clients)-index))
+		routeCtx = context.WithValue(routeCtx, oixHTTPClientContextKey{}, client)
+		attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(urls))
+		for i, baseURL := range urls {
+			attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
+				if i > 0 {
+					timer := time.NewTimer(hedgeDelay)
+					defer timer.Stop()
+					select {
+					case <-timer.C:
+					case <-ctx.Done():
+						return nil, ctx.Err()
+					}
+				}
+				return reportEmptySubscription(fetchFromRoute(ctx, token, baseURL))
+			})
+		}
+		config, err := raceConfigReads(routeCtx, attempts)
+		cancelRoute()
+		if err == nil || IsAuthError(err) {
+			return config, err
+		}
+		lastError = err
+	}
+	return nil, lastError
 }
 
 func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig, error) {
@@ -1126,69 +1139,16 @@ func newoixRoutedHTTPClient() *http.Client {
 	return client
 }
 
-// Only the explicitly read-only managed config request may be replayed.
-func isoixRead(req *http.Request) bool {
-	return req.Method == http.MethodGet && req.URL.Path == managedConfigPath
-}
-
 func oixHTTPDo(req *http.Request) (*http.Response, error) {
-	ctx := req.Context()
-	deadline := time.Now().Add(totalTimeout)
-	var lastErr error
-	retries := 0
-	if isoixRead(req) {
-		retries = maxRetries
+	if err := req.Context().Err(); err != nil {
+		return nil, err
 	}
 	client := oixHTTPClient
-	if route, ok := ctx.Value(oixHTTPClientContextKey{}).(*http.Client); ok {
+	if route, ok := req.Context().Value(oixHTTPClientContextKey{}).(*http.Client); ok {
 		client = route
 	}
-	for i := 0; i <= retries; i++ {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		if time.Now().After(deadline) {
-			if lastErr != nil {
-				return nil, fmt.Errorf("retry timeout: %w", lastErr)
-			}
-			return nil, errors.New("retry timeout")
-		}
-		if i > 0 && req.Body != nil && req.GetBody == nil {
-			return nil, errors.New("request body is not replayable")
-		}
-		if i > 0 {
-			timer := time.NewTimer(time.Duration(i) * time.Second)
-			select {
-			case <-timer.C:
-			case <-ctx.Done():
-				timer.Stop()
-				return nil, ctx.Err()
-			}
-		}
-		attempt := req.Clone(ctx)
-		if i > 0 && req.Body != nil {
-			body, err := req.GetBody()
-			if err != nil {
-				return nil, fmt.Errorf("replay request body: %w", err)
-			}
-			attempt.Body = body
-		}
-		resp, err := client.Do(attempt)
-		if err != nil {
-			lastErr = mihomoHttp.RedactError(err)
-			continue
-		}
-		if resp.StatusCode >= 500 && retries > 0 {
-			lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
-			resp.Body.Close()
-			continue
-		}
-		return resp, nil
-	}
-	if lastErr == nil {
-		lastErr = errors.New("request failed")
-	}
-	return nil, fmt.Errorf("request failed after %d attempts: %w", retries+1, lastErr)
+	response, err := client.Do(req)
+	return response, mihomoHttp.RedactError(err)
 }
 
 func saveResult(dir, homeDir string, raw []byte) bool {

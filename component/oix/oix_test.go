@@ -5,7 +5,6 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"errors"
-	"io"
 	"net"
 	"net/http"
 	"net/http/httptest"
@@ -14,7 +13,6 @@ import (
 	"path/filepath"
 	"runtime"
 	"strconv"
-	"strings"
 	"sync"
 	"testing"
 	"time"
@@ -356,75 +354,6 @@ func Test_oixBootstrapResolverFallsBackToTheSystemResolver(t *testing.T) {
 	addresses, err := bootstrap.LookupIPv4(context.Background(), "api.oix.test")
 	if err != nil || len(addresses) != 1 || addresses[0] != want || asked != "ip4 api.oix.test" {
 		t.Fatalf("lookup = %v, %v (asked %q), want the system answer", addresses, err, asked)
-	}
-}
-
-func Test_oixHTTPDoReplaysRequestBody(t *testing.T) {
-	var calls int
-	var bodies []string
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		body, err := io.ReadAll(request.Body)
-		if err != nil {
-			return nil, err
-		}
-		calls++
-		bodies = append(bodies, string(body))
-		status := http.StatusNoContent
-		if calls == 1 {
-			status = http.StatusInternalServerError
-		}
-		return &http.Response{
-			StatusCode: status,
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-			Request:    request,
-		}, nil
-	})
-	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
-
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://oix.test"+managedConfigPath, strings.NewReader("payload"))
-	if err != nil {
-		t.Fatal(err)
-	}
-	response, err := oixHTTPDo(request)
-	if err != nil {
-		t.Fatalf("oixHTTPDo() error = %v", err)
-	}
-	_ = response.Body.Close()
-	if calls != 2 {
-		t.Fatalf("request calls = %d, want 2", calls)
-	}
-	for index, body := range bodies {
-		if body != "payload" {
-			t.Fatalf("request body %d = %q, want payload", index, body)
-		}
-	}
-}
-
-func Test_oixHTTPDoRejectsUnreplayableRequestBody(t *testing.T) {
-	var calls int
-	transport := roundTripFunc(func(request *http.Request) (*http.Response, error) {
-		_, _ = io.Copy(io.Discard, request.Body)
-		calls++
-		return &http.Response{
-			StatusCode: http.StatusInternalServerError,
-			Header:     make(http.Header),
-			Body:       http.NoBody,
-			Request:    request,
-		}, nil
-	})
-	setoixHTTPClientForTest(t, &http.Client{Transport: transport})
-
-	request, err := http.NewRequestWithContext(context.Background(), http.MethodGet, "https://oix.test"+managedConfigPath, io.NopCloser(strings.NewReader("payload")))
-	if err != nil {
-		t.Fatal(err)
-	}
-	_, err = oixHTTPDo(request)
-	if err == nil || !strings.Contains(err.Error(), "not replayable") {
-		t.Fatalf("oixHTTPDo() error = %v, want not replayable", err)
-	}
-	if calls != 1 {
-		t.Fatalf("request calls = %d, want 1", calls)
 	}
 }
 
