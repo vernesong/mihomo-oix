@@ -772,6 +772,7 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 	client, userAgent := currentClient()
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set(oixClientHeader, client)
+	setDeviceHeader(req)
 	req.Header.Set(subscriptionCapabilitiesHeader, subscriptionCapabilities())
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("X-Flclash-Timestamp", ts)

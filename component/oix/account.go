@@ -132,6 +132,7 @@ func accountRequestOnce(ctx context.Context, target, token string, form url.Valu
 	client, userAgent := currentClient()
 	req.Header.Set("User-Agent", userAgent)
 	req.Header.Set(oixClientHeader, client)
+	setDeviceHeader(req)
 	req.Header.Set("Accept", "application/json")
 	req.Header.Set("Accept-Language", "zh-CN")
 	if form != nil {

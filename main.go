@@ -53,6 +53,7 @@ var (
 	oixToken                      string
 	oixProviderName               string
 	oixClient                     string
+	oixDevice                     string
 	oixProfile                    bool
 	externalUI                    string
 	externalController            string
@@ -87,6 +88,7 @@ func init() {
 	flag.StringVar(&oixProviderName, "oix-provider-name", os.Getenv("OIX_PROVIDER_NAME"), "specify OIX provider name (default: oixCloud)")
 	flag.BoolVar(&oixProfile, "oix-profile", os.Getenv("OIX_PROFILE") == "1", "run the oixCloud managed config as the whole configuration; the config file only overrides it")
 	flag.StringVar(&oixClient, "oix-client", os.Getenv("OIX_CLIENT"), "declare this client to oixCloud: openclash (default) or oixclash")
+	flag.StringVar(&oixDevice, "oix-device", os.Getenv("OIX_DEVICE"), "oixCloud device ID kept by the front end (lowercase UUID v4); default: .oix_device_id in the home directory")
 	flag.StringVar(&postUp, "post-up", os.Getenv("CLASH_POST_UP"), "set post-up script")
 	flag.StringVar(&postDown, "post-down", os.Getenv("CLASH_POST_DOWN"), "set post-down script")
 	flag.BoolVar(&geodataMode, "m", false, "set geodata mode")
@@ -182,6 +184,12 @@ func main() {
 	if oixClient != "" {
 		if err := oix.SetClient(oixClient); err != nil {
 			log.Fatalln("%s", err)
+		}
+	}
+
+	if oixDevice != "" {
+		if err := oix.SetDevice(oixDevice); err != nil {
+			log.Warnln("%s, keeping one in the home directory instead", err)
 		}
 	}
 
