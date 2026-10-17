@@ -6,6 +6,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -89,7 +90,7 @@ func TestDeviceIsKeptInTheHomeDirectory(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	if info.Mode().Perm()&0o077 != 0 {
+	if runtime.GOOS != "windows" && info.Mode().Perm()&0o077 != 0 {
 		t.Fatalf("device ID file mode = %v", info.Mode().Perm())
 	}
 
