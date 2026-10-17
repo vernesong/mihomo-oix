@@ -11,7 +11,7 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
-const testUrl = "https://www.gstatic.com/generate_204"
+const testUrl = C.DefaultTestURL
 
 func balancedProxies(count int) []C.Proxy {
 	proxies := make([]C.Proxy, 0, count)

@@ -280,7 +280,7 @@ func ProviderConfig(relPath string, base map[string]any) map[string]any {
 		"age-secret-key": ageSecretKey,
 		"health-check": map[string]any{
 			"enable":   true,
-			"url":      "http://cp.cloudflare.com/generate_204",
+			"url":      C.DefaultTestURL,
 			"interval": 300,
 		},
 	}

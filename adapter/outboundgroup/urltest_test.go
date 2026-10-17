@@ -161,7 +161,7 @@ func (c *urlTestFakeConn) AppendToChains(C.ProxyAdapter) {}
 func (c *urlTestFakeConn) RemoteDestination() string { return "" }
 
 func TestURLTestDropsCachedProxyWhenHealthTurnsFalse(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	fast := newURLTestFakeProxy("fast", 10)
 	slower := newURLTestFakeProxy("slower", 50)
 	provider := &urlTestFakeProvider{proxies: []C.Proxy{fast, slower}}
@@ -186,7 +186,7 @@ func TestURLTestDropsCachedProxyWhenHealthTurnsFalse(t *testing.T) {
 }
 
 func TestURLTestSelectFastKeepsColdSelectionPolicyWhenFirstProxyIsDead(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	first := newURLTestFakeProxy("first", 10)
 	second := newURLTestFakeProxy("second", 50)
 	first.alive = false
@@ -206,7 +206,7 @@ func TestURLTestSelectFastKeepsColdSelectionPolicyWhenFirstProxyIsDead(t *testin
 }
 
 func TestURLTestResetsCachedProxyAfterDialFailure(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	failing := newURLTestFakeProxy("failing", 10)
 	backup := newURLTestFakeProxy("backup", 50)
 	failing.dialErr = errors.New("dial failed")
@@ -232,7 +232,7 @@ func TestURLTestResetsCachedProxyAfterDialFailure(t *testing.T) {
 }
 
 func TestURLTestResetsCachedProxyAfterListenPacketFailure(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	failing := newURLTestFakeProxy("failing", 10)
 	backup := newURLTestFakeProxy("backup", 50)
 	failing.listenErr = errors.New("listen failed")
@@ -258,7 +258,7 @@ func TestURLTestResetsCachedProxyAfterListenPacketFailure(t *testing.T) {
 }
 
 func TestURLTestResetsCachedProxyAfterFirstWriteFailure(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	failing := newURLTestFakeProxy("failing", 10)
 	backup := newURLTestFakeProxy("backup", 50)
 	failing.conn = &urlTestFakeConn{
@@ -292,7 +292,7 @@ func TestURLTestResetsCachedProxyAfterFirstWriteFailure(t *testing.T) {
 }
 
 func TestURLTestResetsCachedProxyAfterDialFailureBeforeHealthStateChanges(t *testing.T) {
-	const testURL = "https://cp.cloudflare.com/generate_204"
+	const testURL = C.DefaultTestURL
 	failing := newURLTestFakeProxy("failing", 10)
 	backup := newURLTestFakeProxy("backup", 50)
 	failing.dialErr = errors.New("dial failed")
