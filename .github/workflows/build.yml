@@ -6,6 +6,10 @@ on:
         description: "Tag version to release"
         required: false
         default: ""
+      rebuild:
+        description: "Replace the current prerelease assets without changing its version or notes"
+        type: boolean
+        default: false
   push:
     paths-ignore:
       - "docs/**"
@@ -29,7 +33,42 @@ permissions:
 env:
   REGISTRY: ghcr.io
 jobs:
+  release-settings:
+    runs-on: ubuntu-latest
+    outputs:
+      version: ${{ steps.settings.outputs.version }}
+      package_version: ${{ steps.settings.outputs.package_version }}
+    steps:
+      - uses: actions/checkout@v6
+      - id: settings
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          RELEASE_VERSION: ${{ inputs.version }}
+          REBUILD: ${{ inputs.rebuild }}
+        run: |
+          set -euo pipefail
+          if [ "$REBUILD" = true ]; then
+            [ -z "$RELEASE_VERSION" ]
+            mkdir previous
+            gh release download "Pre-${GITHUB_REF_NAME}" --repo "$GITHUB_REPOSITORY" --dir previous --pattern version.txt --pattern 'mihomo-linux-amd64-v1-*.deb'
+            VERSION=$(cat previous/version.txt)
+            PackageVersion=$(dpkg-deb --field previous/*.deb Version)
+          else
+            VERSION="${GITHUB_REF_NAME,,}-oix-$(git rev-parse --short HEAD)"
+            VERSION="${VERSION//\//-}"
+            PackageVersion="$(curl -fsSL https://api.github.com/repos/MetaCubeX/mihomo/releases/latest | jq -r .tag_name | sed s/v//g | awk -F . '{$NF = $NF + 1; print}' OFS=.).${VERSION/-/.}"
+            if [ -n "$RELEASE_VERSION" ]; then
+              VERSION="$RELEASE_VERSION"
+              PackageVersion="${VERSION#v}"
+            fi
+            PackageVersion="${PackageVersion}-oix"
+          fi
+          [[ "$VERSION" =~ ^[a-zA-Z0-9][a-zA-Z0-9._-]*$ ]]
+          echo "version=$VERSION" >> "$GITHUB_OUTPUT"
+          echo "package_version=$PackageVersion" >> "$GITHUB_OUTPUT"
+
   build:
+    needs: [release-settings]
     runs-on: ubuntu-latest
     strategy:
       matrix:
@@ -110,16 +149,8 @@ jobs:
 
     - name: Set variables
       run: |
-        VERSION="${GITHUB_REF_NAME,,}-oix-$(git rev-parse --short HEAD)"
-        VERSION="${VERSION//\//-}"
-        PackageVersion="$(curl -s "https://api.github.com/repos/MetaCubeX/mihomo/releases/latest" | jq -r '.tag_name' | sed 's/v//g' | awk -F '.' '{$NF = $NF + 1; print}' OFS='.').${VERSION/-/.}"
-        if [ -n "${{ github.event.inputs.version }}" ]; then
-          VERSION=${{ github.event.inputs.version }}
-          PackageVersion="${VERSION#v}"
-        fi
-        echo "VERSION=${VERSION}" >> $GITHUB_ENV
-        echo "PackageVersion=${PackageVersion}-oix" >> $GITHUB_ENV
-      
+        echo 'VERSION=${{ needs.release-settings.outputs.version }}' >> "$GITHUB_ENV"
+        echo 'PackageVersion=${{ needs.release-settings.outputs.package_version }}' >> "$GITHUB_ENV"
         echo "BUILDTIME=$(date)" >> $GITHUB_ENV
         echo "CGO_ENABLED=0" >> $GITHUB_ENV
         echo "BUILDTAG=-extldflags --static" >> $GITHUB_ENV
@@ -339,7 +370,7 @@ jobs:
 
   Upload-Prerelease:
     permissions: write-all
-    if: ${{ github.event_name != 'workflow_dispatch' && github.ref_type == 'branch' && !startsWith(github.event_name, 'pull_request') }}
+    if: ${{ (github.event_name != 'workflow_dispatch' || inputs.rebuild) && github.ref_type == 'branch' && !startsWith(github.event_name, 'pull_request') }}
     needs: [build]
     runs-on: ubuntu-latest
     steps:
@@ -357,6 +388,7 @@ jobs:
       shell: bash
 
     - name: Delete current release assets
+      if: ${{ !inputs.rebuild }}
       uses: 8Mi-Tech/delete-release-assets-action@main
       with:
         github_token: ${{ secrets.GITHUB_TOKEN }}
@@ -374,7 +406,8 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       
-    - run: |
+    - if: ${{ !inputs.rebuild }}
+      run: |
         cat > release.txt << 'EOF'
         **[声明]** 本分支是在上游代码的基础上增加Smart策略组功能，关于Smart策略组的任何问题均与上游无关!
         **[Announcement]** This branch is based on the upstream code to add Smart Groups functionality, any questions about Smart Groups are not related to the upstream!
@@ -392,7 +425,7 @@ jobs:
 
     - name: Upload Prerelease
       uses: softprops/action-gh-release@v3
-      if: ${{  success() }}
+      if: ${{ success() && !inputs.rebuild }}
       with:
         tag_name: Pre-${{ github.ref_name }}
         name: "Mihomo ${{ github.ref_name }} with Smart Group"
@@ -401,6 +434,12 @@ jobs:
         prerelease: true
         generate_release_notes: true
         body_path: release.txt
+
+    - name: Replace prerelease assets
+      if: ${{ inputs.rebuild }}
+      env:
+        GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      run: gh release upload "Pre-${GITHUB_REF_NAME}" bin/* --clobber --repo "$GITHUB_REPOSITORY"
 
   Upload-Release:
     permissions: write-all
@@ -492,7 +531,7 @@ jobs:
       # Extract metadata (tags, labels) for Docker
       # https://github.com/docker/metadata-action
       - name: Extract Docker metadata
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.rebuild }}
         id: meta_alpha
         uses: docker/metadata-action@v6
         with:
@@ -527,7 +566,7 @@ jobs:
       # Build and push Docker image with Buildx (don't push on PR)
       # https://github.com/docker/build-push-action
       - name: Build and push Docker image
-        if: ${{ github.event_name != 'workflow_dispatch' }}
+        if: ${{ github.event_name != 'workflow_dispatch' || inputs.rebuild }}
         uses: docker/build-push-action@v7
         with:
           context: .

@@ -726,19 +726,7 @@ func fetchFromClients(parent context.Context, token string, urls []string, clien
 	if len(urls) == 0 {
 		return nil, ErrNoDomains
 	}
-	if len(clients) == 0 {
-		return nil, errors.New("no config request routes")
-	}
-	ctx, cancel := context.WithTimeout(parent, totalTimeout)
-	defer cancel()
-	deadline, _ := ctx.Deadline()
-	var lastError error
-	for index, client := range clients {
-		if err := ctx.Err(); err != nil {
-			return nil, err
-		}
-		routeCtx, cancelRoute := context.WithTimeout(ctx, time.Until(deadline)/time.Duration(len(clients)-index))
-		routeCtx = context.WithValue(routeCtx, oixHTTPClientContextKey{}, client)
+	return fetchConfigRoutes(parent, clients, func(routeCtx context.Context) (*fetchedConfig, error) {
 		attempts := make([]func(context.Context) (*fetchedConfig, error), 0, len(urls))
 		for i, baseURL := range urls {
 			attempts = append(attempts, func(ctx context.Context) (*fetchedConfig, error) {
@@ -754,7 +742,36 @@ func fetchFromClients(parent context.Context, token string, urls []string, clien
 				return reportEmptySubscription(fetchFromRoute(ctx, token, baseURL))
 			})
 		}
-		config, err := raceConfigReads(routeCtx, attempts)
+		return raceConfigReads(routeCtx, attempts)
+	})
+}
+
+type subscriptionRouteContextKey struct{}
+
+// Every managed download shares one deadline and one direct-first policy.
+func fetchConfigRoutes(parent context.Context, clients []*http.Client, read func(context.Context) (*fetchedConfig, error)) (*fetchedConfig, error) {
+	if len(clients) == 0 {
+		return nil, errors.New("no config request routes")
+	}
+	ctx, cancel := context.WithTimeout(parent, totalTimeout)
+	defer cancel()
+	deadline, _ := ctx.Deadline()
+	var lastError error
+	for index, client := range clients {
+		if err := ctx.Err(); err != nil {
+			return nil, err
+		}
+		budget := time.Until(deadline) / time.Duration(len(clients)-index)
+		if index == 0 {
+			budget = min(budget, 5*time.Second)
+		}
+		routeCtx, cancelRoute := context.WithTimeout(ctx, budget)
+		route := "direct"
+		if index > 0 {
+			route = "proxy-fallback"
+		}
+		routeCtx = context.WithValue(routeCtx, subscriptionRouteContextKey{}, route)
+		config, err := read(context.WithValue(routeCtx, oixHTTPClientContextKey{}, client))
 		cancelRoute()
 		if err == nil || IsAuthError(err) {
 			return config, err
@@ -1140,6 +1157,9 @@ func newoixRoutedHTTPClient() *http.Client {
 }
 
 func oixHTTPDo(req *http.Request) (*http.Response, error) {
+	if route, ok := req.Context().Value(subscriptionRouteContextKey{}).(string); ok {
+		req.Header.Set("X-oixCloud-Subscription-Route", route)
+	}
 	if err := req.Context().Err(); err != nil {
 		return nil, err
 	}

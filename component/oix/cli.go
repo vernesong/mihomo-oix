@@ -40,6 +40,15 @@ type cliOutput struct {
 }
 
 func CLI(args []string, stdin io.Reader, stdout io.Writer) int {
+	if len(args) > 0 && args[0] == "download-config" {
+		if len(args) == 2 && args[1] == "--check" {
+			return exitOK
+		}
+		if len(args) == 1 {
+			return downloadConfigCLI(stdin, stdout)
+		}
+		return exitFailed
+	}
 	format := "json"
 	write := func(out cliOutput) {
 		if format == "lines" {
