@@ -8,7 +8,7 @@ import (
 
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 // ProfileDNSSummary exposes only the panel's ordinary upstreams, before local
@@ -27,11 +27,11 @@ type profileDNSState struct {
 
 var profileDNS atomic.Pointer[profileDNSState]
 
-func rememberProfileDNS(plain []byte) {
+func rememberProfileDNS(document *yaml.Node) {
 	var config struct {
 		DNS ProfileDNSSummary `yaml:"dns"`
 	}
-	if err := yaml.Unmarshal(plain, &config); err != nil {
+	if err := document.Decode(&config); err != nil {
 		profileDNS.Store(nil)
 		return
 	}

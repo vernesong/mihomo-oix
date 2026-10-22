@@ -17,8 +17,6 @@ import (
 	A "github.com/metacubex/mihomo/component/age"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	C "github.com/metacubex/mihomo/constant"
-
-	"gopkg.in/yaml.v3"
 )
 
 const testProfile = `proxies:
@@ -42,6 +40,7 @@ tun: {enable: false}
 dns:
   listen: 0.0.0.0:7874
   enhanced-mode: redir-host
+  cache-max-size: 1024
   nameserver-policy:
     '+.lan': 127.0.0.1:53
 `
@@ -120,12 +119,12 @@ func ageProfile(t *testing.T, homeDir string) {
 func TestComposeProfileAppliesLocalOverrides(t *testing.T) {
 	_, homeDir := setupProfileTest(t)
 
-	composed, err := ComposeProfile([]byte(testOverlay))
+	composed, err := ComposeProfileNode([]byte(testOverlay))
 	if err != nil {
 		t.Fatal(err)
 	}
 	var got map[string]any
-	if err := yaml.Unmarshal(composed, &got); err != nil {
+	if err := composed.Decode(&got); err != nil {
 		t.Fatal(err)
 	}
 	dns := got["dns"].(map[string]any)
@@ -136,6 +135,8 @@ func TestComposeProfileAppliesLocalOverrides(t *testing.T) {
 		t.Errorf("mixed-port = %v, want the local 7890", got["mixed-port"])
 	case tun["enable"] != false || tun["stack"] != "system":
 		t.Errorf("tun = %v, want enable overridden and stack kept", tun)
+	case dns["cache-max-size"] != 1024:
+		t.Errorf("DNS cache size = %v, want the local 1024", dns["cache-max-size"])
 	case dns["enhanced-mode"] != "redir-host" || dns["listen"] != "0.0.0.0:7874" || dns["enable"] != true:
 		t.Errorf("dns = %v, want local listener and mode over the managed DNS", dns)
 	case policy["+.nodes.example"] != "127.0.0.1:5353" || policy["+.lan"] != "127.0.0.1:53":

@@ -33,7 +33,7 @@ import (
 	"github.com/metacubex/mihomo/listener/inner"
 	"github.com/metacubex/mihomo/log"
 
-	"gopkg.in/yaml.v3"
+	"go.yaml.in/yaml/v3"
 )
 
 var (
@@ -679,6 +679,8 @@ func IsoixProvider(name string) bool {
 type fetchedConfig struct {
 	data  []byte // age-encrypted, as saved to disk
 	plain []byte
+	// Kept only for profile mode, until the caller has decoded the runtime config.
+	document *yaml.Node
 }
 
 func fetchBest(parent context.Context, token string, urls []string) (*fetchedConfig, error) {
@@ -834,11 +836,7 @@ func fetchFromRoute(ctx context.Context, token, baseURL string) (*fetchedConfig,
 	if apiResp.Config == "" {
 		return nil, nil
 	}
-	data, plain, err := decodeArmoredConfig(apiResp.Config)
-	if err != nil {
-		return nil, err
-	}
-	return &fetchedConfig{data: data, plain: plain}, nil
+	return decodeArmoredConfig(apiResp.Config)
 }
 
 func decodeJSONResponse(reader io.Reader, maxBytes int64, target any) error {
@@ -881,25 +879,33 @@ func oixStatusError(status int) error {
 	return err
 }
 
-func decodeArmoredConfig(encoded string) (raw, plain []byte, err error) {
-	raw, err = base64.StdEncoding.DecodeString(encoded)
+func decodeArmoredConfig(encoded string) (*fetchedConfig, error) {
+	raw, err := base64.StdEncoding.DecodeString(encoded)
 	if err != nil {
-		return nil, nil, fmt.Errorf("decode config: %w", err)
+		return nil, fmt.Errorf("decode config: %w", err)
 	}
 	if !isAgeArmored(raw) {
-		return nil, nil, errors.New("config not encrypted")
+		return nil, errors.New("config not encrypted")
 	}
-	plain, err = age.DecryptBytes(raw, ageSecretKey)
+	plain, err := age.DecryptBytes(raw, ageSecretKey)
 	if err != nil {
-		return nil, nil, errors.New("invalid encrypted config")
+		return nil, errors.New("invalid encrypted config")
+	}
+	var document yaml.Node
+	if err := yaml.Unmarshal(plain, &document); err != nil {
+		return nil, errors.New("invalid managed provider config")
 	}
 	var schema struct {
 		Proxies []map[string]any `yaml:"proxies"`
 	}
-	if err := yaml.Unmarshal(plain, &schema); err != nil || schema.Proxies == nil {
-		return nil, nil, errors.New("invalid managed provider config")
+	if err := document.Decode(&schema); err != nil || schema.Proxies == nil {
+		return nil, errors.New("invalid managed provider config")
 	}
-	return raw, plain, nil
+	config := &fetchedConfig{data: raw, plain: plain}
+	if ProfileMode() {
+		config.document = &document
+	}
+	return config, nil
 }
 
 func sign(message string) string {
@@ -1262,6 +1268,10 @@ func applyManagedDNSConfig(raw []byte) {
 	if err := yaml.Unmarshal(raw, &config); err != nil {
 		return
 	}
+	applyManagedDNS(config)
+}
+
+func applyManagedDNS(config managedConfig) {
 	target := oixdns.ManagedNodesDomain()
 	patterns := make([]string, 0, len(config.DNS.NameServerPolicy))
 	for pattern := range config.DNS.NameServerPolicy {

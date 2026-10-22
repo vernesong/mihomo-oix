@@ -80,11 +80,17 @@ func ParseWithPath(path string) (*config.Config, error) {
 // ParseWithBytes config with buffer
 func ParseWithBytes(buf []byte) (*config.Config, error) {
 	if oix.ProfileMode() {
-		composed, err := oix.ComposeProfile(buf)
+		document, err := oix.ComposeProfileNode(buf)
 		if err != nil {
 			return nil, err
 		}
-		buf = composed
+		if document != nil {
+			rawCfg := config.DefaultRawConfig()
+			if err := document.Decode(rawCfg); err != nil {
+				return nil, err
+			}
+			return config.ParseRawConfig(rawCfg)
+		}
 	}
 	return config.Parse(buf)
 }

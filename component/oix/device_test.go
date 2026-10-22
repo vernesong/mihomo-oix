@@ -152,7 +152,7 @@ func TestNoDeviceWithoutAPlaceToKeepIt(t *testing.T) {
 
 	req := httptest.NewRequest(http.MethodGet, "https://panel.example/", nil)
 	setDeviceHeader(req)
-	if _, ok := req.Header[oixDeviceHeader]; ok {
+	if _, ok := req.Header[http.CanonicalHeaderKey(oixDeviceHeader)]; ok {
 		t.Fatal("header sent without an identifier")
 	}
 }

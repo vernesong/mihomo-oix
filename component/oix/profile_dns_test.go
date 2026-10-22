@@ -6,6 +6,8 @@ import (
 	"testing"
 
 	"github.com/metacubex/mihomo/component/oix/oixdns"
+
+	"go.yaml.in/yaml/v3"
 )
 
 func TestProfileDNSSummaryBeforeOverridesAndAccountIsolation(t *testing.T) {
@@ -54,12 +56,19 @@ func TestProfileDNSSummaryBeforeOverridesAndAccountIsolation(t *testing.T) {
 
 func TestProfileDNSMasksManagedHostsAndClearsInvalidSnapshots(t *testing.T) {
 	_, _ = setupProfileTest(t)
-	rememberProfileDNS([]byte("dns:\n  nameserver: ['https://a.nodes.example/dns-query', '119.29.29.29']\n"))
+	var document yaml.Node
+	if err := yaml.Unmarshal([]byte("dns:\n  nameserver: ['https://a.nodes.example/dns-query', '119.29.29.29']\n"), &document); err != nil {
+		t.Fatal(err)
+	}
+	rememberProfileDNS(&document)
 	got, ok := GetProfileDNS()
 	if !ok || got.Nameserver[0] != oixdns.Mask("a.nodes.example") || got.Nameserver[1] != "119.29.29.29" {
 		t.Fatalf("masked DNS = %+v", got)
 	}
-	rememberProfileDNS([]byte("dns: [invalid"))
+	if err := yaml.Unmarshal([]byte("dns: [invalid]"), &document); err != nil {
+		t.Fatal(err)
+	}
+	rememberProfileDNS(&document)
 	if _, ok := GetProfileDNS(); ok {
 		t.Fatal("invalid profile retained old DNS")
 	}
