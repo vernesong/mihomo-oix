@@ -14,8 +14,6 @@ import (
 	"github.com/metacubex/mihomo/common/pool"
 	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
 	"github.com/metacubex/mihomo/transport/socks5"
-
-	"github.com/metacubex/blake3"
 )
 
 const (
@@ -43,11 +41,6 @@ const (
 	CommandError  byte = 2
 
 	Version byte = 1
-)
-
-const (
-	IdentityHeaderLength = 16
-	identityWireMagic    = "DLSNID01"
 )
 
 var endSignal = []byte{}
@@ -191,15 +184,8 @@ func HalfClose(conn net.Conn) error {
 	return nil
 }
 
-func IdentityHeaderFromPSK(psk []byte) []byte {
-	hash := blake3.Sum512(psk)
-	return append([]byte(nil), hash[:IdentityHeaderLength]...)
-}
-
-func StreamConnWithIdentity(conn net.Conn, psk []byte, version int) *Snell {
-	return streamConn(conn, psk, version, IdentityHeaderFromPSK(psk))
-}
-
+// StreamConnWithExporterIdentity sends the TLS-bound identity, DLSNID02 for v4
+// and DLSNID06 for v6. Versions before 4 have no identity header.
 func StreamConnWithExporterIdentity(conn net.Conn, psk []byte, version int, exporter []byte) *Snell {
 	if version == Version6 {
 		return &Snell{Conn: newV6Conn(conn, psk, exporter)}
@@ -207,19 +193,15 @@ func StreamConnWithExporterIdentity(conn net.Conn, psk []byte, version int, expo
 	if version >= Version4 {
 		return &Snell{Conn: newV4ConnWithExporterIdentity(conn, psk, exporter)}
 	}
-	return StreamConnWithIdentity(conn, psk, version)
+	return StreamConn(conn, psk, version)
 }
 
 func StreamConn(conn net.Conn, psk []byte, version int) *Snell {
-	return streamConn(conn, psk, version, nil)
-}
-
-func streamConn(conn net.Conn, psk []byte, version int, identity []byte) *Snell {
 	if version == Version6 {
 		return &Snell{Conn: newV6Conn(conn, psk, nil)}
 	}
 	if version >= Version4 {
-		return &Snell{Conn: newV4Conn(conn, psk, identity)}
+		return &Snell{Conn: newV4Conn(conn, psk)}
 	}
 
 	var cipher shadowaead.Cipher

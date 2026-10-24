@@ -32,11 +32,11 @@ func TestSnellV6Profile(t *testing.T) {
 		if err != nil {
 			t.Fatal(err)
 		}
-		if !s.identity || !s.reuse || s.echTLS.NextProtos[0] != "snell-ech/2" {
+		if !s.reuse || len(s.echTLS.NextProtos) != 1 || s.echTLS.NextProtos[0] != "snell-ech/2" {
 			t.Fatal("incomplete v6 profile")
 		}
 		s.Close()
-		for _, change := range []map[string]any{{"alpn": "snell-ech/1"}, {"legacy-fallback": true}, {"identity-version": 1}, {"skip-cert-verify": true}, {"mode": ""}} {
+		for _, change := range []map[string]any{{"alpn": "snell-ech/1"}, {"skip-cert-verify": true}, {"mode": ""}} {
 			bad := opt
 			bad.ObfsOpts = map[string]any{"mode": "ech-tls", "ech-config": echConfig, "transport": transport}
 			for k, v := range change {

@@ -7,15 +7,19 @@ import (
 	"crypto/elliptic"
 	"crypto/rand"
 	"crypto/x509"
+	"encoding/binary"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"io"
+	"maps"
 	"math/big"
 	"net"
 	"strings"
 	"testing"
 	"time"
 
+	"github.com/metacubex/mihomo/common/structure"
 	"github.com/metacubex/mihomo/component/ech"
 	"github.com/metacubex/mihomo/component/oix/oixdns"
 	tlsC "github.com/metacubex/mihomo/component/tls"
@@ -144,7 +148,11 @@ func (c *clientBytesRecorder) Read(b []byte) (int, error) {
 	return n, err
 }
 
-func TestSnellECHTLSFingerprintsKeepALPNPrivate(t *testing.T) {
+// newSnellECHTLSServer returns a TLS 1.3 server configuration for
+// origin.example.com that accepts ECH behind front.example.com, with the ECH
+// config and the CA certificate its clients need.
+func newSnellECHTLSServer(t *testing.T, nextProtos ...string) (serverConfig *tls.Config, echConfig, caPEM string) {
+	t.Helper()
 	key, err := ecdsa.GenerateKey(elliptic.P256(), rand.Reader)
 	if err != nil {
 		t.Fatal(err)
@@ -167,12 +175,16 @@ func TestSnellECHTLSFingerprintsKeepALPNPrivate(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	serverConfig := &tls.Config{
-		NextProtos: []string{snellECHTLSALPN}, MinVersion: tls.VersionTLS13,
+	serverConfig = &tls.Config{
+		NextProtos: nextProtos, MinVersion: tls.VersionTLS13,
 		Certificates:             []tls.Certificate{{Certificate: [][]byte{der}, PrivateKey: key}},
 		EncryptedClientHelloKeys: echKeys,
 	}
-	caPEM := string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+	return serverConfig, echConfig, string(pem.EncodeToMemory(&pem.Block{Type: "CERTIFICATE", Bytes: der}))
+}
+
+func TestSnellECHTLSFingerprintsKeepALPNPrivate(t *testing.T) {
+	serverConfig, echConfig, caPEM := newSnellECHTLSServer(t, snellECHTLSALPN)
 
 	// Every name in component/tls's fingerprint table, then none, a wrong case and an unknown name.
 	for _, fingerprint := range []string{
@@ -276,7 +288,6 @@ func TestSnellConfigurationErrorsMaskManagedNodes(t *testing.T) {
 				{"mode": "unsupported"},
 				{"mode": "ech-tls", "skip-cert-verify": true},
 				{"mode": "ech-tls", "alpn": "unsupported"},
-				{"mode": "ech-tls", "identity-version": -1},
 			} {
 				adapter, err := NewSnell(SnellOption{
 					Name: "snell", Server: tc.server, Port: 443, Psk: "password", Version: 4,
@@ -297,42 +308,204 @@ func TestSnellConfigurationErrorsMaskManagedNodes(t *testing.T) {
 	}
 }
 
-func TestSnellECHTLSLegacyFallbackMustBeExplicit(t *testing.T) {
-	echConfig, _, err := ech.GenECHConfig("front.example.com")
-	if err != nil {
-		t.Fatal(err)
+// parseSnellProxy decodes a proxy mapping as adapter.ParseProxy does.
+func parseSnellProxy(mapping map[string]any) (*Snell, error) {
+	decoder := structure.NewDecoder(structure.Option{TagName: "proxy", WeaklyTypedInput: true, KeyReplacer: structure.DefaultKeyReplacer})
+	option := SnellOption{}
+	if err := decoder.Decode(mapping, &option); err != nil {
+		return nil, err
 	}
-	adapter, err := NewSnell(SnellOption{
-		Name: "snell", Server: "origin.example.com", Port: 443, Psk: "password", Version: 4,
-		ObfsOpts: map[string]any{
-			"mode": "ech-tls", "alpn": snellECHTLSALPN,
-			"identity-version": 2, "legacy-fallback": true, "ech-config": echConfig,
-		},
-	})
-	if err != nil {
-		t.Fatal(err)
-	}
-	defer adapter.Close()
-	if got := adapter.echTLS.NextProtos; len(got) != 2 || got[0] != snellECHTLSALPN || got[1] != snellECHTLSLegacyALPN {
-		t.Fatalf("NextProtos = %q", got)
+	return NewSnell(option)
+}
+
+type snellDialResult struct {
+	conn C.Conn
+	err  error
+}
+
+// dialSnellInBackground connects to example.com:443 through adapter while the
+// caller serves the connection; the result keeps it open until the caller closes it.
+func dialSnellInBackground(adapter *Snell) <-chan snellDialResult {
+	dialed := make(chan snellDialResult, 1)
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+		defer cancel()
+		conn, err := adapter.DialContext(ctx, &C.Metadata{NetWork: C.TCP, Host: "example.com", DstPort: 443})
+		dialed <- snellDialResult{conn, err}
+	}()
+	return dialed
+}
+
+// snellTestRequest is the request header dialSnellInBackground sends.
+func snellTestRequest() []byte {
+	request := append([]byte{snell.Version, snell.CommandConnect, 0, byte(len("example.com"))}, "example.com"...)
+	return binary.BigEndian.AppendUint16(request, 443)
+}
+
+// prefixedConn reads r in place of its connection.
+type prefixedConn struct {
+	net.Conn
+	r io.Reader
+}
+
+func (c *prefixedConn) Read(b []byte) (int, error) { return c.r.Read(b) }
+
+// Cached subscriptions still carry identity: true, identity-version: 2 and
+// legacy-fallback: false, and hand edits may carry protocol: oix-snell/1,
+// identity-version: 1 or legacy-fallback: true. They load, offer only the
+// version's ALPN and send the TLS-bound identity.
+func TestSnellECHTLSIgnoresRetiredOptions(t *testing.T) {
+	baseConfig, echConfig, caPEM := newSnellECHTLSServer(t, snellECHTLSALPN, snellECHTLSV6ALPN)
+	psk := []byte("password")
+	for _, version := range []int{snell.Version4, snell.Version6} {
+		alpn := snellECHTLSALPNForVersion(version)
+		for _, retired := range []struct {
+			name    string
+			options map[string]any
+		}{
+			{"cached", map[string]any{"alpn": alpn, "identity-version": 2, "legacy-fallback": false}},
+			{"hand-edited", map[string]any{"protocol": "oix-snell/1", "identity-version": 1, "legacy-fallback": true}},
+		} {
+			for _, transport := range []string{"tcp", "h3", "auto"} {
+				t.Run(fmt.Sprintf("v%d/%s/%s", version, retired.name, transport), func(t *testing.T) {
+					listener, err := net.Listen("tcp", "127.0.0.1:0")
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer listener.Close()
+					obfs := map[string]any{
+						"mode": "ech-tls", "sni": "origin.example.com", "ech-config": echConfig,
+						"ca-file": caPEM, "skip-cert-verify": false, "transport": transport,
+					}
+					maps.Copy(obfs, retired.options)
+					adapter, err := parseSnellProxy(map[string]any{
+						"name": "snell", "type": "snell", "server": "127.0.0.1", "port": listener.Addr().(*net.TCPAddr).Port,
+						"psk": string(psk), "version": version, "identity": true, "obfs-opts": obfs,
+					})
+					if err != nil {
+						t.Fatalf("NewSnell() error = %v", err)
+					}
+					defer adapter.Close()
+					if got := adapter.echTLS.NextProtos; len(got) != 1 || got[0] != alpn {
+						t.Fatalf("NextProtos = %q, want [%q]", got, alpn)
+					}
+					if transport != "tcp" {
+						return
+					}
+
+					serverConfig := baseConfig.Clone()
+					var offered []string
+					serverConfig.GetConfigForClient = func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+						offered = hello.SupportedProtos
+						return nil, nil
+					}
+					dialed := dialSnellInBackground(adapter)
+					raw, err := listener.Accept()
+					if err != nil {
+						t.Fatal(err)
+					}
+					defer raw.Close()
+					server := tls.Server(raw, serverConfig)
+					_ = server.SetDeadline(time.Now().Add(5 * time.Second))
+					if err = server.Handshake(); err != nil {
+						t.Fatal(err)
+					}
+					// With ECH accepted the server negotiated from the ClientHelloInner.
+					state := server.ConnectionState()
+					if !state.ECHAccepted || state.NegotiatedProtocol != alpn || len(offered) != 1 || offered[0] != alpn {
+						t.Fatalf("ECH accepted %v, ALPN %q, offered %q; want only %q", state.ECHAccepted, state.NegotiatedProtocol, offered, alpn)
+					}
+					exporter, err := state.ExportKeyingMaterial(snell.IdentityExporterLabel, []byte{}, snell.IdentityExporterLength)
+					if err != nil {
+						t.Fatal(err)
+					}
+
+					recorder := &clientBytesRecorder{Conn: server}
+					envelope := make([]byte, 16+8+snell.IdentityHeaderLength+snell.IdentityAuthTagLength)
+					if _, err = io.ReadFull(recorder, envelope); err != nil {
+						t.Fatal(err)
+					}
+					nonce, magic, keyID, tag := envelope[:16], string(envelope[16:24]), envelope[24:40], envelope[40:]
+					if wantMagic := map[int]string{snell.Version4: "DLSNID02", snell.Version6: "DLSNID06"}[version]; magic != wantMagic {
+						t.Fatalf("identity magic = %q, want %q", magic, wantMagic)
+					}
+					if !bytes.Equal(keyID, snell.IdentityV2HeaderFromPSK(psk)) {
+						t.Fatalf("identity key ID = %x", keyID)
+					}
+					stream := net.Conn(recorder)
+					if version == snell.Version4 {
+						// The v4 identity follows the salt that opens the record stream.
+						wantTag, err := snell.IdentityV2AuthTag(psk, exporter, nonce)
+						if err != nil {
+							t.Fatal(err)
+						}
+						if !bytes.Equal(tag, wantTag) {
+							t.Fatal("identity is not bound to this TLS connection")
+						}
+						stream = &prefixedConn{Conn: recorder, r: io.MultiReader(bytes.NewReader(nonce), recorder)}
+					}
+					want := snellTestRequest()
+					got := make([]byte, len(want))
+					if _, err = io.ReadFull(snell.ServerStreamConn(stream, psk, version), got); err != nil {
+						t.Fatal(err)
+					}
+					if !bytes.Equal(got, want) {
+						t.Fatalf("request = %x, want %x", got, want)
+					}
+					if bytes.Contains(recorder.read, []byte("DLSNID01")) {
+						t.Fatal("client sent the retired identity")
+					}
+					result := <-dialed
+					if result.err != nil {
+						t.Fatal(result.err)
+					}
+					_ = result.conn.Close()
+				})
+			}
+		}
 	}
 }
 
-func TestSnellECHTLSRejectsConflictingALPNAlias(t *testing.T) {
-	echConfig, _, err := ech.GenECHConfig("front.example.com")
+// No identity header exists outside ech-tls any more, so identity: true there
+// leaves a plain Snell stream.
+func TestSnellIdentityWithoutECHTLSSendsPlainSnell(t *testing.T) {
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
 		t.Fatal(err)
 	}
-	_, err = NewSnell(SnellOption{
-		Name: "snell", Server: "origin.example.com", Port: 443, Psk: "password", Version: 4,
-		ObfsOpts: map[string]any{
-			"mode": "ech-tls", "alpn": snellECHTLSALPN,
-			"protocol": "other/1", "ech-config": echConfig,
-		},
+	defer listener.Close()
+	adapter, err := parseSnellProxy(map[string]any{
+		"name": "snell", "type": "snell", "server": "127.0.0.1", "port": listener.Addr().(*net.TCPAddr).Port,
+		"psk": "password", "version": 4, "identity": true,
 	})
-	if err == nil || !strings.Contains(err.Error(), "values conflict") {
+	if err != nil {
 		t.Fatalf("NewSnell() error = %v", err)
 	}
+	defer adapter.Close()
+	dialed := dialSnellInBackground(adapter)
+	raw, err := listener.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer raw.Close()
+	_ = raw.SetDeadline(time.Now().Add(5 * time.Second))
+	recorder := &clientBytesRecorder{Conn: raw}
+	want := snellTestRequest()
+	got := make([]byte, len(want))
+	if _, err = io.ReadFull(snell.ServerStreamConn(recorder, []byte("password"), snell.Version4), got); err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, want) {
+		t.Fatalf("request = %x, want %x", got, want)
+	}
+	if bytes.Contains(recorder.read, []byte("DLSNID01")) {
+		t.Fatal("client sent the retired identity")
+	}
+	result := <-dialed
+	if result.err != nil {
+		t.Fatal(result.err)
+	}
+	_ = result.conn.Close()
 }
 
 func TestSnellHTTP3Options(t *testing.T) {
@@ -342,23 +515,19 @@ func TestSnellHTTP3Options(t *testing.T) {
 	}
 	for _, tc := range []struct {
 		transport string
-		identity  int
-		legacy    bool
 		version   int
 		valid     bool
 	}{
-		{"", 2, false, 4, true},
-		{"tcp", 1, true, 4, true},
-		{"h3", 2, false, 4, true},
-		{"auto", 2, false, 4, true},
-		{"quic", 2, false, 4, false},
-		{"h3", 1, false, 4, false},
-		{"auto", 2, true, 4, false},
-		{"h3", 2, false, 3, false},
+		{"", 4, true},
+		{"tcp", 4, true},
+		{"h3", 4, true},
+		{"auto", 4, true},
+		{"quic", 4, false},
+		{"h3", 3, false},
 	} {
 		adapter, err := NewSnell(SnellOption{
 			Name: "fixture", Server: "127.0.0.1", Port: 443, Psk: "fixture", Version: tc.version,
-			ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": config, "transport": tc.transport, "identity-version": tc.identity, "legacy-fallback": tc.legacy},
+			ObfsOpts: map[string]any{"mode": "ech-tls", "ech-config": config, "transport": tc.transport},
 		})
 		if (err == nil) != tc.valid {
 			t.Fatalf("%+v: %v", tc, err)

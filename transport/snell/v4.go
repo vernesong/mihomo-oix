@@ -29,14 +29,13 @@ const (
 type v4Conn struct {
 	net.Conn
 	psk              []byte
-	identity         []byte
 	identityExporter []byte
 	r                *v4Reader
 	w                *v4Writer
 }
 
-func newV4Conn(conn net.Conn, psk []byte, identity []byte) *v4Conn {
-	return &v4Conn{Conn: conn, psk: psk, identity: append([]byte(nil), identity...)}
+func newV4Conn(conn net.Conn, psk []byte) *v4Conn {
+	return &v4Conn{Conn: conn, psk: psk}
 }
 
 func newV4ConnWithExporterIdentity(conn net.Conn, psk, exporter []byte) *v4Conn {
@@ -65,9 +64,6 @@ func (c *v4Conn) initWriter() error {
 	w, err := newV4Writer(c.Conn, c.psk)
 	if err != nil {
 		return err
-	}
-	if len(c.identity) == IdentityHeaderLength {
-		w.identity = c.identity
 	}
 	if len(c.identityExporter) == IdentityExporterLength {
 		w.identityExporter = c.identityExporter
@@ -252,7 +248,6 @@ type v4Writer struct {
 	initialPaddingLength uint16
 	payloadLimit         uint16
 	lastWrite            time.Time
-	identity             []byte
 	identityExporter     []byte
 	mux                  sync.Mutex
 }
@@ -336,9 +331,6 @@ func (w *v4Writer) identityWireLength() int {
 	if len(w.identityExporter) == IdentityExporterLength {
 		return len(identityWireMagicV2) + IdentityHeaderLength + IdentityAuthTagLength
 	}
-	if len(w.identity) == IdentityHeaderLength {
-		return len(identityWireMagic) + IdentityHeaderLength
-	}
 	return 0
 }
 
@@ -387,9 +379,6 @@ func (w *v4Writer) writeFrame(payload []byte, paddingLength int) error {
 			frame = append(frame, identityWireMagicV2...)
 			frame = append(frame, identity...)
 			frame = append(frame, tag...)
-		} else if len(w.identity) == IdentityHeaderLength {
-			frame = append(frame, identityWireMagic...)
-			frame = append(frame, w.identity...)
 		}
 		w.saltSent = true
 	}
