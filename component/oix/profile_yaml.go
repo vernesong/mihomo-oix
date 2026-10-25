@@ -40,9 +40,13 @@ func mergeProfile(managed *yaml.Node, overlay []byte) (*yaml.Node, error) {
 		if err := sortProfileDNSPolicies(managed.Content[0]); err != nil {
 			return nil, err
 		}
-		return managed, nil
+		return applyMerlinDirectDNS(managed, &local)
 	}
-	return mergeProfileMaps(managed, &local)
+	merged, err := mergeProfileMaps(managed, &local)
+	if err != nil {
+		return nil, err
+	}
+	return applyMerlinDirectDNS(merged, &local)
 }
 
 func simpleProfileNode(node *yaml.Node) bool {
@@ -180,4 +184,44 @@ func sortProfileDNSPolicies(root *yaml.Node) error {
 		}
 	}
 	return nil
+}
+
+// Merlin's custom direct resolvers also serve the panel's domestic policy.
+// Only replace an existing policy: custom profiles may omit Domestic entirely.
+func applyMerlinDirectDNS(merged, local *yaml.Node) (*yaml.Node, error) {
+	if client, _ := currentClient(); client != "oixclash" {
+		return merged, nil
+	}
+	var overrides struct {
+		DNS struct {
+			Direct []string       `yaml:"direct-nameserver"`
+			Policy map[string]any `yaml:"nameserver-policy"`
+		} `yaml:"dns"`
+	}
+	if err := local.Decode(&overrides); err != nil || len(overrides.DNS.Direct) == 0 {
+		return merged, nil
+	}
+	if _, explicit := overrides.DNS.Policy["rule-set:Domestic"]; explicit {
+		return merged, nil
+	}
+	node := merged
+	if node.Kind == yaml.DocumentNode && len(node.Content) == 1 {
+		node = node.Content[0]
+	}
+	for _, key := range []string{"dns", "nameserver-policy", "rule-set:Domestic"} {
+		var next *yaml.Node
+		if node.Kind == yaml.MappingNode {
+			for i := 0; i < len(node.Content); i += 2 {
+				if node.Content[i].Value == key {
+					next = node.Content[i+1]
+					break
+				}
+			}
+		}
+		if next == nil {
+			return merged, nil
+		}
+		node = next
+	}
+	return merged, node.Encode(overrides.DNS.Direct)
 }

@@ -124,3 +124,60 @@ func TestProfileMergeDecodesOrderedDNSPolicies(t *testing.T) {
 		t.Fatalf("DNS policy order changed: %v", names)
 	}
 }
+
+func TestMerlinCustomDNSFollowsExistingDomesticPolicy(t *testing.T) {
+	const managed = `dns:
+  direct-nameserver: [119.29.29.29]
+  nameserver-policy: {'rule-set:Domestic': [119.29.29.29], '+.private.test': 10.0.0.1}
+  proxy-server-nameserver-policy: {'+.node.test': 10.0.0.2}
+`
+	const custom = `dns:
+  direct-nameserver: ['223.5.5.5#DIRECT', 'https://dns.test/query#DIRECT']
+  nameserver-policy: {'+.lan': 127.0.0.1:53}
+`
+	oldPolicy := []any{"119.29.29.29"}
+	customPolicy := []any{"223.5.5.5#DIRECT", "https://dns.test/query#DIRECT"}
+	for _, tc := range []struct {
+		name, client, profile, overlay string
+		want                           any
+	}{
+		{"Merlin custom DNS", "oixclash", managed, custom, customPolicy},
+		{"OpenClash overlay unchanged", "openclash", managed, custom, oldPolicy},
+		{"default DNS keeps panel policy", "oixclash", managed, "dns: {listen: '127.0.0.1:7874'}", oldPolicy},
+		{"empty direct DNS keeps panel policy", "oixclash", managed, "dns: {direct-nameserver: []}", oldPolicy},
+		{"explicit local policy wins", "oixclash", managed, "dns: {direct-nameserver: [223.5.5.5], nameserver-policy: {'rule-set:Domestic': 10.0.0.3}}", "10.0.0.3"},
+		{"absent policy is not introduced", "oixclash", "dns: {nameserver: [1.1.1.1]}", custom, nil},
+		{"removed policies stay removed", "oixclash", managed, "dns: {direct-nameserver: [223.5.5.5], nameserver-policy: null}", nil},
+		{"YAML aliases use the same DNS behavior", "oixclash", managed, "servers: &direct ['223.5.5.5#DIRECT', 'https://dns.test/query#DIRECT']\ndns: {direct-nameserver: *direct}", customPolicy},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			setClientForTest(t, tc.client)
+			document, err := (&fetchedConfig{plain: []byte(tc.profile)}).profileDocument()
+			if err != nil {
+				t.Fatal(err)
+			}
+			merged, err := mergeProfile(document, []byte(tc.overlay))
+			if err != nil {
+				t.Fatal(err)
+			}
+			var config struct {
+				DNS struct {
+					Policy      map[string]any `yaml:"nameserver-policy"`
+					ProxyPolicy map[string]any `yaml:"proxy-server-nameserver-policy"`
+				} `yaml:"dns"`
+			}
+			if err := merged.Decode(&config); err != nil {
+				t.Fatal(err)
+			}
+			if got := config.DNS.Policy["rule-set:Domestic"]; !reflect.DeepEqual(got, tc.want) {
+				t.Fatalf("domestic DNS = %v, want %v", got, tc.want)
+			}
+			if tc.profile == managed && config.DNS.ProxyPolicy["+.node.test"] != "10.0.0.2" {
+				t.Fatal("custom DNS replaced the managed node resolver")
+			}
+			if tc.profile == managed && config.DNS.Policy != nil && config.DNS.Policy["+.private.test"] != "10.0.0.1" {
+				t.Fatal("custom DNS replaced an unrelated domain policy")
+			}
+		})
+	}
+}
