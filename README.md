@@ -103,6 +103,17 @@ gVisor TUN stack, which the plugin never uses, together with the Tailscale outbo
 that depend on it (the managed config uses neither), and build with `with_low_memory` for half-size relay buffers: the
 armv7 binary drops from about 57 MB to 48 MB, which the router keeps in RAM.
 
+### Group latency tests
+
+`GET /group/{name}/delay` shares a limit of ten active probes across group requests. The positive `timeout` query parameter
+applies to each node after it leaves the queue; queueing is excluded from both the node timeout and reported latency.
+Canceling the HTTP request stops queued work without recording failures for nodes that have not started. Successful
+measurements are retained when other nodes time out. URL-test groups keep their configured test URL; manual pins are
+cleared as before. Individual node tests and provider health checks retain their existing scheduling.
+
+A large or slow group can take longer overall than the per-node timeout. Dashboard and reverse-proxy request limits
+still apply; a client that times out can cancel the remaining work.
+
 ### Sign-in from scripts
 
 `mihomo oix login` and `mihomo oix account` read one JSON object from stdin and print one to stdout (or `key=value`

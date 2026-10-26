@@ -1,7 +1,6 @@
 package route
 
 import (
-	"context"
 	"strconv"
 	"sync"
 	"time"
@@ -69,7 +68,7 @@ func getGroupDelay(w http.ResponseWriter, r *http.Request) {
 	query := r.URL.Query()
 	url := query.Get("url")
 	timeout, err := strconv.ParseInt(query.Get("timeout"), 10, 32)
-	if err != nil {
+	if err != nil || timeout <= 0 {
 		render.Status(r, http.StatusBadRequest)
 		render.JSON(w, r, ErrBadRequest)
 		return
@@ -82,10 +81,9 @@ func getGroupDelay(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	ctx, cancel := context.WithTimeout(r.Context(), time.Millisecond*time.Duration(timeout))
-	defer cancel()
-
-	dm, err := group.URLTest(ctx, url, expectedStatus)
+	// The query timeout applies to each probe, not to time spent in the queue.
+	// Keep the request context so disconnecting clients cancel queued work.
+	dm, err := group.URLTest(r.Context(), url, expectedStatus, time.Millisecond*time.Duration(timeout))
 	if err != nil {
 		render.Status(r, http.StatusGatewayTimeout)
 		render.JSON(w, r, newError(err.Error()))

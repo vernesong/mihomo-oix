@@ -3,7 +3,6 @@ package outboundgroup
 import (
 	"context"
 	"errors"
-	"fmt"
 	"strings"
 	"sync"
 	"time"
@@ -17,6 +16,7 @@ import (
 
 	"github.com/dlclark/regexp2"
 	"golang.org/x/exp/slices"
+	"golang.org/x/sync/semaphore"
 )
 
 type GroupBase struct {
@@ -234,32 +234,48 @@ func (gb *GroupBase) GetProxies(touch bool) []C.Proxy {
 	return proxies
 }
 
-func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (map[string]uint16, error) {
+// Share the budget across requests: testing several groups at once must not
+// multiply the number of handshakes competing with normal router traffic.
+var groupURLTestLimiter = semaphore.NewWeighted(10)
+
+func (gb *GroupBase) URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16], timeout time.Duration) (map[string]uint16, error) {
 	var wg sync.WaitGroup
 	var lock sync.Mutex
-	mp := map[string]uint16{}
 	proxies := gb.GetProxies(false)
+	mp := make(map[string]uint16, len(proxies))
+
 	for _, proxy := range proxies {
-		proxy := proxy
+		if err := groupURLTestLimiter.Acquire(ctx, 1); err != nil {
+			break
+		}
 		wg.Add(1)
 		go func() {
-			delay, err := proxy.URLTest(ctx, url, expectedStatus)
+			defer wg.Done()
+			defer groupURLTestLimiter.Release(1)
+			if ctx.Err() != nil {
+				return
+			}
+			// Start the per-node deadline only after admission. Queueing is not
+			// part of either the node's latency or its timeout budget.
+			probeCtx, cancel := context.WithTimeout(ctx, timeout)
+			defer cancel()
+			delay, err := proxy.URLTest(probeCtx, url, expectedStatus)
 			if err == nil {
 				lock.Lock()
 				mp[proxy.Name()] = delay
 				lock.Unlock()
 			}
-
-			wg.Done()
 		}()
 	}
 	wg.Wait()
+	if err := ctx.Err(); err != nil {
+		return mp, err
+	}
 
 	if len(mp) == 0 {
-		return mp, fmt.Errorf("get delay: all proxies timeout")
-	} else {
-		return mp, nil
+		return mp, errors.New("get delay: all proxies timeout")
 	}
+	return mp, nil
 }
 
 func (gb *GroupBase) onDialFailed(adapterType C.AdapterType, err error, fn func()) {

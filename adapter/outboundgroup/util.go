@@ -2,6 +2,7 @@ package outboundgroup
 
 import (
 	"context"
+	"time"
 
 	"github.com/metacubex/mihomo/common/utils"
 	C "github.com/metacubex/mihomo/constant"
@@ -19,7 +20,7 @@ type ProxyGroup interface {
 	Hidden() bool
 	Icon() string
 
-	URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16]) (mp map[string]uint16, err error)
+	URLTest(ctx context.Context, url string, expectedStatus utils.IntRanges[uint16], timeout time.Duration) (mp map[string]uint16, err error)
 }
 
 var (
