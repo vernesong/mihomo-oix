@@ -1,0 +1,71 @@
+name: Test
+on:
+  push:
+    paths-ignore:
+      - "docs/**"
+      - "README.md"
+      - ".github/ISSUE_TEMPLATE/**"
+    branches:
+      - Alpha
+    tags:
+      - "v*"
+  pull_request:
+    branches:
+      - Alpha
+
+concurrency:
+  group: "${{ github.workflow }}-${{ github.ref }}"
+  cancel-in-progress: true
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        include:
+          # The release workflow covers Linux amd64 with_gvisor.
+          - os: ubuntu-latest
+            tags: ''
+          - os: windows-latest
+            tags: with_gvisor
+          - os: macos-latest
+            tags: with_gvisor
+          - os: ubuntu-24.04-arm
+            tags: with_gvisor
+          - os: windows-11-arm
+            tags: with_gvisor
+          - os: macos-26-intel
+            tags: with_gvisor
+      fail-fast: false
+    runs-on: ${{ matrix.os }}
+    defaults:
+      run:
+        shell: bash
+    env:
+      CGO_ENABLED: 0
+      GOTOOLCHAIN: local
+      # Fix mingw trying to be smart and converting paths https://github.com/moby/moby/issues/24029#issuecomment-250412919
+      MSYS_NO_PATHCONV: true
+      # Skip mihomo inbound interop test
+      SKIP_INTEROP_TEST: 1
+    steps:
+      - uses: actions/checkout@v6
+
+      - name: Set up Go
+        uses: actions/setup-go@4a3601121dd01d1626a1e23e37211e3254c1c06c
+        with:
+          go-download-base-url: 'https://github.com/MetaCubeX/go/releases/download/build'
+          go-version: '1.26'
+
+      - name: Verify Go installation
+        run: go version
+
+      - name: Verify Go env
+        run: go env
+
+      - name: Remove inbound test for macOS
+        if: ${{ runner.os == 'macOS' }}
+        run: |
+          rm -rf listener/inbound/*_test.go
+
+      - name: Test (${{ matrix.tags || 'default' }})
+        run: go test -tags "${{ matrix.tags }}" ./... -v -count=1
