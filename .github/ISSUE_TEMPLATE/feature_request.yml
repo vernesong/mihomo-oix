@@ -1,0 +1,23 @@
+name: Feature Request
+description: Suggest improvements for this project
+title: "[Feature] "
+labels: ["enhancement"]
+body:
+  - type: checkboxes
+    id: ensure
+    attributes:
+      label: Verification Steps
+      description: Before submitting, please check the following options to confirm that you have read and understood the requirements below; otherwise, this issue will be closed.
+      options:
+        - label: I have read the [documentation](https://wiki.metacubex.one/) and confirmed that this feature is not implemented
+          required: false
+        - label: I have searched for the feature request I want to propose in the [Issue Tracker](……/) and did not find it
+          required: false
+        - label: I am a non-Chinese user.
+          required: false
+  - type: textarea
+    attributes:
+      label: Description
+      description: Please provide a detailed description of the feature, rather than vague statements.
+    validations:
+      required: true
