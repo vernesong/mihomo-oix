@@ -1,0 +1,583 @@
+package snell
+
+import (
+	"context"
+	"errors"
+	"io"
+	"net"
+	"sync"
+	"testing"
+	"time"
+
+	mpool "github.com/metacubex/mihomo/component/pool"
+	"github.com/metacubex/mihomo/transport/shadowsocks/shadowaead"
+)
+
+func TestPoolConnCloseIsIdempotent(t *testing.T) {
+	rawConn := &recordingConn{
+		readData: []byte{CommandTunnel},
+		readErr:  shadowaead.ErrZeroChunk,
+	}
+	pooledConn := &Snell{Conn: rawConn}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("factory should not be called")
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	conn.MarkReusable()
+	if _, err := conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected peer half-close before pooling, got %v", err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if rawConn.writes != 2 {
+		t.Fatalf("close should send the request and one half-close record, got %d writes", rawConn.writes)
+	}
+	if rawConn.reads != 2 {
+		t.Fatalf("close should observe the peer half-close before pooling, got %d reads", rawConn.reads)
+	}
+
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != pooledConn {
+		t.Fatal("pooled connection mismatch")
+	}
+}
+
+func TestWarmupAuthenticatesConnection(t *testing.T) {
+	rawConn := &recordingConn{readData: []byte{CommandPong}}
+	conn := &Snell{Conn: rawConn}
+	if err := conn.Warmup(); err != nil {
+		t.Fatal(err)
+	}
+	if rawConn.writes != 1 || rawConn.reads != 1 {
+		t.Fatalf("warmup I/O = writes:%d reads:%d", rawConn.writes, rawConn.reads)
+	}
+}
+
+type warmupWriteSignalConn struct {
+	net.Conn
+	started chan struct{}
+}
+
+func (c *warmupWriteSignalConn) Write(b []byte) (int, error) {
+	close(c.started)
+	return c.Conn.Write(b)
+}
+
+func TestWarmupContextCancellationInterruptsIO(t *testing.T) {
+	for _, readRequest := range []bool{false, true} {
+		name := "blocked write"
+		if readRequest {
+			name = "blocked reply"
+		}
+		t.Run(name, func(t *testing.T) {
+			client, server := net.Pipe()
+			defer client.Close()
+			defer server.Close()
+			ctx, cancel := context.WithCancel(context.Background())
+			defer cancel()
+			conn := &warmupWriteSignalConn{Conn: client, started: make(chan struct{})}
+			result := make(chan error, 1)
+			go func() { result <- (&Snell{Conn: conn}).WarmupContext(ctx) }()
+			select {
+			case <-conn.started:
+			case <-time.After(time.Second):
+				t.Fatal("warmup did not begin writing the authentication request")
+			}
+			if readRequest {
+				if err := server.SetReadDeadline(time.Now().Add(time.Second)); err != nil {
+					t.Fatal(err)
+				}
+				var request [3]byte
+				if _, err := io.ReadFull(server, request[:]); err != nil {
+					t.Fatal(err)
+				}
+			}
+			cancel()
+			select {
+			case err := <-result:
+				if !errors.Is(err, context.Canceled) {
+					t.Fatalf("warmup error = %v, want context.Canceled", err)
+				}
+			case <-time.After(time.Second):
+				t.Fatal("warmup remained blocked after cancellation")
+			}
+		})
+	}
+}
+
+func TestWarmupContextSuccessDetachesCancellation(t *testing.T) {
+	rawConn := &recordingConn{readData: []byte{CommandPong}}
+	conn := &Snell{Conn: rawConn}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	if err := conn.WarmupContext(ctx); err != nil {
+		t.Fatal(err)
+	}
+	cancel()
+	if rawConn.closed {
+		t.Fatal("completed warmup retained the request cancellation callback")
+	}
+	if _, err := conn.Write([]byte("next request")); err != nil {
+		t.Fatalf("connection cannot be reused after warmup: %v", err)
+	}
+}
+
+func TestPoolConnCloseBeforeRequestClosesRawConnection(t *testing.T) {
+	rawConn := &recordingConn{}
+	pooledConn := &Snell{Conn: rawConn}
+	factoryConn := &Snell{Conn: &recordingConn{}}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return factoryConn, nil
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if rawConn.writes != 0 {
+		t.Fatalf("close before request should not send half-close record, got %d writes", rawConn.writes)
+	}
+	if !rawConn.closed {
+		t.Fatal("close before request should close the raw connection")
+	}
+
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != factoryConn {
+		t.Fatal("unstarted connection should not be returned to the pool")
+	}
+}
+
+func TestPoolConnCloseAfterRequestBeforeReusableClosesRawConnection(t *testing.T) {
+	rawConn := &recordingConn{}
+	pooledConn := &Snell{Conn: rawConn}
+	factoryConn := &Snell{Conn: &recordingConn{}}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return factoryConn, nil
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if rawConn.writes != 1 {
+		t.Fatalf("close before reusable should only send the request, got %d writes", rawConn.writes)
+	}
+	if !rawConn.closed {
+		t.Fatal("close before reusable should close the raw connection")
+	}
+
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != factoryConn {
+		t.Fatal("connection closed before reusable should not be returned to the pool")
+	}
+}
+
+func TestPoolConnCloseWriteBeforeRequestClosesRawConnection(t *testing.T) {
+	rawConn := &recordingConn{}
+	pooledConn := &Snell{Conn: rawConn}
+	factoryConn := &Snell{Conn: &recordingConn{}}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return factoryConn, nil
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+	if rawConn.writes != 0 {
+		t.Fatalf("CloseWrite before request should not send half-close record, got %d writes", rawConn.writes)
+	}
+	if !rawConn.closed {
+		t.Fatal("CloseWrite before request should close the raw connection")
+	}
+
+	// MarkReusable must not revive a connection that already took the raw-close path.
+	conn.MarkReusable()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != factoryConn {
+		t.Fatal("unstarted connection should not be returned to the pool")
+	}
+}
+
+func TestPoolConnCloseWriteDoesNotReturnConnectionToPool(t *testing.T) {
+	rawConn := &recordingConn{
+		readErr: shadowaead.ErrZeroChunk,
+	}
+	pooledConn := &Snell{Conn: rawConn, reply: true}
+	factoryConn := &Snell{Conn: &recordingConn{}}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return factoryConn, nil
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	conn.MarkReusable()
+	if err := conn.CloseWrite(); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != factoryConn {
+		t.Fatal("CloseWrite should not put the active connection back into the pool")
+	}
+	if rawConn.writes != 2 {
+		t.Fatalf("CloseWrite should send the request and one half-close record, got %d writes", rawConn.writes)
+	}
+	if !pooledConn.reply {
+		t.Fatal("CloseWrite should not reset reply while the read side may still be active")
+	}
+	if _, err = conn.Read(make([]byte, 1)); !errors.Is(err, io.EOF) {
+		t.Fatalf("expected peer half-close before pooling, got %v", err)
+	}
+
+	if err = conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+	got, err = takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != pooledConn {
+		t.Fatal("Close should return the connection to the pool after CloseWrite")
+	}
+	if rawConn.writes != 2 {
+		t.Fatalf("Close after CloseWrite should not send another half-close record, got %d writes", rawConn.writes)
+	}
+	if rawConn.reads != 1 {
+		t.Fatalf("Close should observe the peer half-close before pooling, got %d reads", rawConn.reads)
+	}
+	if pooledConn.reply {
+		t.Fatal("Close should reset reply before returning the connection to the pool")
+	}
+}
+
+func TestPoolConnCloseWithoutPeerHalfCloseClosesRawConnection(t *testing.T) {
+	rawConn := &recordingConn{}
+	pooledConn := &Snell{Conn: rawConn}
+	factoryConn := &Snell{Conn: &recordingConn{}}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return factoryConn, nil
+	})
+	conn := &PoolConn{Snell: pooledConn, pool: pool}
+
+	if _, err := conn.Write([]byte{Version, CommandConnectV2, 0}); err != nil {
+		t.Fatal(err)
+	}
+	conn.MarkReusable()
+	if err := conn.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	if !rawConn.closed {
+		t.Fatal("connection without peer half-close should close the raw connection")
+	}
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != factoryConn {
+		t.Fatal("connection without peer half-close should not be returned to the pool")
+	}
+}
+
+func TestPoolConnReadZeroChunkReturnsEOF(t *testing.T) {
+	conn := &PoolConn{Snell: &Snell{Conn: zeroChunkConn{}, reply: true}}
+
+	n, err := conn.Read(make([]byte, 1))
+	if n != 0 {
+		t.Fatalf("read length mismatch: %d", n)
+	}
+	if !errors.Is(err, io.EOF) {
+		t.Fatalf("expected EOF for zero chunk, got %v", err)
+	}
+}
+
+type recordingConn struct {
+	writes   int
+	reads    int
+	readData []byte
+	readErr  error
+	closed   bool
+}
+
+func (c *recordingConn) Read(b []byte) (int, error) {
+	c.reads++
+	if len(c.readData) > 0 {
+		n := copy(b, c.readData)
+		c.readData = c.readData[n:]
+		return n, nil
+	}
+	if c.readErr != nil {
+		return 0, c.readErr
+	}
+	return 0, io.EOF
+}
+
+func (c *recordingConn) Write(b []byte) (int, error) {
+	c.writes++
+	return len(b), nil
+}
+
+func (c *recordingConn) Close() error {
+	c.closed = true
+	return nil
+}
+
+func (*recordingConn) LocalAddr() net.Addr {
+	return recordingAddr("local")
+}
+
+func (*recordingConn) RemoteAddr() net.Addr {
+	return recordingAddr("remote")
+}
+
+func (*recordingConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (*recordingConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (*recordingConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+type recordingAddr string
+
+func (a recordingAddr) Network() string {
+	return string(a)
+}
+
+func (a recordingAddr) String() string {
+	return string(a)
+}
+
+type zeroChunkConn struct{}
+
+func (zeroChunkConn) Read([]byte) (int, error) {
+	return 0, shadowaead.ErrZeroChunk
+}
+
+func (zeroChunkConn) Write(b []byte) (int, error) {
+	return len(b), nil
+}
+
+func (zeroChunkConn) Close() error {
+	return nil
+}
+
+func (zeroChunkConn) LocalAddr() net.Addr {
+	return recordingAddr("local")
+}
+
+func (zeroChunkConn) RemoteAddr() net.Addr {
+	return recordingAddr("remote")
+}
+
+func (zeroChunkConn) SetDeadline(time.Time) error {
+	return nil
+}
+
+func (zeroChunkConn) SetReadDeadline(time.Time) error {
+	return nil
+}
+
+func (zeroChunkConn) SetWriteDeadline(time.Time) error {
+	return nil
+}
+
+func TestPoolGetContextKeepsIdleConnectionForCanceledContext(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	idle := &Snell{Conn: &recordingConn{}}
+	pool.put(idle)
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+	if _, err := pool.GetContext(ctx); !errors.Is(err, context.Canceled) {
+		t.Fatalf("GetContext() error = %v, want context.Canceled", err)
+	}
+	got, err := takeIdle(pool)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != idle {
+		t.Fatal("a canceled request took the idle connection")
+	}
+}
+
+func TestPoolWarmStopsOnceClosed(t *testing.T) {
+	var pool *Pool
+	dials := 0
+	pool = NewPool(func(context.Context) (*Snell, error) {
+		dials++
+		if dials == 1 {
+			_ = pool.Close()
+		}
+		conn, peer := net.Pipe()
+		t.Cleanup(func() { _ = peer.Close() })
+		return &Snell{Conn: conn}, nil
+	})
+	pool.Warm(context.Background(), 3)
+	if dials != 1 {
+		t.Fatalf("warm-up dialed %d connections, want 1 before the pool closed", dials)
+	}
+}
+
+// takeIdle returns the connection the pool would hand out next.
+func takeIdle(p *Pool) (*Snell, error) {
+	entry, err := p.pool.Get()
+	if err != nil {
+		return nil, err
+	}
+	return entry.conn, nil
+}
+
+// closeSignalConn reports when it is closed.
+type closeSignalConn struct {
+	net.Conn
+	closed chan struct{}
+	once   sync.Once
+}
+
+func newCloseSignalConn() *closeSignalConn {
+	return &closeSignalConn{Conn: zeroChunkConn{}, closed: make(chan struct{})}
+}
+
+func (c *closeSignalConn) Close() error {
+	c.once.Do(func() { close(c.closed) })
+	return nil
+}
+
+func waitClosed(t *testing.T, c *closeSignalConn) {
+	t.Helper()
+	select {
+	case <-c.closed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("connection was not closed")
+	}
+}
+
+// The pool only ages entries out when something asks for one, so a connection
+// nobody asks for would hold its transport (an HTTP/3 stream pins its QUIC
+// session) for as long as the pool lives.
+func TestPooledConnectionIsClosedAfterItsIdleAgeWithoutAGet(t *testing.T) {
+	fresh := &Snell{Conn: newCloseSignalConn()}
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return fresh, nil
+	})
+	pool.idleAge = 50 * time.Millisecond
+	idle := newCloseSignalConn()
+	pool.put(&Snell{Conn: idle})
+
+	waitClosed(t, idle)
+	conn, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.(*PoolConn).Snell != fresh {
+		t.Fatal("an aged-out connection was handed out")
+	}
+}
+
+func TestClaimedPooledConnectionOutlivesItsIdleAge(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	pool.idleAge = 100 * time.Millisecond
+	busy := newCloseSignalConn()
+	idle := &Snell{Conn: busy}
+	pool.put(idle)
+	conn, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if conn.(*PoolConn).Snell != idle {
+		t.Fatal("the idle connection was not reused")
+	}
+	time.Sleep(300 * time.Millisecond)
+	select {
+	case <-busy.closed:
+		t.Fatal("a connection in use was closed by its idle age")
+	default:
+	}
+}
+
+func TestRepooledConnectionStartsANewIdleAge(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	pool.idleAge = 400 * time.Millisecond
+	conn := newCloseSignalConn()
+	pool.put(&Snell{Conn: conn})
+	time.Sleep(250 * time.Millisecond)
+	taken, err := pool.Get()
+	if err != nil {
+		t.Fatal(err)
+	}
+	pool.put(taken.(*PoolConn).Snell)
+	time.Sleep(250 * time.Millisecond)
+	select {
+	case <-conn.closed:
+		t.Fatal("the first wait's timer closed a connection parked again")
+	default:
+	}
+	waitClosed(t, conn)
+}
+
+func TestPoolCloseClosesIdleConnectionsAndRejectsReuse(t *testing.T) {
+	pool := NewPool(func(context.Context) (*Snell, error) {
+		return nil, errors.New("unexpected dial")
+	})
+	idle := newCloseSignalConn()
+	pool.put(&Snell{Conn: idle})
+	if err := pool.Close(); err != nil {
+		t.Fatal(err)
+	}
+	waitClosed(t, idle)
+	if _, err := pool.Get(); !errors.Is(err, mpool.ErrClosed) {
+		t.Fatalf("Get() error = %v, want pool.ErrClosed", err)
+	}
+	late := newCloseSignalConn()
+	pool.put(&Snell{Conn: late})
+	waitClosed(t, late)
+}
